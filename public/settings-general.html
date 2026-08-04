@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kitsune — Settings — General</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div class="layout">
+
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3c2 2.5 2 5 2 5s2.5-1 4-1 3 1 3 3-1.5 3-3 3c1 1.5 1 3.5-.5 5C16 19.5 14 19 12 21c-2-2-4-1.5-5.5-3-1.5-1.5-1.5-3.5-.5-5-1.5 0-3-1-3-3s1.5-3 3-3 4 1 4 1 0-2.5 2-5z"/></svg>
+      <span class="brand-name">Kitsune</span>
+    </div>
+    <a class="nav-item" href="index.html">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+      <span class="nav-label">Library</span>
+    </a>
+    <div class="nav-sub">
+      <a href="index.html">All Series</a>
+      <a href="library-add-new.html">Add New</a>
+      <a href="library-import.html">Library Import</a>
+    </div>
+    <a class="nav-item" href="#">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/></svg>
+      <span class="nav-label">Calendar</span>
+    </a>
+    <a class="nav-item nav-toggle" href="#">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h4l2 7 4-14 2 7h6"/></svg>
+      <span class="nav-label">Activity</span>
+    </a>
+    <div class="nav-sub">
+      <a href="activity-queue.html">Queue</a>
+      <a href="activity-history.html">History</a>
+      <a href="activity-blocklist.html">Blocklist</a>
+    </div>
+    <a class="nav-item nav-toggle" href="#">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 8v5l3 2"/></svg>
+      <span class="nav-label">Wanted</span>
+      <span class="nav-badge">27</span>
+    </a>
+    <div class="nav-sub">
+      <a href="wanted-missing.html">Missing</a>
+      <a href="wanted-cutoff-unmet.html">Cutoff Unmet</a>
+    </div>
+    <div class="nav-divider"></div>
+    <a class="nav-item nav-toggle active" href="#">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.2a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.2a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.2a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.2a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      <span class="nav-label">Settings</span>
+    </a>
+    <div class="nav-sub open">
+      <a href="settings-media-management.html">Media Management</a>
+      <a href="settings-profiles.html">Profiles</a>
+      <a href="settings-quality.html">Quality</a>
+      <a href="settings-custom-formats.html">Custom Formats</a>
+      <a href="settings-indexers.html">Indexers</a>
+      <a href="settings-download-clients.html">Download Clients</a>
+      <a href="settings-import-lists.html">Import Lists</a>
+      <a href="settings-connect.html">Connect</a>
+      <a href="settings-metadata.html">Metadata</a>
+      <a href="settings-tags.html">Tags</a>
+      <a class="active" href="settings-general.html">General</a>
+      <a href="settings-ui.html">UI</a>
+    </div>
+    <a class="nav-item nav-toggle" href="#">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><circle cx="7" cy="7.5" r="0.8" fill="currentColor" stroke="none"/><circle cx="7" cy="16.5" r="0.8" fill="currentColor" stroke="none"/></svg>
+      <span class="nav-label">System</span>
+    </a>
+    <div class="nav-sub">
+      <a href="system-status.html">Status</a>
+      <a href="system-tasks.html">Tasks</a>
+      <a href="system-backup.html">Backup</a>
+      <a href="system-updates.html">Updates</a>
+      <a href="system-events.html">Events</a>
+      <a href="system-logs.html">Logs</a>
+    </div>
+    <div class="collapse-toggle" id="collapseToggle">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+      <span class="collapse-label">Collapse</span>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="top-row">
+      <div>
+        <h1 class="settings-heading">Settings</h1>
+      </div>
+    </div>
+
+    <div class="page-tabs">
+      <a href="settings-media-management.html">Media Management</a>
+      <a href="settings-profiles.html">Profiles</a>
+      <a href="settings-quality.html">Quality</a>
+      <a href="settings-custom-formats.html">Custom Formats</a>
+      <a href="settings-indexers.html">Indexers</a>
+      <a href="settings-download-clients.html">Download Clients</a>
+      <a href="settings-import-lists.html">Import Lists</a>
+      <a href="settings-connect.html">Connect</a>
+      <a href="settings-metadata.html">Metadata</a>
+      <a href="settings-tags.html">Tags</a>
+      <a class="active" href="settings-general.html">General</a>
+      <a href="settings-ui.html">UI</a>
+    </div>
+    <p class="settings-subtitle">Networking, authentication, updates, backups, and logging.</p>
+
+    <div class="settings-card">
+      <h2>Host</h2>
+      <p class="card-desc">Network binding for the Kitsune web interface.</p>
+      <div class="form-row">
+        <div class="field-label"><p class="name">Bind Address</p><p class="desc">Interface Kitsune listens on.</p></div>
+        <div class="field-control"><input data-key="general-0" class="field-input" type="text" value="*" /></div>
+      </div>
+      <div class="form-row">
+        <div class="field-label"><p class="name">Port Number</p></div>
+        <div class="field-control"><input data-key="general-1" class="field-input" type="number" value="7879" /></div>
+      </div>
+      <div class="form-row">
+        <div class="field-label"><p class="name">URL Base</p><p class="desc">For reverse proxy setups, e.g. /kitsune.</p></div>
+        <div class="field-control"><input data-key="general-2" class="field-input" type="text" placeholder="/kitsune" /></div>
+      </div>
+      <div class="form-row">
+        <div class="field-label"><p class="name">Enable SSL</p></div>
+        <div class="field-control"><label class="switch"><input data-key="general-3" type="checkbox" /><span class="slider"></span></label></div>
+      </div>
+    </div>
+
+    <div class="settings-card">
+      <h2>Authentication</h2>
+      <p class="card-desc">Require a login to access Kitsune.</p>
+      <div class="form-row">
+        <div class="field-label"><p class="name">Authentication Method</p></div>
+        <div class="field-control">
+          <select data-key="authMethodSelect" class="field-select" id="authMethodSelect">
+            <option value="none">None</option>
+            <option value="basic">Basic (browser popup)</option>
+            <option value="forms" selected>Forms (login page)</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row auth-field">
+        <div class="field-label"><p class="name">Username</p></div>
+        <div class="field-control"><input data-key="general-5" class="field-input" type="text" value="admin" /></div>
+      </div>
+      <div class="form-row auth-field">
+        <div class="field-label"><p class="name">Password</p></div>
+        <div class="field-control"><input data-key="general-6" class="field-input" type="password" value="notarealpassword" /></div>
+      </div>
+    </div>
+
+    <div class="settings-card">
+      <h2>Proxy</h2>
+      <div class="form-row">
+        <div class="field-label"><p class="name">Use Proxy</p></div>
+        <div class="field-control"><label class="switch"><input data-key="proxyEnabledToggle" type="checkbox" id="proxyEnabledToggle" /><span class="slider"></span></label></div>
+      </div>
+      <div class="form-row proxy-field is-disabled">
+        <div class="field-label"><p class="name">Proxy Host</p></div>
+        <div class="field-control"><input data-key="general-8" class="field-input" type="text" /></div>
+      </div>
+      <div class="form-row proxy-field is-disabled">
+        <div class="field-label"><p class="name">Proxy Port</p></div>
+        <div class="field-control"><input data-key="general-9" class="field-input" type="number" value="8080" /></div>
+      </div>
+      <div class="form-row proxy-field is-disabled">
+        <div class="field-label"><p class="name">Username</p></div>
+        <div class="field-control"><input data-key="general-10" class="field-input" type="text" /></div>
+      </div>
+      <div class="form-row proxy-field is-disabled">
+        <div class="field-label"><p class="name">Password</p></div>
+        <div class="field-control"><input data-key="general-11" class="field-input" type="password" /></div>
+      </div>
+    </div>
+
+    <div class="settings-card">
+      <h2>Updates</h2>
+      <div class="form-row">
+        <div class="field-label"><p class="name">Branch</p></div>
+        <div class="field-control">
+          <select data-key="general-12" class="field-select"><option>main</option><option>develop</option></select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="field-label"><p class="name">Automatic</p></div>
+        <div class="field-control"><label class="switch"><input data-key="general-13" type="checkbox" checked /><span class="slider"></span></label></div>
+      </div>
+    </div>
+
+    <div class="settings-card">
+      <h2>Backups</h2>
+      <div class="form-row">
+        <div class="field-label"><p class="name">Folder</p></div>
+        <div class="field-control"><input data-key="general-14" class="field-input" type="text" value="/config/backups" /></div>
+      </div>
+      <div class="form-row">
+        <div class="field-label"><p class="name">Interval</p></div>
+        <div class="field-control">
+          <select data-key="general-15" class="field-select"><option>Every 1 day</option><option selected>Every 7 days</option></select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="field-label"><p class="name">Retention</p><p class="desc">Days to keep backups before deleting.</p></div>
+        <div class="field-control"><input data-key="general-16" class="field-input" type="number" value="28" /></div>
+      </div>
+    </div>
+
+    <div class="settings-card">
+      <h2>Logging</h2>
+      <div class="form-row">
+        <div class="field-label"><p class="name">Log Level</p></div>
+        <div class="field-control">
+          <select data-key="general-17" class="field-select"><option>Info</option><option>Debug</option><option>Trace</option></select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="field-label"><p class="name">Log to File</p></div>
+        <div class="field-control"><label class="switch"><input data-key="general-18" type="checkbox" checked /><span class="slider"></span></label></div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

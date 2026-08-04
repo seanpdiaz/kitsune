@@ -1,0 +1,10 @@
+{
+  "name": "kitsune-mockup",
+  "version": "0.1.0",
+  "description": "Click-through visual mockup of Kitsune's UI (Library dashboard + Series detail). No build step, no dependencies.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "license": "UNLICENSED"
+}
