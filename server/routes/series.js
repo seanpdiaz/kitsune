@@ -1,0 +1,410 @@
+const { db, DB_PATH } = require('../db');
+const { logInfo } = require('../logger');
+const { sendJson, readJsonBody } = require('../lib/http');
+const { normalizeFolderName } = require('../lib/fs-helpers');
+const { warmEpisodesInBackground } = require('./episodes');
+
+// ---------------------------------------------------------------------------
+// Library persistence (the `series` table)
+//
+// This used to be a hardcoded array in app.js (`seriesData`) with no way for
+// anything to actually land in it — the Add New page's "Add Series" button
+// just toggled a local checkmark that vanished the moment you navigated
+// away, since app.js (and its array) reloads from scratch on every page.
+// Same pattern as Tags/Settings: a real table, a small REST surface, and
+// app.js now fetches from here instead of holding the data itself.
+// ---------------------------------------------------------------------------
+
+// Allowed values for the two enum-style dropdowns in the Edit Series modal —
+// validated in the PATCH handler below, and the same lists app.js uses to
+// populate the <select> options (kept in sync by hand, same as the rest of
+// this file's option lists).
+const MONITOR_NEW_SEASONS_OPTIONS = ['all', 'future', 'none'];
+const SERIES_TYPE_OPTIONS = ['anime', 'standard', 'daily'];
+
+// A search result's raw `status` field (see mapMalOfficialResult in
+// server/lib/mal.js and mapTvdbResult in server/lib/tvdb.js — both already
+// fetch this for the Add New preview modal's tag, but it stopped there:
+// nothing persisted it once a series was actually added, and POST
+// /api/series always hardcoded status: 'continuing' regardless of what the
+// real show's status was). MAL's official API returns snake_case machine
+// values; TVDB's are already display-ready English words. Mapped here into
+// one consistent, source-specific display label for air_status (what the
+// Next airing stat shows when there's no next episode date — see
+// frontend/pages/series/SeriesPage.jsx and LibraryGridPage.jsx), plus this
+// app's own plain continuing/ended
+// binary for the existing `status` column, which filter tabs and badges
+// elsewhere already depend on and shouldn't have to learn six new values.
+const MAL_STATUS_LABELS = {
+  finished_airing: 'Finished Airing',
+  currently_airing: 'Currently Airing',
+  not_yet_aired: 'Not Yet Aired',
+};
+const ENDED_STATUS_KEYS = new Set(['finished_airing', 'ended']);
+
+function deriveAirStatus(rawStatus, source) {
+  if (!rawStatus) return { airStatus: null, status: 'continuing' };
+  const key = String(rawStatus).trim().toLowerCase();
+  const airStatus = source === 'mal'
+    ? (MAL_STATUS_LABELS[key] || String(rawStatus))
+    : String(rawStatus); // TVDB (or anything else): already a readable label
+  return { airStatus, status: ENDED_STATUS_KEYS.has(key) ? 'ended' : 'continuing' };
+}
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS series (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    badge TEXT,
+    fill TEXT NOT NULL DEFAULT 'accent',
+    pct INTEGER NOT NULL DEFAULT 0,
+    eps TEXT NOT NULL DEFAULT '0 / 0',
+    monitored INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL DEFAULT 'continuing',
+    air_status TEXT,
+    next_air_days INTEGER,
+    added_days_ago INTEGER NOT NULL DEFAULT 0,
+    poster TEXT,
+    meta TEXT,
+    overview TEXT,
+    monitor_new_seasons TEXT NOT NULL DEFAULT 'all',
+    season_folder INTEGER NOT NULL DEFAULT 1,
+    quality_profile TEXT,
+    series_type TEXT NOT NULL DEFAULT 'anime',
+    path TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+
+// Many-to-many series <-> tags, backing the Edit Series modal's Tags field.
+// No foreign keys (consistent with the rest of this schema — nothing else
+// here enforces them either), but series/tag deletion below both clean up
+// their side of this table so it can't accumulate orphaned rows pointing at
+// an id that no longer exists.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS series_tags (
+    series_id INTEGER NOT NULL,
+    tag_id INTEGER NOT NULL,
+    PRIMARY KEY (series_id, tag_id)
+  )
+`);
+
+// One-time seed of the mockup's original 21 series (the same data that used
+// to live in app.js's seriesData array) so the Library isn't empty on a
+// fresh install. Inserted in the same order as the old array so ids land on
+// the same 1-21 values as before.
+const SERIES_SEED = [
+  { title: 'Frieren', badge: 'airing', fill: 'accent', pct: 78, eps: '21 / 28', monitored: true, status: 'continuing', nextAirDays: 2, addedDaysAgo: 40, poster: 'https://cdn.myanimelist.net/images/anime/1015/138006.jpg', meta: "2023 · Adventure, Drama, Fantasy · TV · 24 min eps", overview: "A veteran elf mage reflects on mortality and connection after outliving the human companions who once saved the world alongside her." },
+  { title: 'Chainsaw Man', badge: 'missing', fill: 'warning', pct: 92, eps: '11 / 12', monitored: true, status: 'continuing', nextAirDays: 5, addedDaysAgo: 25, meta: "2022 · Action, Fantasy, Horror · TV · 24 min eps", overview: "A destitute young man merges with his pet devil to become Chainsaw Man, hunting devils for a shadowy government agency." },
+  { title: 'Mushoku Tensei', badge: null, fill: 'success', pct: 100, eps: '24 / 24', monitored: true, status: 'ended', nextAirDays: null, addedDaysAgo: 120, meta: "2021 · Adventure, Drama, Fantasy · TV · 24 min eps", overview: "A shut-in gets a second chance at life reincarnated as a mage in a magical world, determined not to waste it this time." },
+  { title: 'Solo Leveling', badge: 'downloading', fill: 'accent', pct: 55, eps: '6 / 13', monitored: true, status: 'continuing', nextAirDays: 1, addedDaysAgo: 2, meta: "2024 · Action, Adventure, Fantasy · TV · 24 min eps", overview: "The weakest hunter alive gains a mysterious system that lets him grow stronger with every dungeon he clears." },
+  { title: 'Vinland Saga', badge: null, fill: 'success', pct: 100, eps: '24 / 24', monitored: true, status: 'ended', nextAirDays: null, addedDaysAgo: 200, meta: "2019 · Action, Adventure, Drama · TV · 24 min eps", overview: "A young Viking driven by vengeance sails toward a reckoning with the man who killed his father." },
+  { title: 'Steins;Gate', badge: 'unmonitored', fill: 'success', pct: 100, eps: '24 / 24', monitored: false, status: 'ended', nextAirDays: null, addedDaysAgo: 300, meta: "2011 · Drama, Sci-Fi, Suspense · TV · 24 min eps", overview: "A self-proclaimed mad scientist stumbles into real time travel, and every fix he makes only tightens the trap." },
+  { title: 'Made in Abyss', badge: null, fill: 'success', pct: 100, eps: '13 / 13', monitored: true, status: 'ended', nextAirDays: null, addedDaysAgo: 90, meta: "2017 · Adventure, Drama, Fantasy, Mystery · TV · 24 min eps", overview: "An orphan and the robot boy she rescues descend into a bottomless chasm that punishes anyone who tries to leave it." },
+  { title: 'Jujutsu Kaisen', badge: 'missing', fill: 'warning', pct: 88, eps: '22 / 25', monitored: true, status: 'continuing', nextAirDays: 4, addedDaysAgo: 60, meta: "2020 · Action, Fantasy · TV · 24 min eps", overview: "A boy swallows a cursed talisman to save his friends and is drafted into a secret war against man-eating curses." },
+  { title: 'Spy x Family', badge: null, fill: 'success', pct: 100, eps: '25 / 25', monitored: true, status: 'ended', nextAirDays: null, addedDaysAgo: 150, meta: "2022 · Action, Comedy · TV · 24 min eps", overview: "A spy, an assassin, and a telepath fake a family to keep the peace, each hiding their true identity from the others." },
+  { title: 'Demon Slayer', badge: 'airing', fill: 'accent', pct: 63, eps: '5 / 8', monitored: true, status: 'continuing', nextAirDays: 6, addedDaysAgo: 10, meta: "2019 · Action, Fantasy · TV · 24 min eps", overview: "A boy becomes a demon slayer to avenge his family and find a cure for the sister who survived as a demon." },
+  { title: 'Kaguya-sama', badge: null, fill: 'success', pct: 100, eps: '13 / 13', monitored: true, status: 'ended', nextAirDays: null, addedDaysAgo: 180, meta: "2019 · Comedy, Psychological, Romance · TV · 24 min eps", overview: "Two elite student council members would rather scheme and sabotage than admit they're both in love." },
+  { title: 'Bocchi the Rock', badge: null, fill: 'success', pct: 100, eps: '12 / 12', monitored: true, status: 'ended', nextAirDays: null, addedDaysAgo: 5, meta: "2022 · Comedy, Music, Slice of Life · TV · 24 min eps", overview: "A crippling introvert joins a band hoping it'll fix her social life; it mostly just gives her a guitar to hide behind." },
+  { title: 'Re:ZERO -Starting Life in Another World-', badge: null, fill: 'success', pct: 100, eps: '25 / 25', monitored: true, status: 'ended', nextAirDays: null, addedDaysAgo: 1, poster: 'https://cdn.myanimelist.net/images/anime/1522/128039.jpg', meta: "2016 · Drama, Fantasy, Suspense · TV · 26 min eps", overview: "Wrenched into a fantasy world and killed almost immediately, Subaru discovers he resets to a checkpoint every time he dies." },
+  { title: 'Fullmetal Alchemist: Brotherhood', badge: null, fill: 'success', pct: 100, eps: '64 / 64', monitored: true, status: 'ended', nextAirDays: null, addedDaysAgo: 1, poster: 'https://cdn.myanimelist.net/images/anime/1208/94745.jpg', meta: "2009 · Action, Adventure, Drama, Fantasy · TV · 24 min eps", overview: "Two brothers who broke a forbidden alchemical law search for a way to restore what it cost them, and get pulled into a national conspiracy." },
+  { title: 'Yani Neko', badge: 'airing', fill: 'accent', pct: 33, eps: '4 / 12', monitored: true, status: 'continuing', nextAirDays: 4, addedDaysAgo: 3, poster: 'https://cdn.myanimelist.net/images/anime/1281/156496.jpg', meta: "2026 · Comedy · TV · 23 min eps", overview: "A catgirl with a serious smoking habit and an even worse rent problem tries, and fails, to get her life together." },
+  { title: "Makina-san's a Love Bot?!", badge: null, fill: 'success', pct: 100, eps: '12 / 12', monitored: true, status: 'ended', nextAirDays: null, addedDaysAgo: 2, poster: 'https://cdn.myanimelist.net/images/anime/1843/146935.jpg', meta: "2025 · Comedy, Romance, Sci-Fi, Ecchi · TV · 12 min eps", overview: "A shy robotics enthusiast discovers his crush is an android built to seduce men, except her programming keeps glitching." },
+  { title: 'Trinity Seven', badge: null, fill: 'success', pct: 100, eps: '12 / 12', monitored: true, status: 'ended', nextAirDays: null, addedDaysAgo: 2, poster: 'https://cdn.myanimelist.net/images/anime/12/67795.jpg', meta: "2014 · Action, Comedy, Fantasy, Romance, Ecchi · TV · 24 min eps", overview: "After his hometown is erased by a mysterious phenomenon, a boy enrolls in a magic academy alongside seven powerful mages to get it back." },
+  { title: 'Strike Witches', badge: null, fill: 'success', pct: 100, eps: '12 / 12', monitored: true, status: 'ended', nextAirDays: null, addedDaysAgo: 2, poster: 'https://cdn.myanimelist.net/images/anime/13/75524.jpg', meta: "2008 · Action, Sci-Fi, Ecchi · TV · 24 min eps", overview: "Girls equipped with magical Striker Units form humanity's last line of defense against an alien invasion in an alternate 1944." },
+  { title: 'Angel Beats!', badge: null, fill: 'success', pct: 100, eps: '13 / 13', monitored: true, status: 'ended', nextAirDays: null, addedDaysAgo: 1, poster: 'https://cdn.myanimelist.net/images/anime/1244/111115.jpg', meta: "2010 · Drama, Fantasy · TV · 26 min eps", overview: "A boy wakes with no memories in the afterlife and joins a rebel faction fighting the god-like student council president." },
+  { title: 'Higashi no Eden', badge: null, fill: 'success', pct: 100, eps: '11 / 11', monitored: true, status: 'ended', nextAirDays: null, addedDaysAgo: 3, poster: 'https://cdn.myanimelist.net/images/anime/9/15033.jpg', meta: "2009 · Mystery, Psychological, Sci-Fi · TV · 23 min eps", overview: "A naked amnesiac carrying a phone loaded with 8.2 billion yen may be behind a terrorist attack, or the only one who can stop the next one." },
+  { title: 'Kiss x Sis', badge: null, fill: 'success', pct: 100, eps: '12 / 12', monitored: true, status: 'ended', nextAirDays: null, addedDaysAgo: 3, poster: 'https://cdn.myanimelist.net/images/anime/1660/121553.jpg', meta: "2010 · Comedy, Romance, Ecchi · TV · 24 min eps", overview: "A boy tries to focus on high school entrance exams while his two step-sisters compete, loudly, for his affection." },
+];
+
+// Defensive migration for DBs created before external_id/external_source
+// existed (added alongside real per-episode data — see the Episode
+// persistence section below). Lets us know which series came from a search
+// result, and what id to look episodes up by, without touching anything
+// already in the table.
+const seriesColumns = db.prepare('PRAGMA table_info(series)').all().map((c) => c.name);
+if (!seriesColumns.includes('external_id')) {
+  db.exec(`ALTER TABLE series ADD COLUMN external_id TEXT`);
+  logInfo('Database', 'Migrated series table: added external_id column');
+}
+if (!seriesColumns.includes('external_source')) {
+  db.exec(`ALTER TABLE series ADD COLUMN external_source TEXT`);
+  logInfo('Database', 'Migrated series table: added external_source column');
+}
+if (!seriesColumns.includes('air_status')) {
+  // The real, source-specific airing status text (TVDB's "Ended"/
+  // "Continuing"/"Upcoming", MAL's "Finished Airing"/"Currently Airing"/
+  // "Not Yet Aired") — separate from the `status` column above, which stays
+  // a plain continuing/ended binary the rest of the app (filter tabs,
+  // badges) already depends on. See deriveAirStatus below for where this
+  // gets populated and the Next airing stat card on series.html for where
+  // it's shown for a series with no next episode date.
+  db.exec(`ALTER TABLE series ADD COLUMN air_status TEXT`);
+  logInfo('Database', 'Migrated series table: added air_status column');
+}
+if (!seriesColumns.includes('tvdb_episode_id')) {
+  // The TVDB series id used for episode lookups (see Episode persistence
+  // below) — separate from external_id/external_source, which record where
+  // the series itself was originally added from. A MAL-added series has no
+  // TVDB id at all until it's resolved once by title search; this caches
+  // that result so it's only ever looked up once.
+  db.exec(`ALTER TABLE series ADD COLUMN tvdb_episode_id TEXT`);
+  logInfo('Database', 'Migrated series table: added tvdb_episode_id column');
+}
+
+// Fields the Edit Series modal reads/writes — added together since they
+// all landed with that one feature.
+for (const [col, def] of [
+  ['monitor_new_seasons', "TEXT NOT NULL DEFAULT 'all'"],
+  ['season_folder', 'INTEGER NOT NULL DEFAULT 1'],
+  ['quality_profile', 'TEXT'],
+  ['series_type', "TEXT NOT NULL DEFAULT 'anime'"],
+  ['path', 'TEXT'],
+  // JSON array of alternate titles from the search result that added this
+  // series (native/romanized title, Japanese title, MAL's own synonyms
+  // list) — see resolveTvdbEpisodeSourceId in server/lib/tvdb.js for why:
+  // a MAL-added series' official English title (what's stored in `title`)
+  // frequently isn't what TVDB itself indexes the show under, so the very
+  // first title-only TVDB search this app tried could come back with zero
+  // results even for a real, well-known show. These give that resolution a
+  // second (and third, etc.) attempt instead of just giving up after one.
+  ['alt_titles', 'TEXT'],
+]) {
+  if (!seriesColumns.includes(col)) {
+    db.exec(`ALTER TABLE series ADD COLUMN ${col} ${def}`);
+    logInfo('Database', `Migrated series table: added ${col} column`);
+  }
+}
+
+const seriesCount = db.prepare('SELECT COUNT(*) AS n FROM series').get().n;
+if (seriesCount === 0) {
+  const insertSeries = db.prepare(`
+    INSERT INTO series (title, badge, fill, pct, eps, monitored, status, next_air_days, added_days_ago, poster, meta, overview)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  for (const s of SERIES_SEED) {
+    insertSeries.run(
+      s.title, s.badge ?? null, s.fill, s.pct, s.eps, s.monitored ? 1 : 0, s.status,
+      s.nextAirDays ?? null, s.addedDaysAgo, s.poster ?? null, s.meta ?? null, s.overview ?? null
+    );
+  }
+  logInfo('Database', `Seeded ${SERIES_SEED.length} default series into ${DB_PATH}`);
+}
+
+function tagIdsForSeries(seriesId) {
+  return db.prepare('SELECT tag_id FROM series_tags WHERE series_id = ? ORDER BY tag_id ASC').all(seriesId).map((r) => r.tag_id);
+}
+
+function rowToSeries(row) {
+  return {
+    id: row.id,
+    title: row.title,
+    badge: row.badge,
+    fill: row.fill,
+    pct: row.pct,
+    eps: row.eps,
+    monitored: !!row.monitored,
+    status: row.status,
+    airStatus: row.air_status,
+    nextAirDays: row.next_air_days,
+    addedDaysAgo: row.added_days_ago,
+    poster: row.poster,
+    meta: row.meta,
+    overview: row.overview,
+    externalId: row.external_id,
+    externalSource: row.external_source,
+    // Everything below here backs the Edit Series modal (see series.html).
+    monitorNewSeasons: row.monitor_new_seasons,
+    seasonFolder: !!row.season_folder,
+    qualityProfile: row.quality_profile,
+    seriesType: row.series_type,
+    path: row.path,
+    tagIds: tagIdsForSeries(row.id),
+  };
+}
+
+
+async function handleSeriesApi(req, res, urlPath) {
+  // GET /api/series — everything the Library grid / series detail page need.
+  if (req.method === 'GET' && urlPath === '/api/series') {
+    const rows = db.prepare('SELECT * FROM series ORDER BY id ASC').all();
+    sendJson(res, 200, rows.map(rowToSeries));
+    return true;
+  }
+
+  // POST /api/series — add a series found via search (see Add New). Only
+  // title is required; everything else gets a sensible "just added, nothing
+  // known yet" default, since a search result doesn't include episode
+  // counts, genres, or airing status. `id`/`source` (the search result's
+  // MAL or TVDB id, and which one it came from) are stored as
+  // external_id/external_source so a MAL-sourced add can later have its real
+  // episode list fetched — see GET /api/series/:id/episodes below.
+  if (req.method === 'POST' && urlPath === '/api/series') {
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch {
+      sendJson(res, 400, { error: 'Invalid JSON body' });
+      return true;
+    }
+    const title = String(body.title || '').trim();
+    if (!title) {
+      sendJson(res, 400, { error: 'Title is required' });
+      return true;
+    }
+    const meta = body.year ? `${body.year} · TV` : (body.meta || null);
+    const externalId = body.id !== undefined && body.id !== null && body.id !== '' ? String(body.id) : null;
+    const externalSource = body.source ? String(body.source) : null;
+    // See the alt_titles migration comment above for why these matter — kept
+    // to a handful of short, deduplicated, non-empty strings so a malformed
+    // or huge client payload here can't bloat the row or the searches that
+    // read it back.
+    const altTitles = Array.isArray(body.altTitles)
+      ? [...new Set(body.altTitles.map((t) => String(t || '').trim()).filter((t) => t && t.length <= 200))].slice(0, 5)
+      : [];
+    const altTitlesJson = altTitles.length > 0 ? JSON.stringify(altTitles) : null;
+
+    // Duplicate check. This is the thing that actually stops a title from
+    // being added twice — the Add New page tries to pre-empt this in the UI
+    // (see loadLibraryIndex/libraryMatchFor in app.js), but that's just a
+    // convenience; without a real check here, re-clicking "Add Series" on
+    // the same search result (or two different search results that resolve
+    // to the same show, e.g. MAL vs a TVDB fallback result) would silently
+    // create a second row in the Library. Two ways a duplicate shows up:
+    // the exact same (source, id) pair as an existing series, or a title
+    // that normalizes to the same thing — reusing normalizeFolderName (see
+    // the Real filesystem access section above), since "same show, different
+    // casing/punctuation" is the same comparison problem folder matching
+    // already solves.
+    if (externalId && externalSource) {
+      const byExternal = db.prepare('SELECT id, title FROM series WHERE external_id = ? AND external_source = ?')
+        .get(externalId, externalSource);
+      if (byExternal) {
+        sendJson(res, 409, { error: `"${byExternal.title}" is already in the Library`, existingId: byExternal.id });
+        return true;
+      }
+    }
+    const normalizedTitle = normalizeFolderName(title);
+    const byTitle = db.prepare('SELECT id, title FROM series').all()
+      .find((r) => normalizeFolderName(r.title) === normalizedTitle);
+    if (byTitle) {
+      sendJson(res, 409, { error: `"${byTitle.title}" is already in the Library`, existingId: byTitle.id });
+      return true;
+    }
+
+    // Real airing status from the search result (see deriveAirStatus above)
+    // instead of always hardcoding 'continuing' — a show that's already
+    // finished when it's added should read that way immediately, not just
+    // once something else happens to update it later (nothing currently
+    // does; status/air_status are set once, here, and never revisited).
+    const { airStatus, status } = deriveAirStatus(body.status, externalSource);
+
+    const { lastInsertRowid } = db.prepare(`
+      INSERT INTO series (title, badge, fill, pct, eps, monitored, status, air_status, next_air_days, added_days_ago, poster, meta, overview, external_id, external_source, alt_titles)
+      VALUES (?, NULL, 'accent', 0, '0 / 0', 1, ?, ?, NULL, 0, ?, ?, ?, ?, ?, ?)
+    `).run(title, status, airStatus, body.poster || null, meta, body.overview || null, externalId, externalSource, altTitlesJson);
+    const created = db.prepare('SELECT * FROM series WHERE id = ?').get(lastInsertRowid);
+    logInfo('SeriesService', `Series added: ${title}${externalSource ? ` (${externalSource}#${externalId})` : ''}`);
+    sendJson(res, 201, rowToSeries(created));
+    // Start warming the episode cache immediately instead of waiting for
+    // someone to open the series detail page — see warmEpisodesInBackground
+    // below (defined near the rest of the episode-fetching code, since it
+    // needs resolveTvdbEpisodeSourceId/fetchTvdbEpisodes). Deliberately not
+    // awaited: the response above has already gone out, and a slow or
+    // failed TVDB fetch shouldn't hold up "series added" or surface as an
+    // error on this request.
+    warmEpisodesInBackground(created);
+    return true;
+  }
+
+  // PATCH /api/series/:id — the Monitored toggle on the series detail page,
+  // plus everything the Edit Series modal (see series.html) can change:
+  // Monitor New Seasons, Use Season Folder, Quality Profile, Series Type,
+  // Path, and Tags. Every field is optional/independent — only the ones
+  // actually present in the request body get touched, same pattern as the
+  // settings PATCH endpoints elsewhere in this file.
+  const patchMatch = req.method === 'PATCH' && urlPath.match(/^\/api\/series\/(\d+)$/);
+  if (patchMatch) {
+    const id = Number(patchMatch[1]);
+    const existing = db.prepare('SELECT * FROM series WHERE id = ?').get(id);
+    if (!existing) {
+      sendJson(res, 404, { error: 'Series not found' });
+      return true;
+    }
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch {
+      sendJson(res, 400, { error: 'Invalid JSON body' });
+      return true;
+    }
+    if (body.monitored !== undefined) {
+      db.prepare('UPDATE series SET monitored = ? WHERE id = ?').run(body.monitored ? 1 : 0, id);
+      logInfo('SeriesService', `${existing.title}: monitored set to ${!!body.monitored}`);
+    }
+    if (body.monitorNewSeasons !== undefined) {
+      const value = String(body.monitorNewSeasons);
+      if (!MONITOR_NEW_SEASONS_OPTIONS.includes(value)) {
+        sendJson(res, 400, { error: `monitorNewSeasons must be one of: ${MONITOR_NEW_SEASONS_OPTIONS.join(', ')}` });
+        return true;
+      }
+      db.prepare('UPDATE series SET monitor_new_seasons = ? WHERE id = ?').run(value, id);
+    }
+    if (body.seasonFolder !== undefined) {
+      db.prepare('UPDATE series SET season_folder = ? WHERE id = ?').run(body.seasonFolder ? 1 : 0, id);
+    }
+    if (body.qualityProfile !== undefined) {
+      db.prepare('UPDATE series SET quality_profile = ? WHERE id = ?').run(body.qualityProfile || null, id);
+    }
+    if (body.seriesType !== undefined) {
+      const value = String(body.seriesType);
+      if (!SERIES_TYPE_OPTIONS.includes(value)) {
+        sendJson(res, 400, { error: `seriesType must be one of: ${SERIES_TYPE_OPTIONS.join(', ')}` });
+        return true;
+      }
+      db.prepare('UPDATE series SET series_type = ? WHERE id = ?').run(value, id);
+    }
+    if (body.path !== undefined) {
+      db.prepare('UPDATE series SET path = ? WHERE id = ?').run(String(body.path).trim() || null, id);
+    }
+    if (body.tagIds !== undefined) {
+      if (!Array.isArray(body.tagIds)) {
+        sendJson(res, 400, { error: 'tagIds must be an array of tag ids' });
+        return true;
+      }
+      // Replace the whole set rather than diffing — simplest correct way to
+      // handle "here's the new list of tags" from the modal's tag picker,
+      // and this table only ever has a handful of rows per series. (No
+      // db.transaction() here — node:sqlite's DatabaseSync doesn't have
+      // better-sqlite3's transaction() helper; these two statements run
+      // synchronously back to back, which is enough for a single-process,
+      // single-connection app like this one.)
+      db.prepare('DELETE FROM series_tags WHERE series_id = ?').run(id);
+      const insertTag = db.prepare('INSERT OR IGNORE INTO series_tags (series_id, tag_id) VALUES (?, ?)');
+      for (const tagId of body.tagIds) insertTag.run(id, Number(tagId));
+    }
+    const updated = db.prepare('SELECT * FROM series WHERE id = ?').get(id);
+    sendJson(res, 200, rowToSeries(updated));
+    return true;
+  }
+
+  // DELETE /api/series/:id — removes a series from the library entirely.
+  const deleteMatch = req.method === 'DELETE' && urlPath.match(/^\/api\/series\/(\d+)$/);
+  if (deleteMatch) {
+    const id = Number(deleteMatch[1]);
+    const existing = db.prepare('SELECT * FROM series WHERE id = ?').get(id);
+    if (!existing) {
+      sendJson(res, 404, { error: 'Series not found' });
+      return true;
+    }
+    db.prepare('DELETE FROM series WHERE id = ?').run(id);
+    db.prepare('DELETE FROM series_tags WHERE series_id = ?').run(id);
+    logInfo('SeriesService', `Series deleted: ${existing.title}`);
+    sendJson(res, 200, { ok: true });
+    return true;
+  }
+
+  return false;
+}
+
+module.exports = { handleSeriesApi };

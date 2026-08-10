@@ -9,102 +9,24 @@
 <body>
 <div class="layout">
 
-  <aside class="sidebar" id="sidebar">
-    <div class="brand">
-      <svg class="brand-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3c2 2.5 2 5 2 5s2.5-1 4-1 3 1 3 3-1.5 3-3 3c1 1.5 1 3.5-.5 5C16 19.5 14 19 12 21c-2-2-4-1.5-5.5-3-1.5-1.5-1.5-3.5-.5-5-1.5 0-3-1-3-3s1.5-3 3-3 4 1 4 1 0-2.5 2-5z"/></svg>
-      <span class="brand-name">Kitsune</span>
-    </div>
-    <a class="nav-item active" href="index.html">
-      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
-      <span class="nav-label">Library</span>
-    </a>
-    <div class="nav-sub open">
-      <a href="index.html">All Series</a>
-      <a href="library-add-new.html">Add New</a>
-      <a class="active" href="library-import.html">Library Import</a>
-    </div>
-    <a class="nav-item" href="#">
-      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/></svg>
-      <span class="nav-label">Calendar</span>
-    </a>
-    <a class="nav-item nav-toggle" href="#">
-      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h4l2 7 4-14 2 7h6"/></svg>
-      <span class="nav-label">Activity</span>
-    </a>
-    <div class="nav-sub">
-      <a href="activity-queue.html">Queue</a>
-      <a href="activity-history.html">History</a>
-      <a href="activity-blocklist.html">Blocklist</a>
-    </div>
-    <a class="nav-item nav-toggle" href="#">
-      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 8v5l3 2"/></svg>
-      <span class="nav-label">Wanted</span>
-      <span class="nav-badge">27</span>
-    </a>
-    <div class="nav-sub">
-      <a href="wanted-missing.html">Missing</a>
-      <a href="wanted-cutoff-unmet.html">Cutoff Unmet</a>
-    </div>
-    <div class="nav-divider"></div>
-    <a class="nav-item nav-toggle" href="#">
-      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.2a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.2a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.2a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.2a1.7 1.7 0 0 0-1.5 1z"/></svg>
-      <span class="nav-label">Settings</span>
-    </a>
-    <div class="nav-sub">
-      <a href="settings-media-management.html">Media Management</a>
-      <a href="settings-profiles.html">Profiles</a>
-      <a href="settings-quality.html">Quality</a>
-      <a href="settings-custom-formats.html">Custom Formats</a>
-      <a href="settings-indexers.html">Indexers</a>
-      <a href="settings-download-clients.html">Download Clients</a>
-      <a href="settings-import-lists.html">Import Lists</a>
-      <a href="settings-connect.html">Connect</a>
-      <a href="settings-metadata.html">Metadata</a>
-      <a href="settings-tags.html">Tags</a>
-      <a href="settings-general.html">General</a>
-      <a href="settings-ui.html">UI</a>
-    </div>
-    <a class="nav-item nav-toggle" href="#">
-      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><circle cx="7" cy="7.5" r="0.8" fill="currentColor" stroke="none"/><circle cx="7" cy="16.5" r="0.8" fill="currentColor" stroke="none"/></svg>
-      <span class="nav-label">System</span>
-    </a>
-    <div class="nav-sub">
-      <a href="system-status.html">Status</a>
-      <a href="system-tasks.html">Tasks</a>
-      <a href="system-backup.html">Backup</a>
-      <a href="system-updates.html">Updates</a>
-      <a href="system-events.html">Events</a>
-      <a href="system-logs.html">Logs</a>
-    </div>
-    <div class="collapse-toggle" id="collapseToggle">
-      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
-      <span class="collapse-label">Collapse</span>
-    </div>
-  </aside>
+  <aside class="sidebar" id="sidebar"></aside>
 
   <main class="main">
     <div class="top-row">
       <div>
         <h1 class="settings-heading">Library</h1>
       </div>
-      <button class="btn-accent" id="rescanFoldersBtn" type="button">Rescan</button>
+      <!-- React now (see README's "React migration" section) — rendered via a portal from the same component/state as #libraryImportRoot below. -->
+      <span id="rescanFoldersBtnRoot"></span>
     </div>
 
-    <div class="page-tabs">
-      <a href="index.html">All Series</a>
-      <a href="library-add-new.html">Add New</a>
-      <a class="active" href="library-import.html">Library Import</a>
-    </div>
-    <p class="settings-subtitle">Series found in your root folders that aren't in the library yet.</p>
-
-    <div class="import-header">
-      <span></span><span>Folder</span><span>Match</span><span>Status</span>
-    </div>
-    <div id="importList"></div>
+    <div class="page-tabs"></div>
+    <div id="libraryImportRoot"></div>
 
   </main>
 </div>
 
-<script src="app.js"></script>
+<script type="module" src="app.js"></script>
+<script type="module" src="dist/library-import.js"></script>
 </body>
 </html>

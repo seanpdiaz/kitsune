@@ -223,9 +223,39 @@ button, .btn-accent {
   gap: 7px;
   font-weight: 500;
   text-decoration: none;
+  /* Every button label in this app is meant to stay on one line — without
+     this, a button with no extra width to spare (e.g. the Series Details
+     modal's "Add Series", which isn't narrowed by any page-specific rule
+     the way .card-actions' buttons are) can wrap its label onto two lines
+     and grow taller than its siblings instead. */
+  white-space: nowrap;
 }
 
+/* Baseline icon size for a button's own SVG (its "+", not one of the
+   already-sized icons elsewhere like .ep-action svg or .card-actions button
+   svg, which override this via a more specific selector). Every icon inside
+   a plain, unscoped button — like the Series Details modal's "Add Series" —
+   previously had no size rule at all and fell back to the browser's
+   unconstrained default for an SVG with only a viewBox, which is large
+   enough to crowd out the label text and force it to wrap — the actual
+   cause of that button's text going to two lines, not the button itself
+   being too narrow. */
+button svg { width: 14px; height: 14px; flex-shrink: 0; }
+
 button:hover { background: var(--surface-3); border-color: var(--border-strong); }
+
+/* A clicked button (e.g. the Series Details modal's "Add Series") keeps the
+   browser's native focus ring after the click, which reads as a stray dark
+   outline around an otherwise-identical button elsewhere on the page (the
+   same "Add Series" on its Library card, never focused, has none). A plain
+   :focus-visible carve-out (kept for keyboard use) isn't enough on its own —
+   Firefox and Safari both still treat a plain mouse click on a <button> as
+   "focus-visible", unlike Chrome, so the ring came back there regardless.
+   Simplest fix, and consistent with how this app already treats every other
+   focusable control (.search-box input, .field-input, .field-select all
+   just suppress the native outline outright below): drop it here too rather
+   than fight each browser's own heuristic for when to show it. */
+button:focus { outline: none; }
 
 .btn-accent {
   background: var(--accent);
@@ -243,6 +273,19 @@ button:hover { background: var(--surface-3); border-color: var(--border-strong);
 }
 
 .btn-danger:hover { background: var(--danger-bg); border-color: var(--danger); color: var(--danger); }
+
+/* Same green "settled" look as .card-added, for the one other place a
+   result's Add button needs to show it's already in the Library — the
+   preview modal's own Add Series button. Clickable (not cursor: default)
+   because both states link through to the Library entry now, same as the
+   card's own .card-added link. */
+.btn-success-state {
+  background: var(--success-bg);
+  border-color: transparent;
+  color: var(--success);
+  font-weight: 600;
+}
+.btn-success-state:hover { background: var(--success-bg); border-color: transparent; }
 
 .modal-footer .btn-danger {
   background: var(--danger);
@@ -299,6 +342,41 @@ select {
   margin-bottom: 16px;
 }
 
+/* Wraps the sort <select> and the Poster/Table/Overview view-toggle
+   together on the right side of .filter-row — needed because .filter-row's
+   own space-between only works cleanly with exactly two children (filter
+   tabs on the left, everything else on the right); a bare third child would
+   get spread evenly instead of sitting flush next to the sort dropdown. */
+.filter-row-right { display: flex; align-items: center; gap: 10px; }
+
+/* Library view toggle (Poster/Table/Overview — see index.html and
+   frontend/pages/library-grid/LibraryGridPage.jsx). Same visual weight as the sort <select> next to
+   it: a bordered, surface-1 pill holding three icon-only buttons, the
+   active one lifted onto surface-2 the same way .tabs button.active is. */
+.view-toggle {
+  display: flex;
+  gap: 2px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+  flex-shrink: 0;
+}
+.view-toggle button {
+  height: 30px;
+  width: 32px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.view-toggle button svg { width: 15px; height: 15px; }
+.view-toggle button:hover { color: var(--text-primary); background: var(--surface-2); }
+.view-toggle button.active { background: var(--surface-2); color: var(--accent); }
+
 .tabs { display: flex; gap: 6px; }
 .tabs button, .segment-tabs button {
   background: transparent;
@@ -318,6 +396,14 @@ select {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   gap: 14px;
+}
+
+/* Add New's result cards carry a two-button row (Preview + Add Series)
+   that the plain Library cards don't — 140px is enough room for a poster
+   and title, but not enough for both buttons side by side without
+   clipping the second one against the card's overflow:hidden edge. */
+#addNewGrid {
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
 }
 
 .series-card {
@@ -341,6 +427,7 @@ select {
   color: var(--text-muted);
   font-size: 11px;
   overflow: hidden;
+  cursor: pointer;
 }
 
 .poster img {
@@ -366,7 +453,12 @@ select {
 .badge.downloading { background: var(--accent-bg); color: var(--accent); }
 .badge.unmonitored { background: var(--surface-3); color: var(--text-muted); }
 
-.card-body { padding: 9px 10px 11px; }
+/* cursor here (not just .poster above) covers the title/overview text too —
+   the whole card opens the preview modal now, not just its own "Preview"
+   button (see frontend/pages/library-add-new/AddNewPage.jsx's SeriesCard).
+   .card-actions' own buttons/link already set their own cursor and aren't
+   affected by this inherited value. */
+.card-body { padding: 9px 10px 11px; cursor: pointer; }
 
 .card-title {
   margin: 0 0 6px;
@@ -389,6 +481,124 @@ select {
 .fill.success { background: var(--success); }
 .fill.warning { background: var(--warning); }
 
+/* ---------- Library: Status chip (Table + Overview views) ---------- */
+/* Same five colors .badge already uses for the poster overlay (see
+   badgeLabel/statusChipFor in frontend/pages/library-grid/LibraryGridPage.jsx)
+   plus two more (continuing/ended)
+   for series that have no attention-badge at all — that's most finished
+   shows. Can't just reuse .badge directly since that class is
+   position:absolute (meant to sit on top of a poster); this is the same
+   color pairing rendered as a normal inline pill instead. */
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 20px;
+  width: fit-content;
+}
+.status-chip.airing, .status-chip.downloading { background: var(--accent-bg); color: var(--accent); }
+.status-chip.missing { background: var(--warning-bg); color: var(--warning); }
+.status-chip.unmonitored { background: var(--surface-3); color: var(--text-muted); }
+.status-chip.continuing { background: var(--accent-bg); color: var(--accent); }
+.status-chip.ended { background: var(--surface-3); color: var(--text-secondary); }
+
+.library-tags { display: inline-flex; flex-wrap: wrap; gap: 5px; }
+.library-tags .tag-chip { padding: calc(4px * var(--tag-scale)) calc(9px * var(--tag-scale)); }
+
+/* ---------- Library: Table view ---------- */
+/* Same shared header/row grid convention every other list page in the app
+   uses (.settings-header/.settings-row, .queue-header/.queue-row, etc.) —
+   see the big comment block above .settings-header in this file. Rows are
+   real <a> links straight to series.html (like .series-card already is),
+   not buttons with a click handler, so middle-click/cmd-click "open in new
+   tab" works the same way it does from Poster view. */
+.series-table-header, .series-table-row {
+  display: grid;
+  grid-template-columns: 1fr 120px 150px 150px 100px 200px 90px;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 14px;
+}
+.series-table-header {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.series-table-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-bottom: 8px;
+  background: var(--surface-1);
+  transition: border-color 0.12s ease;
+}
+.series-table-row:hover { border-color: var(--border-strong); }
+.series-table-name { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.series-table-thumb {
+  flex-shrink: 0;
+  width: 32px;
+  height: 46px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: linear-gradient(155deg, var(--surface-3), var(--surface-2));
+}
+.series-table-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.series-table-eps { display: flex; flex-direction: column; gap: 5px; }
+.series-table-eps .progress { width: 100%; }
+
+/* ---------- Library: Overview view ---------- */
+/* Wide horizontal rows — poster on the left, everything else (title,
+   year/genre/runtime line, real overview text, and a footer strip of
+   episode/quality/next-airing/tag info) stacked to its right. Closest of
+   the three views to what a real Sonarr "Overview" list mode shows. */
+.series-overview-list { display: flex; flex-direction: column; gap: 10px; }
+.series-overview-row {
+  display: flex;
+  gap: 14px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  transition: border-color 0.12s ease;
+}
+.series-overview-row:hover { border-color: var(--border-strong); }
+.overview-poster {
+  flex-shrink: 0;
+  width: 72px;
+  aspect-ratio: 2 / 3;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  position: relative;
+  background: linear-gradient(155deg, var(--surface-3), var(--surface-2));
+}
+.overview-poster img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.overview-poster .badge { top: 5px; left: 5px; font-size: 9.5px; padding: 2px 6px; }
+.overview-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; justify-content: center; }
+.overview-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.overview-title { margin: 0; font-size: 14.5px; font-weight: 700; }
+.overview-meta { margin: 0; font-size: 12px; color: var(--text-secondary); }
+.overview-desc {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.overview-footer {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+.overview-footer .progress { width: 110px; flex-shrink: 0; }
+
 /* ---------- Series detail ---------- */
 
 .back-link {
@@ -404,16 +614,30 @@ select {
 
 .detail-header {
   display: flex;
-  gap: 22px;
+  gap: 40px;
   margin-bottom: 24px;
 }
 
 .detail-poster {
-  width: 150px;
-  aspect-ratio: 2 / 3;
+  width: 220px;
   border-radius: var(--radius-lg);
   background: linear-gradient(155deg, var(--surface-3), var(--surface-2));
   flex-shrink: 0;
+  /* Deliberately no aspect-ratio here (tried it, reverted — see below).
+     .detail-header is a flex row; leaving height unset means the default
+     align-items: stretch does exactly what was asked for: this item's
+     height matches .detail-info's height (title/overview/stat boxes),
+     bottom edges included, whatever that height happens to be for a given
+     series' overview length. object-fit: cover on the img below fills
+     that box, cropping as needed — never distorting pixels — so a taller
+     box just shows a slightly more zoomed-in crop of the poster, not a
+     stretched one. A prior version tried leaving width unset instead and
+     deriving it from aspect-ratio off the stretched height, so the box
+     would stay exactly 2:3 — that doesn't actually work in flexbox: the
+     browser needs the width to lay out the row's main axis *before* cross-
+     axis stretch is resolved, so a width that depends on the stretched
+     height is circular, and it collapsed to nothing instead of resolving.
+     A fixed width sidesteps that entirely. */
   overflow: hidden;
   position: relative;
 }
@@ -461,10 +685,40 @@ select {
 
 .overview {
   font-size: 13px;
+  line-height: 1.5;
   color: var(--text-secondary);
   max-width: 560px;
   margin: 10px 0 16px;
+  /* A handful of long-running series (Frieren, Black Bullet, etc. in the
+     seed data) have synopses long enough that letting them grow the whole
+     header — and by extension .detail-poster, which stretches to match
+     .detail-info's height — made for an oddly oversized poster next to an
+     average-length one. Capping the synopsis at 8 lines (~160px at this
+     font-size/line-height) and letting it scroll internally instead keeps
+     the header a predictable size regardless of how long the real synopsis
+     is, while still making the full text available. Same scrollbar
+     treatment as .preview-overview (Add New's preview modal) below, reused
+     as-is — a scrollable overview box is a scrollable overview box either
+     way.
+
+     This is a fixed `height`, not `max-height` — deliberately. A cap alone
+     only bounds the *tall* case; a short synopsis (Re:ZERO's is two lines)
+     would still leave this box shorter than a capped-long one, so
+     .detail-info's total height — and therefore .detail-poster's stretched
+     size, per the fix above — still varied series to series, just within a
+     smaller range than before. A fixed height means every series' overview
+     occupies the same space (empty room below a short synopsis is fine),
+     which is what actually makes the poster the same size on every series'
+     page, not just similarly-sized. */
+  height: 160px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
 }
+.overview::-webkit-scrollbar { width: 6px; }
+.overview::-webkit-scrollbar-track { background: transparent; }
+.overview::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; }
+.overview::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
 .detail-stats {
   display: grid;
@@ -531,6 +785,14 @@ select {
 .ep-row.missing .ep-num, .ep-row.missing .ep-title, .ep-row.missing .ep-date { color: var(--warning); }
 .ep-row.downloading .ep-num, .ep-row.downloading .ep-title, .ep-row.downloading .ep-date { color: var(--accent); }
 
+/* Only real, DB-backed episode rows (an id to look up, see
+   EpisodeRow/handleDetails in frontend/pages/series/SeriesPage.jsx) open the episode details modal on
+   title click — the hand-built Frieren demo and the generic "Episode N"
+   placeholder list have no real per-episode data behind them to show, same
+   gating the Search/Cancel buttons already use. */
+.ep-title.ep-title-clickable { cursor: pointer; }
+.ep-title.ep-title-clickable:hover { text-decoration: underline; }
+
 .ep-date { color: var(--text-secondary); font-size: 12px; }
 .audio-tag {
   font-size: 10.5px;
@@ -591,6 +853,7 @@ select {
 .page-tabs a.active { color: var(--accent); border-bottom-color: var(--accent); }
 
 .settings-header, .settings-row,
+.dlclient-header, .dlclient-row,
 .profile-header, .profile-row,
 .format-header, .format-row,
 .quality-header, .quality-row,
@@ -610,7 +873,15 @@ select {
   padding: 12px 14px;
 }
 
-.settings-header, .settings-row { grid-template-columns: 1fr 170px 70px 130px 50px 90px 32px; }
+/* 8th column added for the Edit (pencil) button now sitting between Test
+   and Remove — see ConnectionManager.jsx (frontend/components/), the React
+   controller Indexers/Import Lists/Connect all share this row shape from. */
+.settings-header, .settings-row { grid-template-columns: 1fr 170px 70px 130px 50px 90px 32px 32px; }
+/* Download Clients: same row/pill/switch styling as the shared connections
+   list, but its own column set — a Category column (real per-client field,
+   see server/routes/settings-items.js) that the generic list-style sections
+   don't have. */
+.dlclient-header, .dlclient-row { grid-template-columns: 1fr 160px 110px 70px 120px 50px 90px 32px; }
 .profile-header, .profile-row { grid-template-columns: 1fr 160px 110px 100px 32px 32px; }
 .format-header, .format-row { grid-template-columns: 1fr 130px 140px 32px 32px; }
 .quality-header, .quality-row { grid-template-columns: 170px 1fr 110px 110px 110px; }
@@ -621,11 +892,13 @@ select {
 .log-header, .log-row { grid-template-columns: 90px 70px 160px 1fr; }
 .queue-header, .queue-row { grid-template-columns: 1fr 110px 80px 160px 120px 32px 32px; }
 .blocklist-header, .blocklist-row { grid-template-columns: 1fr 140px 130px 110px 110px 32px; }
-.import-header, .import-row { grid-template-columns: 32px 1fr 1fr 130px; }
+/* Files column added between Match and Status for the real per-folder file
+   summary (count/size/formats) — see frontend/pages/library-import/LibraryImportPage.jsx. */
+.import-header, .import-row { grid-template-columns: 32px 1fr 1fr 190px 150px; }
 .missing-header, .missing-row { grid-template-columns: 170px 1fr 100px 90px; }
 .cutoff-header, .cutoff-row { grid-template-columns: 170px 1fr 120px 120px 90px; }
 
-.settings-header, .profile-header, .format-header, .quality-header,
+.settings-header, .dlclient-header, .profile-header, .format-header, .quality-header,
 .task-header, .backup-header, .event-header, .log-header,
 .queue-header, .blocklist-header, .import-header, .missing-header, .cutoff-header {
   font-size: 11.5px;
@@ -634,7 +907,7 @@ select {
   letter-spacing: 0.03em;
 }
 
-.settings-row, .profile-row, .format-row, .quality-row,
+.settings-row, .dlclient-row, .profile-row, .format-row, .quality-row,
 .task-row, .backup-row, .health-row, .event-row, .log-row,
 .queue-row, .blocklist-row, .import-row, .missing-row, .cutoff-row {
   border: 1px solid var(--border);
@@ -644,6 +917,56 @@ select {
 }
 
 .event-row .ep-date, .log-row .ep-date { font-family: var(--font-mono); }
+
+/* Indeterminate progress bar for the one real System > Tasks row (Disk Usage
+   Recompute) while a scan is in flight — see public/js/pages/system-tasks.js.
+   Deliberately not tied to a percentage: a recursive directory walk has no
+   cheap way to know "how much is left" up front, so rather than fake a
+   number, this is the same continuously-sliding indicator pattern as a
+   browser tab's loading bar — always looks active, never claims a specific
+   completion amount. Scoped to .task-row only (not the whole shared
+   .settings-row/.dlclient-row/etc. family) since the other six rows on this
+   page are decorative and never render it. */
+.task-row { position: relative; overflow: hidden; }
+.task-progress-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--accent-bg);
+}
+.task-progress-track::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 35%;
+  background: var(--accent);
+  animation: task-progress-slide 1.1s ease-in-out infinite;
+}
+@keyframes task-progress-slide {
+  0% { left: -35%; }
+  100% { left: 100%; }
+}
+
+/* One-shot green flash for "this just succeeded" moments — originally
+   built for System > Tasks' running->done transition, reused as-is for
+   Download Clients' Test Connection succeeding (see flashOnNextRender in
+   system-tasks.js and settings-download-clients.js). Applied for exactly
+   one render right after the success is detected, so it plays once on the
+   DOM node that gets freshly inserted for that render and never replays on
+   a later, unrelated re-render. Works on any row that already has the
+   shared .settings-row-family background/border (.task-row, .dlclient-row,
+   etc. all qualify) — pure CSS, no JS timer needed to "turn it off," since
+   a non-infinite animation just stops on its own once it finishes playing. */
+.row-flash-success {
+  animation: row-flash-success-anim 1.6s ease-out;
+}
+@keyframes row-flash-success-anim {
+  0% { background: var(--success-bg); border-color: var(--success); }
+  100% { background: var(--surface-1); border-color: var(--border); }
+}
 
 .change-tag {
   font-size: 10.5px;
@@ -755,6 +1078,52 @@ select {
 
 .settings-empty { color: var(--text-muted); padding: 10px 2px; }
 
+/* Library Import's real per-file detail panel (lazy-loaded — see
+   public/js/pages/library-import.js) and the Files column's expand
+   toggle/result feedback. */
+.import-files-toggle {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+}
+.import-files-toggle:disabled { cursor: default; color: var(--text-muted); }
+.import-files-toggle svg { width: 13px; height: 13px; flex-shrink: 0; transition: transform 0.15s ease; }
+.import-files-toggle.open svg { transform: rotate(90deg); }
+
+.import-files-panel {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  margin: -8px 0 8px;
+  padding: 8px 14px 10px 54px;
+}
+.import-file-row {
+  display: grid;
+  grid-template-columns: 1fr 90px 110px 110px;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 0;
+  font-size: 12.5px;
+  border-bottom: 1px solid var(--border);
+}
+.import-file-row:last-child { border-bottom: none; }
+.import-file-row .file-name { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.import-file-row .file-size { color: var(--text-muted); }
+.import-file-row .file-quality { color: var(--text-muted); }
+.import-file-row .file-episode { color: var(--text-muted); }
+.import-file-row .file-episode.unconfident { color: var(--warning); }
+
+.import-result { font-size: 12px; margin-top: 6px; }
+.import-result.ok { color: var(--success); }
+.import-result.warn { color: var(--warning); }
+
 .nav-sub a.active { color: var(--accent); }
 
 /* ---------- Settings: forms, cards, tags ---------- */
@@ -812,6 +1181,94 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 
 .is-collapsed { display: none !important; }
 .is-disabled { opacity: 0.4; pointer-events: none; }
+
+/* ---------- Calendar ---------- */
+
+.calendar-toolbar { display: flex; align-items: center; gap: 4px; }
+
+.calendar-nav-btn {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  justify-content: center;
+}
+.calendar-nav-btn svg { width: 14px; height: 14px; }
+
+.calendar-month-label {
+  font-size: 13.5px;
+  font-weight: 600;
+  min-width: 140px;
+  text-align: center;
+}
+
+.calendar-uncached-note {
+  font-size: 12.5px;
+  color: var(--warning);
+  background: var(--warning-bg);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  margin: 0 0 16px;
+}
+
+.calendar-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 0 0 8px;
+}
+
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  grid-auto-rows: minmax(104px, auto);
+  gap: 6px;
+}
+
+.calendar-day {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow: hidden;
+}
+
+.calendar-day.is-outside-month { opacity: 0.35; }
+.calendar-day.is-today { border-color: var(--accent); }
+
+.calendar-day-num {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.calendar-day.is-today .calendar-day-num { color: var(--accent); }
+
+.calendar-episode {
+  display: block;
+  font-size: 10.5px;
+  line-height: 1.35;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: var(--surface-3);
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.calendar-episode:hover { background: var(--surface-2); }
+.calendar-episode .ep-num { color: var(--text-muted); }
+
+.calendar-day-more {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  padding: 0 6px;
+}
 
 .check-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-secondary); padding: 3px 0; }
 
@@ -981,8 +1438,27 @@ input[type="range"].size-slider::-moz-range-track {
   border-radius: var(--radius-lg);
   width: 360px;
   max-width: 100%;
+  max-height: calc(100vh - 40px);
+  display: flex;
+  flex-direction: column;
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
 }
+.modal-header, .modal-footer { flex-shrink: 0; }
+/* Long forms (Edit Series, Download Clients' per-type edit modal — see
+   settings-download-clients.js) can run taller than the viewport; the body
+   scrolls instead of the whole box overflowing past the screen edge with no
+   way to reach the footer's buttons. overflow-x: hidden is deliberate, not
+   redundant — per the CSS overflow spec, setting overflow-y to anything but
+   visible without also setting overflow-x computes overflow-x to auto too
+   (the two axes can't be "visible" and "not visible" at once), so any
+   modal's body could pick up a spurious horizontal scrollbar from even a
+   sub-pixel of horizontal overflow (a border, a vertical scrollbar's own
+   gutter shrinking the content area) — exactly what the Connect page's Edit
+   modal was showing, a near-empty horizontal scrollbar between Priority and
+   Done with nothing that actually needed to scroll sideways. No modal in
+   this app intentionally relies on horizontal scrolling inside .modal-body,
+   so suppressing it outright is safe everywhere this class is used. */
+.modal-body { overflow-y: auto; overflow-x: hidden; min-height: 0; }
 
 .modal-header {
   display: flex;
@@ -1013,6 +1489,36 @@ input[type="range"].size-slider::-moz-range-track {
 
 .modal-label { font-size: 12px; color: var(--text-secondary); margin: 0 0 10px; }
 
+/* ---------- Episode details modal (public/js/lib/episode-details-modal.js) ---------- */
+
+.episode-detail-row {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.episode-detail-row:last-child { border-bottom: none; }
+.episode-detail-label {
+  margin: 0 0 3px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.episode-detail-value {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--text-primary);
+  /* File paths are the one value here with no natural break points — long
+     enough on a real deep folder structure to overflow the modal's fixed
+     width otherwise. */
+  word-break: break-all;
+}
+.episode-detail-value.monospace { font-family: var(--font-mono); font-size: 12.5px; }
+/* Synopsis is real prose, not a short label-sized value like every other
+   row here — the base .episode-detail-value's word-break: break-all exists
+   specifically for unbroken file paths and would otherwise chop synopsis
+   text mid-word. */
+.episode-detail-row-wrap .episode-detail-value { word-break: normal; line-height: 1.5; }
+
 .modal-footer {
   display: flex;
   justify-content: flex-end;
@@ -1020,6 +1526,29 @@ input[type="range"].size-slider::-moz-range-track {
   padding: 14px 18px;
   border-top: 1px solid var(--border);
 }
+
+/* Edit Series modal footer: Delete on the left, Cancel/Save on the right —
+   same "destructive action stays far from the safe ones" layout as real
+   Sonarr's Edit dialog. */
+.modal-footer.split { justify-content: space-between; }
+.modal-footer-actions { display: flex; gap: 8px; }
+
+/* ---------- Edit Series modal ---------- */
+
+.path-field-row { display: flex; gap: 6px; }
+.path-field-row .field-input { flex: 1; margin-bottom: 0 !important; }
+.path-browse-btn { width: 36px; height: 32px; padding: 0; justify-content: center; flex-shrink: 0; }
+.path-browse-btn svg { width: 14px; height: 14px; }
+
+.edit-series-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 26px;
+}
+.edit-series-tags .tag-chip { font-size: 11.5px; padding: 4px 6px 4px 10px; }
+.edit-series-tags .tag-chip button { width: 15px; height: 15px; }
+.edit-series-tags .tag-chip button svg { width: 9px; height: 9px; }
 
 /* ---------- File Browser modal (Add Root Folder) ---------- */
 
@@ -1059,6 +1588,44 @@ input[type="range"].size-slider::-moz-range-track {
 .file-browser-row:hover { background: var(--surface-2); }
 .file-browser-row svg { width: 15px; height: 15px; color: var(--text-muted); }
 .file-browser-row.parent-row { color: var(--text-secondary); }
+
+/* ---------- Release picker modal (Wanted > Missing/Cutoff Unmet "Search") ---------- */
+
+.release-list-wrap {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  max-height: 340px;
+  overflow-y: auto;
+}
+.release-header, .release-row {
+  display: grid;
+  grid-template-columns: 1fr 110px 80px 100px 60px 90px;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+}
+.release-header {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.release-row {
+  font-size: 12.5px;
+  border-bottom: 1px solid var(--border);
+}
+.release-row:last-child { border-bottom: none; }
+.release-row:hover { background: var(--surface-2); }
+.release-row .release-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
 
 /* ---------- Queue progress bar ---------- */
 
@@ -1112,9 +1679,25 @@ input[type="range"].size-slider::-moz-range-track {
 }
 .card-added svg { width: 12px; height: 12px; }
 
-/* Preview + Add Series side by side under each Add New result card. */
-.card-actions { display: flex; gap: 6px; }
-.card-actions button { flex: 1; height: 30px; padding: 0 6px; justify-content: center; font-size: 12px; }
+/* Preview + Add Series side by side under each Add New result card. Preview
+   is the secondary action and just fits its own label; Add Series is the
+   primary CTA and takes the rest of the row, matching the visual weight it
+   had back when it was the only, full-width button. */
+.card-actions { display: flex; align-items: stretch; gap: 6px; }
+.card-actions button {
+  height: 30px;
+  padding: 0 10px;
+  justify-content: center;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  gap: 5px;
+}
+.card-actions button svg { width: 12px; height: 12px; flex-shrink: 0; }
+.card-actions [data-action="preview"] { flex: 0 0 auto; }
+.card-actions .btn-accent,
 .card-actions .card-added { flex: 1; width: auto; height: 30px; }
 
 /* ---------- Add New: series preview modal ---------- */
@@ -1131,6 +1714,12 @@ input[type="range"].size-slider::-moz-range-track {
   border-radius: var(--radius-sm);
   overflow: hidden;
   background: linear-gradient(155deg, var(--surface-3), var(--surface-2));
+  /* Same grid-stretch issue as .detail-poster above: .preview-layout is a
+     grid row, grid items default to align-items: stretch too, and width is
+     already definite here (100% of a definite 170px column) — so without
+     opting out, aspect-ratio gets silently ignored the moment the details
+     column ends up taller than 255px (170 * 3/2). */
+  align-self: start;
 }
 .preview-poster img { width: 100%; height: 100%; object-fit: cover; display: block; }
 
@@ -1159,7 +1748,20 @@ input[type="range"].size-slider::-moz-range-track {
   max-height: 220px;
   overflow-y: auto;
   margin: 0 0 12px;
+  /* Firefox: thin scrollbar in muted theme colors instead of the default
+     chunky OS one. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
 }
+/* Chromium/Safari: same idea via the vendor-prefixed pseudo-elements —
+   Firefox ignores these, so both rules are needed to cover every browser. */
+.preview-overview::-webkit-scrollbar { width: 6px; }
+.preview-overview::-webkit-scrollbar-track { background: transparent; }
+.preview-overview::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+}
+.preview-overview::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
 .preview-alt-titles { font-size: 12px; color: var(--text-muted); }
 .preview-alt-titles p { margin: 0 0 4px; }
@@ -1179,3 +1781,235 @@ input[type="range"].size-slider::-moz-range-track {
   margin-bottom: 16px;
 }
 .section-toolbar .tabs { flex-shrink: 0; }
+
+/* ---------- Settings: Quality Definitions ---------- */
+/* Replaces the old flat 12-row table of Min/Preferred/Max number inputs with
+   tiers grouped by resolution, each edited through a 3-handle slider instead
+   of three separate boxes — see README's Quality Definitions section. */
+
+.quality-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  flex-wrap: wrap;
+  padding: 14px 18px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  margin-bottom: 16px;
+}
+.quality-toolbar-field { display: flex; align-items: center; gap: 8px; }
+.quality-toolbar-field label { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+.quality-toolbar-field select { height: 32px; min-width: 150px; }
+
+.quality-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  margin-bottom: 14px;
+  overflow: hidden;
+  background: var(--surface-1);
+}
+.quality-group-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  cursor: pointer;
+  user-select: none;
+  background: var(--surface-2);
+}
+.quality-group-header:hover { background: var(--surface-3); }
+.quality-group-title { font-size: 14px; font-weight: 700; }
+.quality-group-count {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  background: var(--surface-3);
+  padding: 2px 9px;
+  border-radius: 10px;
+}
+.quality-group-chevron { margin-left: auto; color: var(--text-muted); transition: transform 0.15s ease; display: flex; }
+.quality-group-chevron svg { width: 16px; height: 16px; }
+.quality-group.collapsed .quality-group-chevron { transform: rotate(-90deg); }
+.quality-group-body { padding: 2px 18px 6px; }
+.quality-group.collapsed .quality-group-body { display: none; }
+
+.quality-tier-row {
+  display: grid;
+  grid-template-columns: 210px 1fr 130px 74px;
+  gap: 18px;
+  align-items: center;
+  padding: 18px 4px;
+  border-top: 1px solid var(--border);
+}
+.quality-tier-row:first-child { border-top: none; }
+
+.quality-tier-name-field { display: flex; flex-direction: column; gap: 6px; }
+.quality-tier-name-field input.field-input { height: 30px; font-weight: 600; }
+.quality-tier-group-field { display: flex; align-items: center; gap: 6px; }
+.quality-tier-group-field input {
+  height: 24px;
+  font-size: 11px;
+  padding: 0 6px;
+  width: 90px;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+}
+.quality-tier-group-field input:hover, .quality-tier-group-field input:focus { border-color: var(--border); background: var(--surface-2); }
+.quality-tier-group-field .settings-meta { font-size: 11px; }
+
+.quality-target { text-align: right; }
+.quality-target .label {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin: 0 0 2px;
+}
+.quality-target .value { font-size: 15px; font-weight: 700; color: var(--accent); font-family: var(--font-mono); }
+.quality-target .value.unlimited { color: var(--danger); }
+
+.quality-tier-actions { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.quality-tier-actions .ep-action { width: 22px; height: 22px; padding: 0; }
+.quality-tier-actions .ep-action:disabled { opacity: 0.25; pointer-events: none; }
+
+.quality-legend {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  flex-wrap: wrap;
+  padding: 12px 18px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+.quality-legend-item { display: flex; align-items: center; gap: 7px; }
+.quality-legend-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+.quality-legend-dot.min { background: var(--warning); }
+.quality-legend-dot.max { background: var(--danger); }
+.quality-legend-dot.preferred { background: var(--accent); border-radius: 2px; transform: rotate(45deg); }
+
+/* ---------- Range slider: 3 draggable handles (min / preferred / max) ---------- */
+/* public/js/lib/range-slider.js — a native <input type="range"> only ever
+   supports one or two handles, so this is hand-built with pointer events.
+   Min/max are circular handles; preferred renders as a small rotated square
+   (a diamond) so it reads as a distinct "target," not a third identical dot. */
+
+.rs-wrap { position: relative; padding: 18px 7px 4px; }
+.rs-track {
+  position: relative;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--surface-3);
+}
+.rs-track-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--accent-bg);
+  border-radius: 2px;
+  pointer-events: none;
+}
+.rs-handle {
+  position: absolute;
+  top: 50%;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 3px solid var(--surface-1);
+  transform: translate(-50%, -50%);
+  cursor: grab;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  z-index: 2;
+  touch-action: none;
+  user-select: none;
+}
+.rs-handle:active, .rs-handle.rs-dragging { cursor: grabbing; }
+.rs-handle:hover { transform: translate(-50%, -50%) scale(1.1); }
+.rs-handle:focus-visible { outline: 2px solid var(--text-primary); outline-offset: 2px; }
+.rs-handle-min { background: var(--warning); }
+.rs-handle-max { background: var(--danger); }
+.rs-handle-max.rs-unlimited { opacity: 0.35; cursor: default; }
+.rs-handle-max.rs-unlimited:hover { transform: translate(-50%, -50%); }
+.rs-handle-preferred {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent);
+  z-index: 3;
+}
+
+.rs-tooltip {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 9px;
+  padding: 4px 8px;
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s ease;
+  z-index: 4;
+}
+.rs-handle:hover .rs-tooltip, .rs-handle:focus-visible .rs-tooltip, .rs-handle.rs-dragging .rs-tooltip { opacity: 1; }
+.rs-handle.rs-editing .rs-tooltip { opacity: 0; }
+
+.rs-edit-input {
+  display: none;
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 9px;
+  width: 88px;
+  padding: 4px 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  text-align: center;
+  cursor: text;
+  z-index: 5;
+}
+.rs-handle.rs-editing .rs-edit-input { display: block; }
+
+.rs-labels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+.rs-label-max-group { display: flex; align-items: center; gap: 8px; }
+/* A labeled toggle chip, not a checkbox — a checkbox next to plain text reads
+   as "one more field to notice," easy to miss; a pill that visibly changes
+   color and flips its own pressed state reads as a mode switch instead. */
+.rs-unlimited-btn {
+  height: auto;
+  padding: 3px 10px;
+  font-size: 10.5px;
+  font-weight: 700;
+  border-radius: 20px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  cursor: pointer;
+  letter-spacing: 0.01em;
+}
+.rs-unlimited-btn:hover { border-color: var(--danger); color: var(--danger); background: var(--surface-2); }
+.rs-unlimited-btn[aria-pressed="true"] { background: var(--danger); border-color: var(--danger); color: #fff; }
+.rs-unlimited-btn[aria-pressed="true"]:hover { background: #d9434e; border-color: #d9434e; color: #fff; }
+.rs-label-max-text.is-unlimited { color: var(--danger); font-weight: 600; }

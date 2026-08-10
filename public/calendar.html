@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kitsune — Calendar</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div class="layout">
+
+  <aside class="sidebar" id="sidebar"></aside>
+
+  <main class="main">
+    <div class="top-row">
+      <div>
+        <h1 class="settings-heading">Calendar</h1>
+      </div>
+      <!-- React now (see README's "React migration" section) — rendered via
+           a portal from the same component/state as #calendarRoot below. -->
+      <div class="calendar-toolbar" id="calendarToolbarRoot"></div>
+    </div>
+
+    <p class="settings-subtitle">Real air dates from episodes you've already loaded — a series shows up here once you've opened its detail page at least once.</p>
+
+    <div id="calendarRoot"></div>
+
+  </main>
+</div>
+
+<script type="module" src="app.js"></script>
+<script type="module" src="dist/calendar.js"></script>
+</body>
+</html>
