@@ -165,7 +165,15 @@ async function handleRootFoldersApi(req, res, urlPath) {
           sizeFormatted: formatBytes(f.sizeBytes),
           ext: f.ext,
           guessedQuality: guessQualityTierName(f.name),
-          guessedSeason: guess.season,
+          // No "Season N" folder/SxxExx tag means this preview should show
+          // whatever the actual import (handleImportFilesApi in
+          // import-files.js) will really use — season 1, same default —
+          // rather than a "S?" that doesn't match what clicking "Import
+          // files" is actually about to do. Still flagged unconfident
+          // (guessConfident stays exactly what guessSeasonEpisode said) so
+          // the UI can still visually distinguish an assumed season 1 from a
+          // real one — see FileDetailRow in LibraryImportPage.jsx.
+          guessedSeason: guess.season ?? 1,
           guessedEpisode: guess.episode,
           guessConfident: guess.confident,
         };

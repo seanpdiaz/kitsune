@@ -27,6 +27,8 @@ const { DB_PATH } = require('./server/db');
 const { logDebug, logInfo, logWarn, logError } = require('./server/logger');
 const { sendJson } = require('./server/lib/http');
 
+const { handleAuthApi } = require('./server/routes/auth');
+const { handleUserPrefsApi } = require('./server/routes/user-prefs');
 const { handleTagsApi } = require('./server/routes/tags');
 const { handleSettingsItemsApi } = require('./server/routes/settings-items');
 const { handleDownloadClientsApi } = require('./server/routes/download-clients');
@@ -48,6 +50,9 @@ const { handleWantedApi } = require('./server/routes/wanted');
 const { handleSystemApi } = require('./server/routes/system');
 const { handleSystemTasksApi } = require('./server/routes/system-tasks');
 const { handleImportFilesApi } = require('./server/routes/import-files');
+const { handleBackupsApi } = require('./server/routes/backups');
+const { handleSslApi } = require('./server/routes/ssl');
+const { handleIndexersApi } = require('./server/routes/indexers');
 const { startDiskUsageScheduler } = require('./server/lib/disk-usage');
 
 // Default for how often the Library dashboard's Disk usage stat card
@@ -82,6 +87,8 @@ const server = http.createServer(async (req, res) => {
   if (urlPath.startsWith('/api/')) {
     try {
       const handled =
+        (await handleAuthApi(req, res, urlPath)) ||
+        (await handleUserPrefsApi(req, res, urlPath)) ||
         (await handleTagsApi(req, res, urlPath)) ||
         (await handleSettingsItemsApi(req, res, urlPath)) ||
         (await handleDownloadClientsApi(req, res, urlPath)) ||
@@ -102,7 +109,10 @@ const server = http.createServer(async (req, res) => {
         (await handleWantedApi(req, res, urlPath)) ||
         (await handleSystemApi(req, res, urlPath)) ||
         (await handleSystemTasksApi(req, res, urlPath)) ||
-        (await handleImportFilesApi(req, res, urlPath));
+        (await handleImportFilesApi(req, res, urlPath)) ||
+        (await handleBackupsApi(req, res, urlPath)) ||
+        (await handleSslApi(req, res, urlPath)) ||
+        (await handleIndexersApi(req, res, urlPath));
       if (!handled) {
         // Distinguishes "no /api/* route recognizes this path at all" from
         // a route-level 404 a handler sends itself (e.g. download-clients.js

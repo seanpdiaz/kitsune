@@ -1,7 +1,11 @@
+const fs = require('fs');
+const path = require('path');
 const { db, DB_PATH } = require('../db');
-const { logInfo } = require('../logger');
+const { logInfo, logWarn } = require('../logger');
 const { sendJson, readJsonBody } = require('../lib/http');
 const { normalizeFolderName } = require('../lib/fs-helpers');
+const { sanitizeForPath } = require('../lib/episode-paths');
+const { recomputeSeriesEpisodeStats } = require('../lib/series-stats');
 const { warmEpisodesInBackground } = require('./episodes');
 
 // ---------------------------------------------------------------------------
@@ -51,6 +55,65 @@ function deriveAirStatus(rawStatus, source) {
   return { airStatus, status: ENDED_STATUS_KEYS.has(key) ? 'ended' : 'continuing' };
 }
 
+// series.path (shown read-only in the Edit Series modal — see
+// SeriesPage.jsx) used to only ever get set if someone opened that modal
+// and typed/saved one by hand; a freshly-added series had no real path at
+// all until then, and the modal papered over that by prefilling a
+// client-side-only "/mnt/anime/<title>" guess that was never actually
+// persisted — indistinguishable from a real value in the UI, but gone the
+// moment you looked at the raw series row.
+//
+// Real Sonarr/Radarr assign a path immediately when a series is added,
+// picked from a chosen root folder — this does the same using whichever
+// root folder is first in Settings > Media Management's list (the same
+// "no per-add picker yet" simplification findExistingSeriesFolder in
+// routes/episodes.js already makes when scanning). If no root folder is
+// configured at all, path stays null — there's no real location to claim
+// yet, and leaving it null (rather than a fabricated guess) is what lets
+// the Edit modal show an honest "no root folder configured" state instead
+// of a path that doesn't exist anywhere.
+function firstConfiguredRootFolder() {
+  const row = db.prepare("SELECT data FROM settings_items WHERE section = 'root-folders' ORDER BY position ASC LIMIT 1").get();
+  if (!row) return null;
+  try {
+    return JSON.parse(row.data).path || null;
+  } catch {
+    return null;
+  }
+}
+// Add New's Root Folder dropdown (frontend/pages/library-add-new/
+// AddNewPage.jsx) used to be two hardcoded, never-wired-up <option>s left
+// over from the original static mockup — picking one had zero effect;
+// every series landed under whichever root folder happened to be first
+// configured, regardless of what was selected on screen. This is what
+// actually honors a real choice now: `requestedPath` (POST /api/series'
+// `body.rootFolder`) is only trusted if it exactly matches one of the real
+// configured root folders (the same list GET /api/settings-items/
+// root-folders returns, which is all the dropdown ever offers) — never
+// passed straight through to a filesystem path unchecked, since that would
+// let any other caller of this same API point a new series at an arbitrary
+// directory. A request with no rootFolder, or one that doesn't match a real
+// configured folder (stale client state, a folder removed after the page
+// loaded), falls back to the first configured one exactly like this always
+// did before, with a warning logged only for the "didn't match" case — a
+// plain omission is the normal, expected shape for every other existing
+// caller of this endpoint.
+function resolveRootFolder(requestedPath) {
+  const configured = db.prepare("SELECT data FROM settings_items WHERE section = 'root-folders' ORDER BY position ASC").all()
+    .map((row) => { try { return JSON.parse(row.data).path; } catch { return null; } })
+    .filter(Boolean);
+  if (requestedPath) {
+    if (configured.includes(requestedPath)) return requestedPath;
+    logWarn('SeriesService', `Requested root folder "${requestedPath}" isn't a configured root folder — falling back to the first configured one.`);
+  }
+  return configured[0] || null;
+}
+function defaultSeriesPathFor(title, requestedRootFolder) {
+  const rootFolder = resolveRootFolder(requestedRootFolder);
+  if (!rootFolder) return null;
+  return path.join(rootFolder, sanitizeForPath(title) || 'Unknown Series');
+}
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS series (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,6 +135,7 @@ db.exec(`
     quality_profile TEXT,
     series_type TEXT NOT NULL DEFAULT 'anime',
     path TEXT,
+    ignore_specials INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   )
 `);
@@ -169,6 +233,14 @@ for (const [col, def] of [
   // results even for a real, well-known show. These give that resolution a
   // second (and third, etc.) attempt instead of just giving up after one.
   ['alt_titles', 'TEXT'],
+  // Ignore Specials — excludes season 0 from the eps/pct progress stats
+  // recomputeSeriesEpisodeStats (server/lib/series-stats.js) maintains, so a
+  // series with every real season complete but a special that was never
+  // released/grabbed doesn't sit at, say, "24 / 25" forever. Doesn't affect
+  // what's cached or shown anywhere else — the Specials tab on the series
+  // detail page still lists every special exactly as before; this only
+  // changes whether they're counted.
+  ['ignore_specials', 'INTEGER NOT NULL DEFAULT 0'],
 ]) {
   if (!seriesColumns.includes(col)) {
     db.exec(`ALTER TABLE series ADD COLUMN ${col} ${def}`);
@@ -219,6 +291,7 @@ function rowToSeries(row) {
     qualityProfile: row.quality_profile,
     seriesType: row.series_type,
     path: row.path,
+    ignoreSpecials: !!row.ignore_specials,
     tagIds: tagIdsForSeries(row.id),
   };
 }
@@ -298,11 +371,20 @@ async function handleSeriesApi(req, res, urlPath) {
     // once something else happens to update it later (nothing currently
     // does; status/air_status are set once, here, and never revisited).
     const { airStatus, status } = deriveAirStatus(body.status, externalSource);
+    const defaultPath = defaultSeriesPathFor(title, body.rootFolder ? String(body.rootFolder) : null);
+    // Same "trust the UI already only offers real choices" convention
+    // PATCH /api/series/:id's own qualityProfile handling already uses
+    // (getQualityProfile gracefully defaults to "every tier allowed" for a
+    // name it doesn't recognize) — Add New's dropdown only ever lists real
+    // Settings > Profiles names, so this doesn't re-validate against that
+    // list a second time, unlike rootFolder above (which controls a real
+    // filesystem path, not just a lookup key).
+    const qualityProfile = body.qualityProfile ? String(body.qualityProfile) : null;
 
     const { lastInsertRowid } = db.prepare(`
-      INSERT INTO series (title, badge, fill, pct, eps, monitored, status, air_status, next_air_days, added_days_ago, poster, meta, overview, external_id, external_source, alt_titles)
-      VALUES (?, NULL, 'accent', 0, '0 / 0', 1, ?, ?, NULL, 0, ?, ?, ?, ?, ?, ?)
-    `).run(title, status, airStatus, body.poster || null, meta, body.overview || null, externalId, externalSource, altTitlesJson);
+      INSERT INTO series (title, badge, fill, pct, eps, monitored, status, air_status, next_air_days, added_days_ago, poster, meta, overview, external_id, external_source, alt_titles, path, quality_profile)
+      VALUES (?, NULL, 'accent', 0, '0 / 0', 1, ?, ?, NULL, 0, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(title, status, airStatus, body.poster || null, meta, body.overview || null, externalId, externalSource, altTitlesJson, defaultPath, qualityProfile);
     const created = db.prepare('SELECT * FROM series WHERE id = ?').get(lastInsertRowid);
     logInfo('SeriesService', `Series added: ${title}${externalSource ? ` (${externalSource}#${externalId})` : ''}`);
     sendJson(res, 201, rowToSeries(created));
@@ -338,6 +420,28 @@ async function handleSeriesApi(req, res, urlPath) {
       sendJson(res, 400, { error: 'Invalid JSON body' });
       return true;
     }
+    if (body.title !== undefined) {
+      const title = String(body.title).trim();
+      if (!title) {
+        sendJson(res, 400, { error: 'Title cannot be empty' });
+        return true;
+      }
+      // Same normalized-title duplicate check POST /api/series uses when
+      // adding a series, just excluding this row itself — renaming "Frieren"
+      // to something that already normalizes to an existing series' title
+      // (a different casing/punctuation of the same name, or an actual
+      // different series entirely) would otherwise silently produce two
+      // Library rows that read as the same show.
+      const normalizedTitle = normalizeFolderName(title);
+      const clash = db.prepare('SELECT id, title FROM series WHERE id != ?').all(id)
+        .find((r) => normalizeFolderName(r.title) === normalizedTitle);
+      if (clash) {
+        sendJson(res, 409, { error: `"${clash.title}" already exists in the Library` });
+        return true;
+      }
+      db.prepare('UPDATE series SET title = ? WHERE id = ?').run(title, id);
+      if (title !== existing.title) logInfo('SeriesService', `Renamed "${existing.title}" to "${title}"`);
+    }
     if (body.monitored !== undefined) {
       db.prepare('UPDATE series SET monitored = ? WHERE id = ?').run(body.monitored ? 1 : 0, id);
       logInfo('SeriesService', `${existing.title}: monitored set to ${!!body.monitored}`);
@@ -364,8 +468,41 @@ async function handleSeriesApi(req, res, urlPath) {
       }
       db.prepare('UPDATE series SET series_type = ? WHERE id = ?').run(value, id);
     }
+    if (body.ignoreSpecials !== undefined) {
+      db.prepare('UPDATE series SET ignore_specials = ? WHERE id = ?').run(body.ignoreSpecials ? 1 : 0, id);
+      // Recomputed right here rather than waiting for the next real
+      // import/delete to happen to touch eps/pct — flipping this toggle
+      // should visibly change the progress bar the moment you hit Save
+      // (handleEditSaved in SeriesPage.jsx merges this response straight
+      // into the page's series state), not just the next time something
+      // else recomputes stats.
+      recomputeSeriesEpisodeStats(id);
+      logInfo('SeriesService', `${existing.title}: ignore specials set to ${!!body.ignoreSpecials}`);
+    }
+    // path CAN be set here, as a manual override — added after a real gap
+    // surfaced: defaultSeriesPathFor/firstConfiguredRootFolder (above) and
+    // scanExistingFilesForSeries/findExistingSeriesFolder (routes/
+    // episodes.js) all derive a folder from the series' title/alt_titles,
+    // which only works when the real on-disk folder name actually
+    // resembles one of those. A folder named for an informal/regional name
+    // that isn't in TVDB/MAL at all (e.g. app shows "Yani Neko", the real
+    // folder is "Chainsmoker Cat") can never be found by any of that
+    // matching, no matter how good — the only way out is letting someone
+    // just point Kitsune at the real folder. Validated against the real
+    // filesystem (existsSync) so this can't silently set another fabricated,
+    // never-checked path the way defaultSeriesPathFor's guess does.
     if (body.path !== undefined) {
-      db.prepare('UPDATE series SET path = ? WHERE id = ?').run(String(body.path).trim() || null, id);
+      const newPath = String(body.path).trim();
+      if (!newPath) {
+        sendJson(res, 400, { error: 'Path cannot be empty' });
+        return true;
+      }
+      if (!fs.existsSync(newPath)) {
+        sendJson(res, 400, { error: `"${newPath}" doesn't exist on disk.` });
+        return true;
+      }
+      db.prepare('UPDATE series SET path = ? WHERE id = ?').run(newPath, id);
+      if (newPath !== existing.path) logInfo('SeriesService', `${existing.title}: path manually set to "${newPath}"`);
     }
     if (body.tagIds !== undefined) {
       if (!Array.isArray(body.tagIds)) {
@@ -389,6 +526,9 @@ async function handleSeriesApi(req, res, urlPath) {
   }
 
   // DELETE /api/series/:id — removes a series from the library entirely.
+  // Database-only: this never touches real files on disk (no "delete files
+  // too" option exists yet, unlike real Sonarr's own delete dialog), so any
+  // real video files a series had stay exactly where they are.
   const deleteMatch = req.method === 'DELETE' && urlPath.match(/^\/api\/series\/(\d+)$/);
   if (deleteMatch) {
     const id = Number(deleteMatch[1]);
@@ -397,8 +537,16 @@ async function handleSeriesApi(req, res, urlPath) {
       sendJson(res, 404, { error: 'Series not found' });
       return true;
     }
-    db.prepare('DELETE FROM series WHERE id = ?').run(id);
+    // Episodes rows have no FOREIGN KEY/ON DELETE CASCADE tying them to
+    // series (SQLite doesn't enforce one here), so this delete was leaving
+    // every one of a deleted series' episode rows behind permanently —
+    // real, confirmed dead data with no series left to join back to and no
+    // way to ever clean it up short of hand-editing the database. Deleted
+    // explicitly here, before the series row itself, for the same reason
+    // series_tags already was.
+    db.prepare('DELETE FROM episodes WHERE series_id = ?').run(id);
     db.prepare('DELETE FROM series_tags WHERE series_id = ?').run(id);
+    db.prepare('DELETE FROM series WHERE id = ?').run(id);
     logInfo('SeriesService', `Series deleted: ${existing.title}`);
     sendJson(res, 200, { ok: true });
     return true;

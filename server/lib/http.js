@@ -30,4 +30,37 @@ function readJsonBody(req) {
   });
 }
 
-module.exports = { sendJson, readJsonBody };
+// ---------------------------------------------------------------------------
+// Cookies — added for server/routes/auth.js's session cookie (see that
+// file). No cookie-parsing dependency in this "zero backend dependencies"
+// project, so this is a small hand-rolled parser/serializer rather than
+// reaching for one. HttpOnly + SameSite=Lax on every cookie this app sets
+// (just the one session cookie, currently) — no Secure flag, since a
+// self-hosted app like this one is commonly reached over plain HTTP on a
+// LAN (same assumption Sonarr/Radarr's own default auth makes).
+// ---------------------------------------------------------------------------
+function parseCookies(req) {
+  const header = req.headers.cookie;
+  const out = {};
+  if (!header) return out;
+  header.split(';').forEach((pair) => {
+    const idx = pair.indexOf('=');
+    if (idx === -1) return;
+    const key = pair.slice(0, idx).trim();
+    const val = pair.slice(idx + 1).trim();
+    if (key) out[key] = decodeURIComponent(val);
+  });
+  return out;
+}
+
+function setCookie(res, name, value, { maxAgeSeconds } = {}) {
+  const parts = [`${name}=${encodeURIComponent(value)}`, 'Path=/', 'HttpOnly', 'SameSite=Lax'];
+  if (maxAgeSeconds != null) parts.push(`Max-Age=${maxAgeSeconds}`);
+  res.setHeader('Set-Cookie', parts.join('; '));
+}
+
+function clearCookie(res, name) {
+  res.setHeader('Set-Cookie', `${name}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+}
+
+module.exports = { sendJson, readJsonBody, parseCookies, setCookie, clearCookie };

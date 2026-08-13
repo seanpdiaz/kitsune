@@ -1,11 +1,14 @@
 import { escapeAttr } from './icons.js';
 
-// Server-side directory browser behind "Add Root Folder" — matches the
-// modal a real Sonarr install shows: type a path or click through real
-// folders on the machine running the server, Cancel/Ok. Backed by
-// GET /api/fs/browse (see server.js), which does the actual fs.readdirSync
-// on whatever path it's given.
-function initFileBrowserModal({ modalId, closeId, pathInputId, listId, errorId, cancelId, okId, onConfirm }) {
+// Server-side directory browser behind "Add Root Folder" (Settings > Media
+// Management) and the Edit Series modal's Path field (SeriesPage.jsx) —
+// matches the modal a real Sonarr install shows: type a path or click
+// through real folders on the machine running the server, Cancel/Ok. Backed
+// by GET /api/fs/browse (see server.js), which does the actual
+// fs.readdirSync on whatever path it's given. onConfirm's busy label is
+// configurable since the two callers do different things with the chosen
+// path (create a root folder on the server vs. just fill in a form field).
+function initFileBrowserModal({ modalId, closeId, pathInputId, listId, errorId, cancelId, okId, onConfirm, busyLabel = 'Adding…' }) {
   const modal = document.getElementById(modalId);
   if (!modal) return null;
   const pathInput = document.getElementById(pathInputId);
@@ -94,7 +97,7 @@ function initFileBrowserModal({ modalId, closeId, pathInputId, listId, errorId, 
         return;
       }
       okBtn.disabled = true;
-      okBtn.textContent = 'Adding…';
+      okBtn.textContent = busyLabel;
       try {
         await onConfirm(chosen);
         close();
@@ -108,10 +111,17 @@ function initFileBrowserModal({ modalId, closeId, pathInputId, listId, errorId, 
   }
 
   return {
-    open() {
+    // startPath, when given, is browsed to fresh on this open instead of
+    // wherever the modal was last left drilled into — RootFolders.jsx
+    // doesn't pass one (picking a brand new root folder starting from '/'
+    // and remembering the last spot browsed makes sense there), but
+    // SeriesPage.jsx's Edit Series Path field does, every time, so the
+    // browser always starts at a configured root folder rather than
+    // wherever an earlier browse session for a different series left off.
+    open(startPath) {
       showError('');
       modal.classList.add('open');
-      browse(currentPath);
+      browse(startPath || currentPath);
     },
   };
 }

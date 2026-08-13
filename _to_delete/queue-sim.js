@@ -154,6 +154,64 @@ function generateReleases(series, episode) {
   return releases;
 }
 
+const BATCH_CANDIDATE_COUNT = 4;
+
+function makeBatchReleaseTitle(series, quality, group, episodeCount, rand) {
+  const cleanTitle = series.title.replace(/[^A-Za-z0-9]+/g, ' ').trim();
+  const hash = Math.floor(rand() * 0xffffff).toString(16).toUpperCase().padStart(6, '0');
+  const rangeLabel = episodeCount > 1 ? `01-${String(episodeCount).padStart(2, '0')}` : '01';
+  if (rand() < 0.5) {
+    // Fansub-style batch: "[Group] Title (01-24) (1080p) [Batch] [ABCDEF12]"
+    const short = quality.replace(/^(WEBDL|Bluray|HDTV)-/, '');
+    return `[${group}] ${cleanTitle} (${rangeLabel}) (${short}) [Batch] [${hash}]`;
+  }
+  // Scene-style whole-season: "Title.S01.COMPLETE.1080p.BluRay-GROUP"
+  const dotted = cleanTitle.replace(/\s+/g, '.');
+  const src = quality.startsWith('WEBDL') ? 'WEB' : quality.startsWith('Bluray') ? 'BluRay' : 'HDTV';
+  const res = quality.replace(/^[A-Za-z]+-/, '');
+  return `${dotted}.S01.COMPLETE.${res}.${src}.h264-${group}`;
+}
+
+// Simulated fallback for Search Season / Search All's batch search — same
+// role generateReleases() plays for a single episode, used when Nyaa.si is
+// disabled or unreachable (see routes/releases.js). Deterministic per
+// (series id, scope salt) so searching the same season/series twice shows
+// the same candidates; `scopeSalt` just needs to differ between "this
+// series' season 1 batch search" and "this series' season 2 batch search"
+// so they don't generate identical fake titles — the season number itself
+// is a natural choice, with a fixed salt for the whole-series case.
+function generateBatchReleases(series, { scopeSalt = 0, episodeCount = 12 } = {}) {
+  const releases = [];
+  for (let i = 0; i < BATCH_CANDIDATE_COUNT; i++) {
+    const rand = mulberry32(seedFor(series.id * 1000 + scopeSalt, i));
+    const quality = pickRealisticQuality(rand);
+    const group = pick(rand, FANSUB_GROUPS);
+    // A batch's size is roughly its episode count's worth of the same
+    // per-episode estimate generateReleases() already derives from each
+    // quality tier's own preferred MB/min — genuinely one source of truth
+    // for "how big is an episode at this quality," just multiplied out.
+    const perEpisodeBytes = pickRealisticSizeBytes(quality, rand);
+    const sizeBytes = perEpisodeBytes * Math.max(1, episodeCount);
+    releases.push({
+      index: i,
+      title: makeBatchReleaseTitle(series, quality, group, episodeCount, rand),
+      quality,
+      sizeBytes,
+      indexer: pick(rand, INDEXERS),
+      protocol: pick(rand, PROTOCOLS),
+      seeders: Math.floor(rand() * 120) + 5,
+      isBatch: true,
+    });
+  }
+  const order = getQualityOrder();
+  releases.sort((a, b) => {
+    const rankDiff = order.indexOf(b.quality) - order.indexOf(a.quality);
+    if (rankDiff !== 0) return rankDiff;
+    return a.sizeBytes - b.sizeBytes;
+  });
+  return releases;
+}
+
 module.exports = {
-  generateReleases, pickRealisticQuality, pickRealisticSizeBytes, mulberry32, seedFor,
+  generateReleases, generateBatchReleases, pickRealisticQuality, pickRealisticSizeBytes, mulberry32, seedFor,
 };

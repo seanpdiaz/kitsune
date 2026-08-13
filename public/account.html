@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kitsune — My Account</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div class="layout">
+
+  <aside class="sidebar" id="sidebar"></aside>
+
+  <main class="main">
+    <div class="top-row">
+      <div>
+        <h1 class="settings-heading">My Account</h1>
+      </div>
+    </div>
+
+    <!-- Not part of the Settings tab group (reachable from the sidebar's own
+         user chip instead — see public/js/nav.js) so no .page-tabs strip
+         here, same as Calendar's page. -->
+    <div id="accountRoot"></div>
+
+  </main>
+</div>
+
+<script type="module" src="app.js"></script>
+<script type="module" src="dist/account.js"></script>
+</body>
+</html>

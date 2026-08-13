@@ -24,6 +24,28 @@ const svgSource = {
   viewPoster: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>',
   viewTable: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 9h18M3 14h18M9 4v16"/></svg>',
   viewOverview: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="6" height="16" rx="1"/><path d="M12 8h9M12 12h9M12 16h9"/></svg>',
+  // Episode row's "..." menu (SeriesPage.jsx) — its one item so far, Media
+  // Info. Only needed here: the vanilla public/js/lib/icons.js copy stays
+  // as-is, same "only carry what a still-vanilla page actually uses"
+  // convention that already dropped the view-toggle icons from that file
+  // once Library went fully React (see that file's own comment).
+  info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>',
+  // Series page header's "Refresh episodes" button (re-fetch episode
+  // metadata from TheTVDB in place — see server/routes/episodes.js's
+  // refreshEpisodesForSeries) — only needed here, same "only carry what a
+  // still-vanilla page actually uses" convention as `info` above.
+  refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 12a9 9 0 0 1-15.3 6.4M3 12a9 9 0 0 1 15.3-6.4M21 4v5h-5M8.5 20v-5h-5"/></svg>',
+  // "Grab best match" (SeriesPage.jsx) — a one-click grab that searches and
+  // submits the top-ranked release itself rather than opening the picker;
+  // a lightning bolt reads as "instant/automatic" next to the plain
+  // magnifying-glass Search icon, the same visual shorthand real Sonarr/
+  // Radarr use for their own one-click "search and grab" actions.
+  zap: '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M13 2L4 14h6l-1 8 9-12h-6l1-8z"/></svg>',
+  // "Delete file" (EpisodeActionsMenu, SeriesPage.jsx) — removes the media
+  // file backing a downloaded episode; only needed here, same "only carry
+  // what a still-vanilla page actually uses" convention as `info`/`refresh`
+  // above.
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 7h16M9 7V4h6v3M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13M10 11v6M14 11v6"/></svg>',
 };
 
 function Icon({ name }) {

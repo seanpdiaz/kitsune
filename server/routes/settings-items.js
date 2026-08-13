@@ -42,7 +42,12 @@ db.exec(`
 // to the database, instead of every list appearing empty on first run.
 const LIST_SECTION_SEEDS = {
   indexers: [
-    { name: 'Nyaa.si', protocol: 'Torrent', meta: 'Anime', priority: 25, enabled: true, status: 'ok' },
+    // `type: 'nyaa'` is the one real indexer in this list (see
+    // server/lib/nyaa-search.js) — a rename-proof signal for "this specific
+    // row is the one Settings > Indexers can actually search/test for real,"
+    // the same role `type` plays on download-clients rows. Every other
+    // seeded indexer here stays exactly as simulated as before.
+    { type: 'nyaa', name: 'Nyaa.si', protocol: 'Torrent', meta: 'Anime', priority: 25, enabled: true, status: 'ok' },
     { name: 'AnimeBytes', protocol: 'Torrent', meta: 'Anime (Private)', priority: 25, enabled: true, status: 'ok' },
     { name: 'SubsPlease RSS', protocol: 'Torrent', meta: 'Anime (RSS)', priority: 40, enabled: true, status: 'ok' },
     { name: 'AniDex', protocol: 'Torrent', meta: 'Anime', priority: 30, enabled: true, status: 'fail' },
@@ -85,13 +90,41 @@ const LIST_SECTION_SEEDS = {
     { name: 'Notifiarr', protocol: 'API', meta: 'On Grab, Import, Upgrade', priority: '3 events', enabled: false, status: 'pending' },
     { name: 'Custom Webhook', protocol: 'Webhook', meta: 'On Import', priority: '1 event', enabled: true, status: 'fail' },
   ],
+  // `allowedQualities` is the real, functional list search now uses (see
+  // server/lib/quality.js's getQualityProfile and server/routes/releases.js)
+  // to flag/rank which releases fit this profile — replacing what used to be
+  // a purely cosmetic `qualities: 'X of Y'` display string with no actual
+  // meaning behind it. A profile's `cutoff` is always included in its own
+  // allowedQualities below (a profile that couldn't reach its own cutoff
+  // would be self-contradictory). getQualityProfile() defaults a profile
+  // with no allowedQualities at all (any row saved before this field
+  // existed) to "every known tier" — permissive, matching what "no real
+  // filter existed yet" already effectively meant.
   profiles: [
-    { name: 'Any', cutoff: 'Bluray-2160p', qualities: '12 of 12', upgrades: true },
-    { name: 'SD', cutoff: 'SDTV', qualities: '3 of 12', upgrades: true },
-    { name: 'HD-720p/1080p', cutoff: 'WEBDL-1080p', qualities: '8 of 12', upgrades: true },
-    { name: 'HD-1080p', cutoff: 'WEBDL-1080p', qualities: '6 of 12', upgrades: true },
-    { name: 'Ultra-HD', cutoff: 'Bluray-2160p', qualities: '4 of 12', upgrades: false },
-    { name: 'Anime - Dual Audio', cutoff: 'Bluray-1080p', qualities: '7 of 12', upgrades: true },
+    {
+      name: 'Any', cutoff: 'Bluray-2160p', upgrades: true,
+      allowedQualities: ['SDTV', 'WEBDL-480p', 'HDTV-720p', 'WEBDL-720p', 'Bluray-720p', 'HDTV-1080p', 'WEBDL-1080p', 'Bluray-1080p', 'HDTV-2160p', 'WEBDL-2160p', 'Bluray-2160p'],
+    },
+    {
+      name: 'SD', cutoff: 'SDTV', upgrades: true,
+      allowedQualities: ['SDTV', 'WEBDL-480p'],
+    },
+    {
+      name: 'HD-720p/1080p', cutoff: 'WEBDL-1080p', upgrades: true,
+      allowedQualities: ['HDTV-720p', 'WEBDL-720p', 'Bluray-720p', 'HDTV-1080p', 'WEBDL-1080p', 'Bluray-1080p'],
+    },
+    {
+      name: 'HD-1080p', cutoff: 'WEBDL-1080p', upgrades: true,
+      allowedQualities: ['WEBDL-720p', 'HDTV-1080p', 'WEBDL-1080p', 'Bluray-1080p'],
+    },
+    {
+      name: 'Ultra-HD', cutoff: 'Bluray-2160p', upgrades: false,
+      allowedQualities: ['HDTV-2160p', 'WEBDL-2160p', 'Bluray-2160p'],
+    },
+    {
+      name: 'Anime - Dual Audio', cutoff: 'Bluray-1080p', upgrades: true,
+      allowedQualities: ['WEBDL-720p', 'Bluray-720p', 'WEBDL-1080p', 'Bluray-1080p'],
+    },
   ],
   'custom-formats': [
     { name: 'Dual Audio', conditions: 2, profiles: 3 },
@@ -134,6 +167,24 @@ for (const [section, items] of Object.entries(LIST_SECTION_SEEDS)) {
   if (countBySection.get(section).n === 0) {
     items.forEach((item, i) => insertItem.run(section, JSON.stringify(item), i));
     logInfo('Database', `Seeded ${items.length} default "${section}" items into ${DB_PATH}`);
+  }
+}
+
+// Backfills `type: 'nyaa'` onto an existing "Nyaa.si" indexer row from
+// before real search existed — a database that already seeded its indexers
+// table (any install from before this feature) has a Nyaa.si row with no
+// `type` field at all, and real search/test (see server/lib/nyaa-search.js)
+// needs that field to reliably find "the one real indexer" rather than
+// matching on a name string the row could just as easily be renamed away
+// from. Runs every startup but only actually updates anything the first
+// time — cheap at this table's size (a handful of rows) and avoids a
+// separate one-shot migration-tracking mechanism for a single field.
+for (const row of db.prepare("SELECT * FROM settings_items WHERE section = 'indexers'").all()) {
+  const data = JSON.parse(row.data);
+  if (data.name === 'Nyaa.si' && !data.type) {
+    data.type = 'nyaa';
+    db.prepare('UPDATE settings_items SET data = ? WHERE id = ?').run(JSON.stringify(data), row.id);
+    logInfo('Database', 'Migrated indexers row "Nyaa.si": added type "nyaa"');
   }
 }
 

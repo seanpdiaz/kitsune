@@ -29,7 +29,15 @@ function patchItem(section, id, fields) {
 function EditModal({ item, onChange, onClose, renderEditFields }) {
   return (
     <div className="modal-overlay open" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal-box">
+      {/* .wide (620px), not the plain 360px modal-box: field-control's fixed
+          280px leaves almost no room for field-label's text at 360px — easy
+          to miss with a short single-word label (Profiles' "Name", Custom
+          Formats' "Conditions") but a multi-word label (Profiles' "Upgrades
+          allowed", Custom Formats' "Used in profiles") or a real desc
+          paragraph (Profiles' Cutoff) wraps one word per line. Same fix
+          Users' and ConnectionManager.jsx's own edit modals already use for
+          the same reason. */}
+      <div className="modal-box wide">
         <div className="modal-header">
           <h2>Edit {item.name}</h2>
           <button className="modal-close" type="button" aria-label="Close" onClick={onClose}>{icons.x}</button>

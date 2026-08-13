@@ -167,6 +167,110 @@ async function tvdbSearchAnimeOnly(query) {
 // handleSeriesEpisodesApi, for why this replaced Jikan)
 // ---------------------------------------------------------------------------
 
+// A cheap episode-COUNT-only probe — same page-walking loop fetchTvdbEpisodes
+// (below) uses, but skips the per-episode translation requests entirely,
+// since this only exists to compare how many real episodes a handful of
+// same-named TVDB search candidates have (see pickBestTvdbCandidate) rather
+// than to actually persist anything. A shorter between-page delay than the
+// real fetch's, too — this is a quick disambiguation check run for multiple
+// candidates, not the one real fetch whose own pacing already has to be
+// polite about it.
+async function countTvdbEpisodes(tvdbId) {
+  const MAX_PAGES = 5;
+  let count = 0;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const tvdbRes = await tvdbFetch(`/series/${tvdbId}/episodes/default?page=${page}`);
+    let json;
+    try {
+      json = await tvdbRes.json();
+    } catch {
+      break;
+    }
+    if (!tvdbRes.ok) break;
+    const pageEpisodes = (json.data && json.data.episodes) || [];
+    count += pageEpisodes.filter((e) => e.number != null).length;
+    if (pageEpisodes.length === 0) break;
+    await sleep(150);
+  }
+  return count;
+}
+
+// Loose title-equality check used to narrow TVDB search results down to
+// "actually the show we searched for" before episode-count disambiguation
+// ever runs — see pickBestTvdbCandidate below for why this has to happen
+// FIRST. Strips everything but letters/digits and lowercases, so casing,
+// punctuation ("King's Raid" vs "Kings Raid"), and spacing differences don't
+// cause a false negative; a match is exact equality or one title fully
+// containing the other (covers subtitle variants like "Tsugumomo" vs
+// "Tsugumomo: Some Subtitle").
+function normalizeTitleForMatch(text) {
+  return String(text || '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '');
+}
+function titlesLooselyMatch(a, b) {
+  const na = normalizeTitleForMatch(a);
+  const nb = normalizeTitleForMatch(b);
+  if (!na || !nb) return false;
+  return na === nb || na.includes(nb) || nb.includes(na);
+}
+
+// Real TVDB search for an anime title can come back with more than one
+// distinct "series" entry — sometimes genuinely same-titled (TVDB models an
+// OVA/special as its own separate series record rather than a season of the
+// main one, e.g. "Tsugumomo" itself returning both the 13-episode TV series
+// and a 1-episode OVA under the identical title), but sometimes TVDB's
+// search index is just loose and returns something with no title
+// relationship to the query at all — a real, confirmed case: searching
+// "Tsugumomo" returned "King's Raid: Successors of the Will" as one of its 3
+// results. An earlier version of this function probed EVERY search result's
+// episode count and picked the highest, with no title check at all — which
+// fixed the OVA case but then confidently mismatched Tsugumomo onto that
+// unrelated 26-episode show, since 26 > 13 and nothing was filtering it out
+// first. Episode count is only a meaningful tiebreaker among candidates that
+// are actually the show being searched for; it says nothing on its own.
+//
+// So this filters to title-matching candidates FIRST (titlesLooselyMatch),
+// and only disambiguates by real episode count (countTvdbEpisodes) among
+// those. A single-result search, or a single title match, skips probing
+// entirely — no behavior or cost change for the common, unambiguous case.
+const CANDIDATE_PROBE_LIMIT = 4;
+async function pickBestTvdbCandidate(query) {
+  const matches = await tvdbSearchAnimeOnly(query);
+  if (matches.length === 0) return null;
+
+  const titleMatched = matches.filter((m) => titlesLooselyMatch(m.title, query));
+  if (titleMatched.length === 0) {
+    // TVDB returned results, but none resemble the query by title at all —
+    // episode-count comparison would be meaningless without a title filter
+    // to narrow the field first. Safest fallback: whatever TVDB ranked
+    // first, same as the original pre-disambiguation behavior.
+    logWarn('TvdbService', `No title-matched TVDB result for "${query}" among ${matches.length} search result(s) (closest titles: ${matches.slice(0, 3).map((m) => `"${m.title}"`).join(', ')}) — using TVDB's top result as-is.`);
+    return { id: String(matches[0].id), title: matches[0].title };
+  }
+  if (titleMatched.length === 1) return { id: String(titleMatched[0].id), title: titleMatched[0].title };
+
+  const candidates = titleMatched.slice(0, CANDIDATE_PROBE_LIMIT);
+  let best = null;
+  for (const candidate of candidates) {
+    let count;
+    try {
+      count = await countTvdbEpisodes(String(candidate.id));
+    } catch (err) {
+      logWarn('TvdbService', `Could not probe episode count for TVDB id ${candidate.id} ("${candidate.title}"): ${err.message}`);
+      continue;
+    }
+    if (!best || count > best.count) best = { id: String(candidate.id), title: candidate.title, count };
+  }
+  // Every probe failing (a real outage mid-resolution) falls back to the old
+  // naive behavior — a possibly-wrong match is still strictly better than no
+  // match at all, same "degrade, don't break" rule the rest of this
+  // integration already follows.
+  if (!best) return { id: String(titleMatched[0].id), title: titleMatched[0].title };
+  if (candidates.length > 1) {
+    logInfo('TvdbService', `Multiple title-matched TVDB results for "${query}" (${candidates.length}) — picked "${best.title}" (id ${best.id}, ${best.count} episode(s)) as the real series rather than trusting search-result order`);
+  }
+  return best;
+}
+
 // Figures out which TVDB series id to fetch episodes for, and caches it on
 // the series row (tvdb_episode_id) so this only ever runs once per series.
 // A series originally added via the TVDB-search fallback already has a TVDB
@@ -198,9 +302,9 @@ async function resolveTvdbEpisodeSourceId(series) {
   if (series.external_source === 'tvdb' && series.external_id) {
     tvdbId = series.external_id;
   } else {
-    const primaryMatches = await tvdbSearchAnimeOnly(series.title);
-    if (primaryMatches.length > 0) {
-      tvdbId = String(primaryMatches[0].id);
+    const primaryBest = await pickBestTvdbCandidate(series.title);
+    if (primaryBest) {
+      tvdbId = primaryBest.id;
       matchedTitle = series.title;
     } else {
       let altTitles = [];
@@ -208,9 +312,9 @@ async function resolveTvdbEpisodeSourceId(series) {
         altTitles = series.alt_titles ? JSON.parse(series.alt_titles) : [];
       } catch { /* malformed JSON — treat as no alt titles rather than fail resolution */ }
       for (const altTitle of altTitles) {
-        const altMatches = await tvdbSearchAnimeOnly(altTitle);
-        if (altMatches.length > 0) {
-          tvdbId = String(altMatches[0].id);
+        const altBest = await pickBestTvdbCandidate(altTitle);
+        if (altBest) {
+          tvdbId = altBest.id;
           matchedTitle = altTitle;
           break;
         }
@@ -273,16 +377,61 @@ async function mapWithConcurrency(items, limit, fn) {
 // episode) or any other failure, so a gap in TVDB's translation coverage
 // just means that one episode keeps its native-language title instead of
 // failing the whole batch.
+// Returns { name, overview } on success, or { name: null, overview: null,
+// reason } on any failure — a 404 (no English translation exists for that
+// episode, a completely normal and common outcome) gets reason: null so
+// fetchTvdbEpisodes below doesn't warn about it; every other failure carries
+// a real reason. This used to swallow every failure silently (a bare
+// `catch { return null }`, nothing logged) — fine for one occasional 404,
+// but it meant a systemic problem (an expired token this call didn't
+// trigger a re-login for, a rate limit, a malformed response) affecting
+// EVERY episode of one series was completely invisible: the symptom (a
+// show's episodes all showing the generic "Episode N" fallback — see
+// fetchTvdbEpisodes' title assignment) had no corresponding line in System
+// > Logs explaining why, which is exactly what happened investigating a
+// real report of this for one real series.
 async function fetchTvdbEpisodeTranslation(tvdbEpisodeId, language) {
   try {
     const tvdbRes = await tvdbFetch(`/episodes/${tvdbEpisodeId}/translations/${language}`);
-    if (tvdbRes.status === 404) return null;
-    const json = await tvdbRes.json();
-    if (!tvdbRes.ok || !json.data) return null;
-    return { name: json.data.name || null, overview: json.data.overview || null };
-  } catch {
-    return null;
+    if (tvdbRes.status === 404) return { name: null, overview: null, reason: null };
+    let json;
+    try {
+      json = await tvdbRes.json();
+    } catch {
+      return { name: null, overview: null, reason: `non-JSON response (status ${tvdbRes.status})` };
+    }
+    if (!tvdbRes.ok) {
+      return { name: null, overview: null, reason: json.message || `status ${tvdbRes.status}` };
+    }
+    if (!json.data) {
+      return { name: null, overview: null, reason: 'response had no data' };
+    }
+    return { name: json.data.name || null, overview: json.data.overview || null, reason: null };
+  } catch (err) {
+    return { name: null, overview: null, reason: err.message };
   }
+}
+
+// TVDB's per-episode `seasonName` (used as the segment-tab label for a
+// season, unless it's been manually renamed — see handleRenameSeason in
+// routes/episodes.js) is whatever language that show's entry defaults to on
+// TVDB, same issue base episode titles have — but unlike titles, there's no
+// per-episode translation endpoint for it, and no cheap way to fetch an
+// English one at all from the /episodes/default response this app already
+// uses. A real, confirmed case: Tsugumomo's second season name comes back
+// as raw Japanese ("継つぐもも"), which then rendered untranslated as the tab
+// label instead of falling back to the plain "Season 2" segmentLabel()
+// already produces for a season with no name at all. Rather than leave a
+// native-script label users can't read, treat any season name containing
+// CJK (Chinese/Japanese) or Hangul (Korean) script as "not usefully
+// translated" and drop it to null so the existing "Season N" fallback
+// applies — the same outcome as if TVDB had no name for that season at all.
+// Latin-script native names (romaji, etc.) are left alone since those are
+// at least readable.
+const NON_LATIN_SCRIPT_RE = /[぀-ヿ㐀-鿿가-힯]/;
+function stripUntranslatedSeasonName(seasonName) {
+  if (!seasonName) return null;
+  return NON_LATIN_SCRIPT_RE.test(seasonName) ? null : seasonName;
 }
 
 async function fetchTvdbEpisodes(tvdbId) {
@@ -312,7 +461,7 @@ async function fetchTvdbEpisodes(tvdbId) {
         // seasonNumber here is what caused specials and season 1 to
         // silently collide/interleave before this was tracked.
         seasonNumber: typeof e.seasonNumber === 'number' ? e.seasonNumber : 0,
-        seasonName: e.seasonName || null,
+        seasonName: stripUntranslatedSeasonName(e.seasonName),
         num: e.number,
         title: e.name || `Episode ${e.number}`,
         titleJapanese: null,
@@ -339,12 +488,22 @@ async function fetchTvdbEpisodes(tvdbId) {
   // — otherwise the base (native-language) value from above stays as-is
   // rather than being replaced with nothing. This was already fetching
   // `overview` for the title lookup and simply discarding it until now.
+  const translationFailures = [];
   await mapWithConcurrency(all, 4, async (ep) => {
     if (!ep.tvdbEpisodeId) return;
     const translation = await fetchTvdbEpisodeTranslation(ep.tvdbEpisodeId, 'eng');
-    if (translation && translation.name) ep.title = translation.name;
-    if (translation && translation.overview) ep.overview = translation.overview;
+    if (translation.name) ep.title = translation.name;
+    if (translation.overview) ep.overview = translation.overview;
+    if (translation.reason) translationFailures.push(`episode ${ep.num} (S${ep.seasonNumber}): ${translation.reason}`);
   });
+  // One real reason per failed episode, but only one summary line total —
+  // not spammed per-episode into the log for a show with a genuinely large
+  // episode count. A run where EVERY episode failed the same way (a token
+  // problem, a rate limit) is exactly the case worth surfacing loudly;
+  // occasional isolated ones still show up, just batched together.
+  if (translationFailures.length > 0) {
+    logWarn('TvdbService', `Could not fetch English translation for ${translationFailures.length}/${all.length} episode(s): ${translationFailures.slice(0, 5).join('; ')}${translationFailures.length > 5 ? '; …' : ''}`);
+  }
 
   return all.map(({ tvdbEpisodeId, ...ep }) => ep);
 }

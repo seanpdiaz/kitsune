@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kitsune — Sign In</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<!-- No sidebar, no app.js/nav.js on this page deliberately — nav.js is what
+     performs the "redirect to login.html if signed out" check on every other
+     page, so loading it here too would risk a redirect loop. This page is
+     the one place in the app outside that shared chrome. -->
+<div id="authRoot"></div>
+
+<script type="module" src="dist/login.js"></script>
+</body>
+</html>

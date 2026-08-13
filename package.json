@@ -1,7 +1,7 @@
 {
   "name": "kitsune-mockup",
   "version": "0.1.0",
-  "description": "Click-through visual mockup of Kitsune's UI (Library dashboard + Series detail). The backend (server.js) has no build step and no dependencies, same as always. The frontend is migrating page by page from plain JS to React (see README's \"React migration\" section) — `npm run build` compiles whichever pages have migrated so far into public/dist/, which server.js serves like any other static file, no backend changes required.",
+  "description": "Click-through visual mockup of Kitsune's UI (Library dashboard + Series detail). The backend (server.js) has no build step and no dependencies, same as always. The frontend is fully React now, migrated page by page (see the wiki's \"React Migration\" page) — `npm run build` compiles it into public/dist/, which server.js serves like any other static file, no backend changes required.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -14,6 +14,7 @@
     "vite": "^6.0.7"
   },
   "dependencies": {
+    "nodemon": "^3.1.14",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   }

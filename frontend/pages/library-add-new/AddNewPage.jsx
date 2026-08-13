@@ -120,6 +120,20 @@ export default function AddNewPage() {
   const [previewedResult, setPreviewedResult] = useState(null);
   const [previewAdding, setPreviewAdding] = useState(false);
 
+  // Root Folder / Quality Profile toolbar selects — real Settings >
+  // {Media Management, Profiles} data now (see loadOptions below), not the
+  // two hardcoded "/anime/library"/"/anime/seasonal" <option>s this page
+  // shipped with, which were never wired to anything: picking one had zero
+  // effect on where a series landed or what profile it got. Both default to
+  // whichever item is first in its real list (position order — the same
+  // order Settings > Media Management/Profiles themselves display), same
+  // "first configured wins" default POST /api/series already falls back to
+  // server-side when nothing is explicitly chosen.
+  const [rootFolders, setRootFolders] = useState([]);
+  const [profiles, setProfiles] = useState([]);
+  const [selectedRootFolder, setSelectedRootFolder] = useState('');
+  const [selectedQualityProfile, setSelectedQualityProfile] = useState('');
+
   const requestSeqRef = useRef(0);
   const debounceRef = useRef(null);
 
@@ -162,9 +176,31 @@ export default function AddNewPage() {
     }
   }
 
+  // Same two endpoints Settings > Media Management's RootFolders.jsx and
+  // Settings > Profiles' ProfilesPage.jsx already fetch from — no new API
+  // needed. Failure just leaves the list empty (the select shows nothing to
+  // pick, same "worst case, the server's own default kicks in" fallback
+  // loadLibraryIndex above already uses) rather than surfacing a hard error
+  // on a page whose main job is search, not settings management.
+  async function loadOptions() {
+    try {
+      const res = await fetch('/api/settings-items/root-folders');
+      const data = await res.json();
+      setRootFolders(data);
+      if (data.length > 0) setSelectedRootFolder(data[0].path);
+    } catch { /* leave rootFolders empty */ }
+    try {
+      const res = await fetch('/api/settings-items/profiles');
+      const data = await res.json();
+      setProfiles(data);
+      if (data.length > 0) setSelectedQualityProfile(data[0].name);
+    } catch { /* leave profiles empty */ }
+  }
+
   useEffect(() => {
     (async () => {
       await loadLibraryIndex();
+      await loadOptions();
       // Arriving here with ?q=<title> (e.g. from Library Import's "Search on
       // Add New" link for an unmatched root-folder subfolder) pre-fills the
       // search box and runs it immediately, instead of making the user
@@ -206,6 +242,15 @@ export default function AddNewPage() {
         source: match.source,
         status: match.status,
         altTitles: [match.titleNative, match.altTitleJapanese, ...(match.altTitleSynonyms || [])].filter(Boolean),
+        // Whatever's currently selected in the toolbar above — server-side
+        // (POST /api/series' resolveRootFolder) still falls back to the
+        // first configured root folder if this is empty or somehow doesn't
+        // match a real one, so an empty rootFolders/profiles list (nothing
+        // configured yet, or the fetch in loadOptions failed) doesn't block
+        // adding a series, it just means neither select had anything real
+        // to offer and this sends the default "let the server decide" value.
+        rootFolder: selectedRootFolder || undefined,
+        qualityProfile: selectedQualityProfile || undefined,
       }),
     });
     const body = await res.json().catch(() => ({}));
@@ -289,19 +334,36 @@ export default function AddNewPage() {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></svg>
           <input id="addNewSearch" type="text" value={query} onChange={(e) => onSearchInput(e.target.value)} placeholder="Search for a series..." />
         </div>
-        {/* Not wired up in the original either — a static preview of what a
-            real per-search Root Folder/Quality Profile override might look
-            like, carried over unchanged. */}
+        {/* Real Settings > Media Management root folders / Settings >
+            Profiles quality profiles now (see loadOptions above) — every
+            newly-added series actually lands under whichever root folder is
+            selected here and gets this quality profile assigned, both sent
+            straight through to POST /api/series (see addSeries). Disabled
+            with a specific empty-state option when nothing's configured yet
+            (matches Settings > Media Management/Profiles' own "nothing
+            configured" empty states) rather than showing a picker with
+            nothing real to pick. */}
         <span className="field-label-inline">Root Folder</span>
-        <select className="field-select" defaultValue="/anime/library">
-          <option>/anime/library</option>
-          <option>/anime/seasonal</option>
+        <select
+          className="field-select"
+          value={selectedRootFolder}
+          onChange={(e) => setSelectedRootFolder(e.target.value)}
+          disabled={rootFolders.length === 0}
+        >
+          {rootFolders.length === 0
+            ? <option value="">No root folders configured</option>
+            : rootFolders.map((f) => <option key={f.id} value={f.path}>{f.path}</option>)}
         </select>
         <span className="field-label-inline">Quality Profile</span>
-        <select className="field-select" defaultValue="HD-1080p">
-          <option>HD-1080p</option>
-          <option>Ultra-HD</option>
-          <option>SD</option>
+        <select
+          className="field-select"
+          value={selectedQualityProfile}
+          onChange={(e) => setSelectedQualityProfile(e.target.value)}
+          disabled={profiles.length === 0}
+        >
+          {profiles.length === 0
+            ? <option value="">No profiles configured</option>
+            : profiles.map((p) => <option key={p.id} value={p.name}>{p.name}</option>)}
         </select>
       </div>
 

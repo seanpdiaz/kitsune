@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kitsune — Settings — Users</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div class="layout">
+
+  <aside class="sidebar" id="sidebar"></aside>
+
+  <main class="main">
+    <div class="top-row">
+      <div>
+        <h1 class="settings-heading">Settings</h1>
+      </div>
+      <!-- React (see README's "React migration" section) — rendered via a
+           portal from the same component/state as #usersRoot below. -->
+      <span id="addUserBtnRoot"></span>
+    </div>
+
+    <div class="page-tabs"></div>
+    <p class="settings-subtitle">People who can sign in to this Kitsune server. Everyone shares the same Library — role only controls who can change server-wide settings like this page.</p>
+
+    <div id="usersRoot"></div>
+
+  </main>
+</div>
+
+<script type="module" src="app.js"></script>
+<script type="module" src="dist/settings-users.js"></script>
+</body>
+</html>

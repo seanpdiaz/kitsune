@@ -21,6 +21,8 @@ const DEFAULTS = {
   setPermissionsToggle: false,
   'mm-10': '755',
   'mm-11': '644',
+  chownUser: '',
+  chownGroup: '',
   'mm-12': false,
   'mm-13': 100,
   'mm-14': true,
@@ -88,6 +90,12 @@ export default function MediaManagementPage() {
         </FormRow>
         <FormRow name="File Chmod" desc="Octal permissions applied to imported files." className={`permissions-field${permissionsDisabled ? ' is-disabled' : ''}`}>
           <TextField id="mm-11" value={v['mm-11']} onChange={(val) => setField('mm-11', val)} />
+        </FormRow>
+        <FormRow name="chown User" desc="Owner to set on imported files/folders. Leave blank to leave the owner unchanged. Accepts a username or numeric uid — usually requires Kitsune to be running as root to actually take effect." className={`permissions-field${permissionsDisabled ? ' is-disabled' : ''}`}>
+          <TextField id="chownUser" value={v.chownUser} onChange={(val) => setField('chownUser', val)} />
+        </FormRow>
+        <FormRow name="chown Group" desc="Group to set on imported files/folders. Leave blank to leave the group unchanged. Accepts a group name or numeric gid." className={`permissions-field${permissionsDisabled ? ' is-disabled' : ''}`}>
+          <TextField id="chownGroup" value={v.chownGroup} onChange={(val) => setField('chownGroup', val)} />
         </FormRow>
       </SettingsCard>
 

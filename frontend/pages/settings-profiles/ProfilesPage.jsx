@@ -30,12 +30,23 @@ export default function ProfilesPage({ addBtnContainer }) {
     return () => { cancelled = true; };
   }, []);
 
+  // A profile row from before this feature existed (or one that's simply
+  // never had its qualities touched) has no `allowedQualities` array at all
+  // — defaulted to "every known tier" here, the same permissive default
+  // server/lib/quality.js's getQualityProfile() uses server-side, so a
+  // profile nobody's edited yet behaves exactly as it always implicitly did
+  // (nothing excluded) rather than suddenly allowing nothing until saved.
+  function allowedFor(item) {
+    return item.allowedQualities || qualityTierNames;
+  }
+
   function renderRow(item) {
+    const allowed = allowedFor(item);
     return (
       <>
         <p className="settings-title">{item.name}</p>
         <span className="settings-meta">{item.cutoff}</span>
-        <span className="settings-meta">{item.qualities}</span>
+        <span className="settings-meta">{allowed.length} of {qualityTierNames.length || allowed.length}</span>
         <span className="settings-meta">{item.upgrades ? 'Upgrades allowed' : 'No upgrades'}</span>
       </>
     );
@@ -43,6 +54,18 @@ export default function ProfilesPage({ addBtnContainer }) {
 
   function renderEditFields(item, onChange) {
     const options = qualityTierNames.length ? qualityTierNames : [item.cutoff];
+    const allowed = allowedFor(item);
+
+    function toggleQuality(name, checked) {
+      const next = checked ? [...allowed, name] : allowed.filter((n) => n !== name);
+      // Order doesn't matter for correctness (search re-derives rank from
+      // Settings > Quality's own live tier order every time — see
+      // server/lib/quality.js), just keeping it in the same worst-to-best
+      // order as the checkbox list itself so a later re-render doesn't
+      // visually reshuffle anything.
+      onChange('allowedQualities', qualityTierNames.filter((n) => next.includes(n)));
+    }
+
     return (
       <>
         {fieldRow('Name', null, (
@@ -59,7 +82,29 @@ export default function ProfilesPage({ addBtnContainer }) {
             <span className="slider"></span>
           </label>
         ))}
-        <p className="modal-label">Qualities: {item.qualities} — configured on the Quality page, not here.</p>
+        {/* Not wrapped in fieldRow — its fixed-width 280/360px field-control
+            column has no room for up to a dozen checkboxes side by side; a
+            full-width block below the other fields (same spot the old
+            static "Qualities: X of Y" text occupied) fits a checklist much
+            better. */}
+        <p className="modal-label">
+          Qualities — releases in these tiers are ranked to the top of search results and eligible
+          for "Grab best match." Releases outside this list still show up (never hidden), just
+          flagged and sorted lower.
+        </p>
+        <div className="quality-checklist">
+          {qualityTierNames.map((name) => (
+            <label key={name} className="quality-checklist-item">
+              <input
+                type="checkbox"
+                checked={allowed.includes(name)}
+                onChange={(e) => toggleQuality(name, e.target.checked)}
+              />
+              {name}
+            </label>
+          ))}
+          {qualityTierNames.length === 0 && <p className="desc">Loading quality tiers…</p>}
+        </div>
       </>
     );
   }
@@ -72,7 +117,7 @@ export default function ProfilesPage({ addBtnContainer }) {
       baseClass="profile"
       addBtnLabel="Add profile"
       addBtnContainer={addBtnContainer}
-      newItemFields={(type) => ({ name: type.name, cutoff: 'SDTV', qualities: '1 of 12', upgrades: true })}
+      newItemFields={(type) => ({ name: type.name, cutoff: 'SDTV', allowedQualities: qualityTierNames, upgrades: true })}
       renderRow={renderRow}
       renderEditFields={renderEditFields}
     />

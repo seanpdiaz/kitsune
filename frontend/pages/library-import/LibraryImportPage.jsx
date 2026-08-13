@@ -80,6 +80,7 @@ function ImportResult({ result }) {
   }
   const matchedCount = result.matched.length;
   const unmatchedCount = result.unmatched.length;
+  const resetCount = result.reset ? result.reset.length : 0;
   const cls = unmatchedCount === 0 ? 'ok' : 'warn';
   return (
     <p className={`import-result ${cls}`}>
@@ -92,6 +93,7 @@ function ImportResult({ result }) {
           ))}
         </>
       ) : '.'}
+      {resetCount > 0 ? ` ${resetCount} previously-downloaded episode${resetCount === 1 ? '' : 's'} had no matching file in this scan and ${resetCount === 1 ? 'was' : 'were'} marked not downloaded.` : ''}
       {result.seriesEps ? ` Now showing ${result.seriesEps} downloaded.` : ''}
     </p>
   );
@@ -197,8 +199,18 @@ export default function LibraryImportPage({ addBtnContainer }) {
       return (
         <div key={key}>
           <div className="import-row" data-key={key}>
+            {/* item.path is the real absolute path (root folder + this
+                subfolder — see GET /api/root-folders/:id/subfolders in
+                server/routes/root-folders.js), useful server-side but not
+                worth showing here: every row already sits under whichever
+                root folder you configured, so repeating that root's own
+                absolute prefix (e.g. "/Volumes/Anime/") on every single row
+                is just noise. item.name is already the bare series-folder
+                name on its own, so this shows the path relative to its root
+                folder instead — the only part that actually varies row to
+                row. */}
             <span style={{ color: 'var(--text-muted)', display: 'flex', alignItems: 'center' }}>{folderIcon}</span>
-            <span className="settings-title">{item.path}</span>
+            <span className="settings-title" title={item.path}>/{item.name}</span>
             <span className="settings-meta">{item.matchedTitle || item.guessedTitle}</span>
             <FilesCell item={item} open={open} onToggle={() => toggleRow(item)} />
             <span><StatusCell item={item} importing={result === 'importing'} onImportFiles={() => importFiles(item)} /></span>

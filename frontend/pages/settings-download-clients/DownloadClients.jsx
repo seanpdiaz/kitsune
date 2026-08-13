@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { icons } from '../../lib/icons.jsx';
+import { formatBytes } from '../../../public/js/lib/format.js';
 
 // Settings > Download Clients — a faithful port of
 // public/js/pages/settings-download-clients.js. Split off from the shared
@@ -22,6 +23,7 @@ const CLIENT_TYPES = {
       host: '', port: 8080, useSsl: false, username: '', password: '',
       category: 'kitsune', clientPriority: 1, enabled: true, status: 'pending', version: null,
       initialState: 'start', contentLayout: 'original', sequentialOrder: false, firstLastPiecePriority: true,
+      remotePathMappingRemote: '', remotePathMappingLocal: '',
     },
   },
   nzbget: {
@@ -76,6 +78,213 @@ function SwitchField({ checked, onChange }) {
   );
 }
 
+// qBittorrent's own `state` enum (see server/lib/download-clients/
+// qbittorrent.js's header comment for the API docs this is drawn from) —
+// mapped to a human label plus which existing status-pill/progress-fill
+// color reads right for it, reusing the same tones already used everywhere
+// else (status-on/off/fail/pending, fill accent/success/warning/danger)
+// rather than inventing new ones for this one modal.
+const TORRENT_STATE_META = {
+  downloading: { label: 'Downloading', pill: 'status-on', fill: 'accent' },
+  forcedDL: { label: 'Downloading (forced)', pill: 'status-on', fill: 'accent' },
+  metaDL: { label: 'Fetching metadata', pill: 'status-pending', fill: 'accent' },
+  allocating: { label: 'Allocating', pill: 'status-pending', fill: 'accent' },
+  checkingDL: { label: 'Checking', pill: 'status-pending', fill: 'accent' },
+  checkingUP: { label: 'Checking', pill: 'status-pending', fill: 'success' },
+  checkingResumeData: { label: 'Checking', pill: 'status-pending', fill: 'accent' },
+  queuedDL: { label: 'Queued', pill: 'status-pending', fill: 'accent' },
+  queuedUP: { label: 'Queued to seed', pill: 'status-pending', fill: 'success' },
+  stalledDL: { label: 'Stalled', pill: 'status-pending', fill: 'warning' },
+  stalledUP: { label: 'Seeding (idle)', pill: 'status-on', fill: 'success' },
+  uploading: { label: 'Seeding', pill: 'status-on', fill: 'success' },
+  forcedUP: { label: 'Seeding (forced)', pill: 'status-on', fill: 'success' },
+  pausedDL: { label: 'Paused', pill: 'status-off', fill: 'warning' },
+  pausedUP: { label: 'Completed', pill: 'status-off', fill: 'success' },
+  moving: { label: 'Moving', pill: 'status-pending', fill: 'accent' },
+  error: { label: 'Error', pill: 'status-fail', fill: 'danger' },
+  missingFiles: { label: 'Missing Files', pill: 'status-fail', fill: 'danger' },
+  unknown: { label: 'Unknown', pill: 'status-pending', fill: 'accent' },
+};
+function describeTorrentState(state) {
+  return TORRENT_STATE_META[state] || { label: state || 'Unknown', pill: 'status-pending', fill: 'accent' };
+}
+function isPausedState(state) {
+  return state === 'pausedDL' || state === 'pausedUP';
+}
+// qBittorrent reports an ETA of 8640000 (100 days — its own "unknown/
+// infinite" sentinel) rather than omitting the field when there's nothing
+// meaningful to show, e.g. a stalled or seeding torrent — displayed as "∞"
+// instead of a nonsense "100d 0h".
+function formatEta(seconds) {
+  if (seconds == null || seconds >= 8640000) return '∞';
+  if (seconds < 60) return `${seconds}s`;
+  const mins = Math.floor(seconds / 60);
+  if (mins < 60) return `${mins}m`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ${mins % 60}m`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ${hrs % 24}h`;
+}
+
+// Settings > Download Clients' "Torrents" button on a qBittorrent-type row
+// opens this — the real, live torrent list for that specific client
+// (server/lib/download-clients/qbittorrent.js / server/routes/
+// download-clients.js's torrents routes), scoped to the client's configured
+// category. Polls every 3s while open so progress/speed/ETA move on their
+// own without a manual refresh, same "just poll, no websocket" approach
+// Activity > Queue already uses for the simulated pipeline's progress.
+function TorrentsModal({ client, onClose }) {
+  const [torrents, setTorrents] = useState(null); // null = still loading
+  const [loadError, setLoadError] = useState('');
+  const [addUrl, setAddUrl] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [addError, setAddError] = useState('');
+  const [busyHashes, setBusyHashes] = useState(() => new Set());
+  const pollRef = useRef(null);
+
+  async function load() {
+    try {
+      const res = await fetch(`/api/download-clients/${client.id}/torrents`);
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      setTorrents(body);
+      setLoadError('');
+    } catch (err) {
+      setLoadError(err.message || "Couldn't reach that client.");
+    }
+  }
+
+  useEffect(() => {
+    load();
+    pollRef.current = setInterval(load, 3000);
+    return () => clearInterval(pollRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client.id]);
+
+  async function handleAdd(e) {
+    e.preventDefault();
+    const url = addUrl.trim();
+    if (!url || adding) return;
+    setAdding(true);
+    setAddError('');
+    try {
+      const res = await fetch(`/api/download-clients/${client.id}/torrents`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      setAddUrl('');
+      await load();
+    } catch (err) {
+      setAddError(err.message || 'Could not add that torrent.');
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  // Same endpoint pair regardless of what qBittorrent's own installed
+  // version calls them internally (pause/resume vs. stop/start — see
+  // qbittorrent.js) — the route layer hides that entirely.
+  async function handleToggle(t) {
+    setBusyHashes((prev) => new Set(prev).add(t.hash));
+    const action = isPausedState(t.state) ? 'resume' : 'pause';
+    try {
+      await fetch(`/api/download-clients/${client.id}/torrents/${encodeURIComponent(t.hash)}/${action}`, { method: 'POST' });
+    } catch {
+      // load() right below shows whatever state actually stuck either way
+    }
+    await load();
+    setBusyHashes((prev) => { const next = new Set(prev); next.delete(t.hash); return next; });
+  }
+
+  // Removes from qBittorrent's list only — deleteFiles is deliberately not
+  // exposed here, matching this app's non-destructive-by-default convention
+  // elsewhere (Backup's Remove only removes the backup file entry, not
+  // anything it backed up).
+  async function handleDelete(t) {
+    setBusyHashes((prev) => new Set(prev).add(t.hash));
+    try {
+      await fetch(`/api/download-clients/${client.id}/torrents/${encodeURIComponent(t.hash)}`, { method: 'DELETE' });
+    } catch {
+      // ignore — load() reflects reality either way
+    }
+    await load();
+    setBusyHashes((prev) => { const next = new Set(prev); next.delete(t.hash); return next; });
+  }
+
+  return (
+    <div className="modal-overlay open" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal-box wide">
+        <div className="modal-header">
+          <h2>{client.name} — Torrents</h2>
+          <button className="modal-close" type="button" aria-label="Close" onClick={onClose}>{icons.x}</button>
+        </div>
+        <div className="modal-body">
+          <form className="torrent-add-row" onSubmit={handleAdd}>
+            <input
+              className="field-input" type="text" placeholder="magnet: link or .torrent URL"
+              value={addUrl} onChange={(e) => setAddUrl(e.target.value)}
+            />
+            <button className="btn-accent" type="submit" disabled={adding || !addUrl.trim()}>
+              {adding ? 'Adding…' : 'Add'}
+            </button>
+          </form>
+          {addError && <p className="form-error">{addError}</p>}
+
+          {loadError ? (
+            <p className="form-error">{loadError}</p>
+          ) : torrents === null ? (
+            <p className="settings-empty">Loading…</p>
+          ) : torrents.length === 0 ? (
+            <p className="settings-empty">
+              {client.category ? `No torrents in the "${client.category}" category yet.` : 'No torrents yet.'}
+            </p>
+          ) : (
+            <div className="torrent-list">
+              {torrents.map((t) => {
+                const meta = describeTorrentState(t.state);
+                const pct = Math.round((t.progress || 0) * 100);
+                const busy = busyHashes.has(t.hash);
+                const paused = isPausedState(t.state);
+                return (
+                  <div className="torrent-row" key={t.hash}>
+                    <div className="torrent-row-main">
+                      <p className="settings-title" title={t.name}>{t.name}</p>
+                      <div className="queue-progress">
+                        <div className="progress"><div className={`fill ${meta.fill}`} style={{ width: `${pct}%` }} /></div>
+                        <span className="progress-label">
+                          {pct}% · {formatBytes(t.total_size)} · {formatBytes(t.dlspeed)}/s · ETA {formatEta(t.eta)}
+                        </span>
+                      </div>
+                    </div>
+                    <span className={`status-pill ${meta.pill}`}>{meta.label}</span>
+                    <button
+                      className="ep-action" type="button" disabled={busy}
+                      aria-label={paused ? `Resume ${t.name}` : `Pause ${t.name}`}
+                      onClick={() => handleToggle(t)}
+                    >
+                      {paused ? icons.play : icons.pause}
+                    </button>
+                    <button
+                      className="ep-action" type="button" disabled={busy}
+                      aria-label={`Remove ${t.name}`} onClick={() => handleDelete(t)}
+                    >
+                      {icons.x}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+        <div className="modal-footer">
+          <button type="button" className="btn-accent" onClick={onClose}>Done</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TypeSpecificFields({ item, onChange }) {
   if (item.type === 'qbittorrent') {
     return (
@@ -99,6 +308,24 @@ function TypeSpecificFields({ item, onChange }) {
         </FieldRow>
         <FieldRow label="First and last piece priority">
           <SwitchField checked={item.firstLastPiecePriority} onChange={(v) => onChange('firstLastPiecePriority', v)} />
+        </FieldRow>
+        <FieldRow
+          label="Remote path"
+          desc="Only needed if qBittorrent runs on a different machine than Kitsune. The path qBittorrent itself reports its downloads are saved under — leave both this and Local path blank if qBittorrent and Kitsune share the same filesystem."
+        >
+          <input
+            className="field-input" type="text" placeholder="e.g. /downloads/complete"
+            value={item.remotePathMappingRemote || ''} onChange={(e) => onChange('remotePathMappingRemote', e.target.value)}
+          />
+        </FieldRow>
+        <FieldRow
+          label="Local path"
+          desc="Where that same folder is reachable from Kitsune's own host — e.g. a shared network mount or Docker volume. Kitsune translates one to the other when importing a completed real download."
+        >
+          <input
+            className="field-input" type="text" placeholder="e.g. /mnt/downloads/complete"
+            value={item.remotePathMappingLocal || ''} onChange={(e) => onChange('remotePathMappingLocal', e.target.value)}
+          />
         </FieldRow>
       </>
     );
@@ -171,14 +398,15 @@ export default function DownloadClients({ addBtnContainer }) {
   const [testingIds, setTestingIds] = useState(() => new Set());
   const [modalTesting, setModalTesting] = useState(false);
   const [modalTestResult, setModalTestResult] = useState(null);
-  // Set to a client's id for exactly the one render right after its Test
-  // (row button or the modal's Test Connection) comes back successful — same
-  // one-shot flash as System > Tasks' completion animation (see
-  // .row-flash-success in styles.css). A test run from inside the edit
-  // modal still sets this even though the row is hidden behind the modal at
-  // that instant; the flash plays the next time the row actually renders,
-  // which is the moment the modal closes.
-  const [flashId, setFlashId] = useState(null);
+  const [torrentsClientId, setTorrentsClientId] = useState(null);
+  // { id, ok } for exactly the one render right after a Test (row button or
+  // the modal's Test Connection) comes back, success or failure — a green
+  // three-pulse flash either way ok is true, red when it's false (see
+  // .row-flash-success / .row-flash-fail in styles.css). A test run from
+  // inside the edit modal still sets this even though the row is hidden
+  // behind the modal at that instant; the flash plays the next time the row
+  // actually renders, which is the moment the modal closes.
+  const [flash, setFlash] = useState(null);
 
   const editingItem = editingId != null ? data.find((d) => d.id === editingId) || null : null;
 
@@ -199,10 +427,10 @@ export default function DownloadClients({ addBtnContainer }) {
   // The flash is meant for exactly one render — clear it right after so it
   // doesn't replay on a later, unrelated re-render of the same row.
   useEffect(() => {
-    if (flashId == null) return;
-    const t = setTimeout(() => setFlashId(null), 1600);
+    if (!flash) return;
+    const t = setTimeout(() => setFlash(null), 1600);
     return () => clearTimeout(t);
-  }, [flashId]);
+  }, [flash]);
 
   function handleToggleEnabled(item, enabled) {
     setData((prev) => prev.map((d) => (d.id === item.id ? { ...d, enabled } : d)));
@@ -235,7 +463,7 @@ export default function DownloadClients({ addBtnContainer }) {
     setTestingIds((prev) => new Set(prev).add(item.id));
     const result = await testItem(item, {});
     setTestingIds((prev) => { const next = new Set(prev); next.delete(item.id); return next; });
-    setFlashId(result.ok ? item.id : null);
+    setFlash({ id: item.id, ok: result.ok });
   }
 
   function handleFieldChange(key, value) {
@@ -261,7 +489,7 @@ export default function DownloadClients({ addBtnContainer }) {
     };
     const result = await testItem(editingItem, overrides);
     setModalTesting(false);
-    setFlashId(result.ok ? editingItem.id : null);
+    setFlash({ id: editingItem.id, ok: result.ok });
     // No "v" prefix added here — qBittorrent's own version string already
     // comes back as "v4.5.2", NZBGet's as bare "21.1"; adding one
     // unconditionally doubled up qBittorrent's ("vv4.5.2"). Showing
@@ -311,7 +539,7 @@ export default function DownloadClients({ addBtnContainer }) {
       </div>
 
       <div className="dlclient-header">
-        <span>Name</span><span>Host</span><span>Category</span><span>Priority</span><span>Status</span><span>Enabled</span><span></span><span></span>
+        <span>Name</span><span>Host</span><span>Category</span><span>Priority</span><span>Status</span><span>Enabled</span><span></span><span></span><span></span><span></span>
       </div>
 
       {!loaded ? (
@@ -320,12 +548,9 @@ export default function DownloadClients({ addBtnContainer }) {
         <p className="settings-empty">None configured yet.</p>
       ) : (
         data.map((item) => (
-          <div className={`dlclient-row${item.id === flashId ? ' row-flash-success' : ''}`} data-id={item.id} key={item.id}>
+          <div className={`dlclient-row${flash && flash.id === item.id ? (flash.ok ? ' row-flash-success' : ' row-flash-fail') : ''}`} data-id={item.id} key={item.id}>
             <div className="settings-name">
-              <p className="settings-title">
-                {item.name}
-                <button className="ep-action" type="button" aria-label={`Edit ${item.name}`} onClick={() => setEditingId(item.id)}>{icons.edit}</button>
-              </p>
+              <p className="settings-title">{item.name}</p>
               <span className="audio-tag">{(CLIENT_TYPES[item.type] || {}).label || item.type}</span>
             </div>
             <span className="settings-meta">{item.host ? `${item.host}:${item.port}` : '—'}</span>
@@ -339,6 +564,20 @@ export default function DownloadClients({ addBtnContainer }) {
             <button className="btn-test" type="button" disabled={testingIds.has(item.id)} onClick={() => handleRowTest(item)}>
               {testingIds.has(item.id) ? 'Testing…' : 'Test'}
             </button>
+            {/* Torrents only exists for qBittorrent — NZBGet's own API
+                doesn't have an equivalent per-torrent queue shape (see
+                server/routes/download-clients.js's torrents route comment).
+                An empty placeholder keeps the grid column count identical
+                for both types rather than reflowing the row. */}
+            {item.type === 'qbittorrent'
+              ? <button className="ep-action" type="button" aria-label={`Manage torrents on ${item.name}`} onClick={() => setTorrentsClientId(item.id)}>{icons.viewTable}</button>
+              : <span></span>}
+            {/* Its own trailing column now, matching every other list-style
+                Settings page (Indexers/Import Lists/Connect via
+                ConnectionManager.jsx, Users) — Edit then Remove, both 32px —
+                instead of sitting inline next to the name like a second
+                label. */}
+            <button className="ep-action" type="button" aria-label={`Edit ${item.name}`} onClick={() => setEditingId(item.id)}>{icons.edit}</button>
             <button className="ep-action" type="button" aria-label={`Remove ${item.name}`} onClick={() => handleRemove(item)}>{icons.x}</button>
           </div>
         ))
@@ -352,6 +591,13 @@ export default function DownloadClients({ addBtnContainer }) {
           onTest={handleModalTest}
           testing={modalTesting}
           testResult={modalTestResult}
+        />
+      )}
+
+      {torrentsClientId != null && data.find((d) => d.id === torrentsClientId) && (
+        <TorrentsModal
+          client={data.find((d) => d.id === torrentsClientId)}
+          onClose={() => setTorrentsClientId(null)}
         />
       )}
     </>

@@ -52,6 +52,31 @@ button, select, input {
   color: var(--text-primary);
 }
 
+/* ---------- Scrollbars ---------- */
+/* Applied globally (html, and every scrollable element via the universal
+   selector below) rather than the couple of one-off spots this used to be
+   scoped to (.overview, .preview-overview) — any scrollable list/panel
+   anywhere in the app (release search results, modals, dropdowns, future
+   ones too) gets the same thin, muted-theme-colored scrollbar instead of
+   each browser's default chunky OS one, with no need to remember to add it
+   per component. Firefox uses scrollbar-width/scrollbar-color; Chromium/
+   Safari ignore those and need the vendor-prefixed pseudo-elements instead —
+   both are set here so every browser is covered. */
+html {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--text-muted); background-clip: padding-box; }
+*::-webkit-scrollbar-corner { background: transparent; }
+
 /* ---------- Layout ---------- */
 
 .layout {
@@ -69,6 +94,23 @@ button, select, input {
   flex-direction: column;
   gap: 2px;
   transition: width 0.15s ease;
+  /* Without an explicit height, a flex row's default align-items: stretch
+     makes .sidebar exactly as tall as .main's content — invisible on a
+     short page, but on a tall one (Media Management's naming/permissions
+     cards plus its Root Folders list, say) that stretches the sidebar well
+     past the viewport, and the user chip's margin-top: auto (see below)
+     pins itself to the bottom of that stretched column instead of the
+     bottom of the screen — present in the DOM, just scrolled out of view
+     until you scroll the whole page down. position: sticky + a real height
+     decouples the sidebar from .main's height entirely, the same fixed-
+     to-the-viewport behavior every other app with a persistent sidebar
+     nav has; overflow-y: auto is just a safety net for the unlikely case
+     the nav's own content (Settings fully expanded, etc.) ever exceeds
+     100vh on its own. */
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
 }
 
 .sidebar.collapsed { width: 64px; }
@@ -76,14 +118,33 @@ button, select, input {
 .sidebar.collapsed .nav-badge,
 .sidebar.collapsed .nav-sub,
 .sidebar.collapsed .brand-name,
-.sidebar.collapsed .collapse-label { display: none; }
+.sidebar.collapsed .user-chip-info,
+.sidebar.collapsed .user-chip-caret { display: none; }
 .sidebar.collapsed .nav-item { justify-content: center; }
+.sidebar.collapsed .user-chip { justify-content: center; }
+/* The brand row normally splits into the logo+name on the left and the
+   collapse toggle on the right (see .brand's justify-content below). At
+   64px wide there isn't room for the fox mark, the toggle, AND the gap
+   between them, so the mark hides here the same way brand-name already
+   does — same "collapsed rail = icons only, and only the ones that still
+   fit" rule .nav-item's own collapsed centering already follows — leaving
+   just the toggle button, centered, as the one thing in that row. */
+.sidebar.collapsed .brand { justify-content: center; }
+.sidebar.collapsed .brand-mark { display: none; }
 
 .brand {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 10px;
-  padding: 6px 10px 20px;
+  padding: 6px 6px 20px 10px;
+}
+
+.brand-identity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
 }
 
 .brand-mark {
@@ -97,6 +158,9 @@ button, select, input {
   font-weight: 700;
   font-size: 16px;
   letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .nav-item {
@@ -154,24 +218,139 @@ button, select, input {
 
 .nav-sub a:hover { color: var(--text-secondary); }
 
+/* Now a plain icon button in the brand row (see renderSidebar's `brand`
+   template in nav.js) instead of the old full-width bar that used to sit
+   right above the user chip — no more border-top/label, just a small
+   hamburger button sized to match the brand row's line height. Real
+   <button> now (was a <div>) for free keyboard/focus support; background
+   and border are reset since browsers style buttons by default. */
 .collapse-toggle {
-  margin-top: auto;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px;
-  border-top: 1px solid var(--border);
+  justify-content: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
   color: var(--text-muted);
-  font-size: 12px;
   cursor: pointer;
+  padding: 0;
 }
 
-.collapse-toggle:hover { color: var(--text-secondary); }
+.collapse-toggle:hover { background: var(--surface-2); color: var(--text-secondary); }
+
+/* ---------- Sidebar user chip (see public/js/nav.js's renderUserChip) ---------- */
+/* margin-top: auto pins this block (now the sidebar's last rendered
+   element — the collapse toggle moved up into the brand row) flush to the
+   bottom of the sidebar's leftover vertical space. */
+.user-chip-wrap { margin-top: auto; position: relative; }
+
+.user-chip {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+}
+.user-chip:hover { background: var(--surface-2); }
+
+.user-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--accent-bg);
+  color: var(--accent);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.user-chip-info { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.user-chip-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.user-chip-role { font-size: 11px; color: var(--text-muted); }
+.user-chip-caret { flex-shrink: 0; color: var(--text-muted); }
+
+.user-menu {
+  display: none;
+  flex-direction: column;
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 100%;
+  margin-bottom: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+  z-index: 50;
+}
+.user-menu.open { display: flex; }
+.user-menu a, .user-menu button {
+  display: flex;
+  align-items: center;
+  height: auto;
+  padding: 8px 9px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: none;
+  border: none;
+  border-radius: 4px;
+  text-align: left;
+  cursor: pointer;
+}
+.user-menu a:hover, .user-menu button:hover { background: var(--surface-3); color: var(--text-primary); }
 
 .main {
   flex: 1;
   padding: 22px 28px 40px;
   min-width: 0;
+}
+
+/* Series page only (series.html's <main class="main main-series">) — the
+   poster/title/description/stat-card header and the season tabs stay fixed
+   to the viewport (same as .sidebar, already position: sticky above), and
+   only the episode list itself scrolls in its own fixed-height panel
+   instead of growing the whole page. Every other page keeps .main's default
+   page-level scroll (a settings form, the library grid, etc. is one
+   roughly-uniform-height block; Series is the one page combining a
+   fixed-size header card with a rows list that can run to hundreds of
+   episodes, where growing the page to fit the list also scrolls the header
+   out of view along with it). #seriesRoot has no wrapping element of its
+   own — SeriesPage.jsx's top-level return is a bare fragment, so its
+   children land directly in #seriesRoot — so #seriesRoot itself has to
+   become the flex column .detail-header/.segment-tabs-row (fixed) and
+   .episode-list-scroll (the one child that actually scrolls) lay out in. */
+.main-series {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+.main-series > .back-link { flex-shrink: 0; }
+.main-series #seriesRoot {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.main-series .detail-header,
+.main-series .segment-tabs-row {
+  flex-shrink: 0;
 }
 
 /* ---------- Top row / search ---------- */
@@ -377,6 +556,13 @@ select {
 .view-toggle button:hover { color: var(--text-primary); background: var(--surface-2); }
 .view-toggle button.active { background: var(--surface-2); color: var(--accent); }
 
+/* Poster size slider — same generic .size-slider look Settings > Tags'
+   cloud-size control already uses (see input[type="range"].size-slider
+   below), just its own label/wrapper class since this one lives in the
+   Library filter row rather than a settings toolbar. */
+.poster-size-control { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.poster-size-label { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
+
 .tabs { display: flex; gap: 6px; }
 .tabs button, .segment-tabs button {
   background: transparent;
@@ -393,8 +579,13 @@ select {
 /* ---------- Series grid ---------- */
 
 .series-grid {
+  /* Poster size slider (Library > Poster view only — see
+     frontend/pages/library-grid/LibraryGridPage.jsx) scales this instead of
+     touching grid-template-columns' base 140px directly, so the default
+     (unscaled) layout is identical to before the slider existed. */
+  --poster-scale: 1;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(calc(140px * var(--poster-scale)), 1fr));
   gap: 14px;
 }
 
@@ -480,6 +671,7 @@ select {
 .fill.accent { background: var(--accent); }
 .fill.success { background: var(--success); }
 .fill.warning { background: var(--warning); }
+.fill.danger { background: var(--danger); }
 
 /* ---------- Library: Status chip (Table + Overview views) ---------- */
 /* Same five colors .badge already uses for the poster overlay (see
@@ -696,10 +888,8 @@ select {
      average-length one. Capping the synopsis at 8 lines (~160px at this
      font-size/line-height) and letting it scroll internally instead keeps
      the header a predictable size regardless of how long the real synopsis
-     is, while still making the full text available. Same scrollbar
-     treatment as .preview-overview (Add New's preview modal) below, reused
-     as-is — a scrollable overview box is a scrollable overview box either
-     way.
+     is, while still making the full text available. Scrollbar styling for
+     the internal scroll is global (see near the top of this file).
 
      This is a fixed `height`, not `max-height` — deliberately. A cap alone
      only bounds the *tall* case; a short synopsis (Re:ZERO's is two lines)
@@ -712,13 +902,9 @@ select {
      page, not just similarly-sized. */
   height: 160px;
   overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: var(--border-strong) transparent;
+  /* Scrollbar styling is global now (see the "Scrollbars" section near the
+     top of this file) — no need for a per-component override here anymore. */
 }
-.overview::-webkit-scrollbar { width: 6px; }
-.overview::-webkit-scrollbar-track { background: transparent; }
-.overview::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; }
-.overview::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
 .detail-stats {
   display: grid;
@@ -741,6 +927,20 @@ select {
   overflow-y: hidden;
 }
 
+/* Wraps .segment-tabs plus the Rename season pencil (real, non-Specials
+   seasons only — see SeriesPage.jsx) that sits after it. The border/margin
+   that used to live on .segment-tabs itself move up here so the underline
+   still spans the whole row, button included, instead of stopping short at
+   the last tab. */
+.segment-tabs-row {
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 14px;
+}
+.segment-tabs-row .segment-tabs { border-bottom: none; margin-bottom: 0; flex: 1; min-width: 0; }
+.segment-tabs-row .ep-action { flex-shrink: 0; }
+
 .segment-tabs button {
   border-radius: 0;
   border-bottom: 2px solid transparent;
@@ -757,9 +957,36 @@ select {
 
 /* ---------- Episode list ---------- */
 
+/* Wraps .ep-header + #episodeList as one unit so the Series page's
+   .main-series rules above (see there for the full reasoning) have a single
+   flex child to make the scrollable one. Only actually scrolls on the
+   series page — elsewhere .main-series isn't present, so this just sits in
+   normal page flow with nothing to override its default (visible/auto)
+   overflow. */
+.episode-list-scroll {
+  min-height: 0;
+  overflow-y: auto;
+}
+.main-series .episode-list-scroll { flex: 1; }
+/* Column labels stay pinned to the top of the scroll panel rather than
+   scrolling away with the rows underneath them — same sticky-table-header
+   pattern .sidebar's own comment describes for the page-level nav, just
+   scoped to this one panel. Needs its own background (the panel is
+   transparent otherwise) so rows scrolling underneath don't show through. */
+.episode-list-scroll .ep-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg);
+}
+
 .ep-header, .ep-row {
   display: grid;
-  grid-template-columns: 44px 1fr 84px 80px 76px 110px 36px;
+  /* Last column widened from 36px to fit a missing episode's two action
+     buttons (Search + Grab best match, see .ep-action-group below) side by
+     side — every other state still only ever shows one button/menu in this
+     column, just with a little extra breathing room now. */
+  grid-template-columns: 44px 1fr 84px 80px 76px 110px 68px;
   gap: 8px;
   align-items: center;
   padding: 10px 12px;
@@ -818,6 +1045,49 @@ select {
   justify-content: center;
 }
 .ep-action svg { width: 14px; height: 14px; }
+/* A missing episode's two action buttons (Search + Grab best match — see
+   EpisodeRow in SeriesPage.jsx) side by side in the same grid cell. */
+.ep-action-group { display: flex; gap: 4px; justify-content: flex-end; }
+
+/* Episode row's "..." dropdown (EpisodeActionsMenu, SeriesPage.jsx) — the
+   grid cell itself becomes the positioning context for the menu instead of
+   the bare button, so the popover doesn't need a portal to escape .ep-row's
+   overflow/stacking; .ep-row rows have no overflow:hidden of their own, so
+   an absolutely-positioned child naturally lays over neighboring rows. */
+.ep-action-wrap { position: relative; display: flex; justify-content: center; }
+.ep-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  min-width: 160px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
+  padding: 4px;
+}
+.ep-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: auto;
+  padding: 7px 9px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  text-align: left;
+}
+.ep-menu button:hover { background: var(--surface-2); color: var(--text-primary); }
+.ep-menu svg { width: 14px; height: 14px; flex-shrink: 0; }
+/* "Delete" (remove media file) — the one destructive item in the menu, so it
+   reads red both at rest and on hover rather than picking up the neutral
+   hover treatment every other .ep-menu button gets. */
+.ep-menu button.danger { color: var(--danger); }
+.ep-menu button.danger:hover { background: var(--danger-bg); color: var(--danger); }
 
 /* ---------- Settings pages ---------- */
 
@@ -866,7 +1136,8 @@ select {
 .blocklist-header, .blocklist-row,
 .import-header, .import-row,
 .missing-header, .missing-row,
-.cutoff-header, .cutoff-row {
+.cutoff-header, .cutoff-row,
+.user-header, .user-row {
   display: grid;
   gap: 10px;
   align-items: center;
@@ -880,8 +1151,11 @@ select {
 /* Download Clients: same row/pill/switch styling as the shared connections
    list, but its own column set — a Category column (real per-client field,
    see server/routes/settings-items.js) that the generic list-style sections
-   don't have. */
-.dlclient-header, .dlclient-row { grid-template-columns: 1fr 160px 110px 70px 120px 50px 90px 32px; }
+   don't have. 9 columns, not 8: Edit used to sit crammed inline next to the
+   name instead of its own trailing column the way every other list-style
+   page's Edit/Remove pair does (ConnectionManager.jsx, Users) — this adds
+   the missing 32px slot for it, ahead of Remove's. */
+.dlclient-header, .dlclient-row { grid-template-columns: 1fr 160px 110px 70px 120px 50px 90px 32px 32px 32px; }
 .profile-header, .profile-row { grid-template-columns: 1fr 160px 110px 100px 32px 32px; }
 .format-header, .format-row { grid-template-columns: 1fr 130px 140px 32px 32px; }
 .quality-header, .quality-row { grid-template-columns: 170px 1fr 110px 110px 110px; }
@@ -897,10 +1171,17 @@ select {
 .import-header, .import-row { grid-template-columns: 32px 1fr 1fr 190px 150px; }
 .missing-header, .missing-row { grid-template-columns: 170px 1fr 100px 90px; }
 .cutoff-header, .cutoff-row { grid-template-columns: 170px 1fr 120px 120px 90px; }
+/* Settings > Users — Username / Role / Created / Edit. No Remove column
+   (unlike Profiles/Custom Formats' SimpleList shape) since removing a user
+   needs the last-admin/self-delete guards server/routes/auth.js enforces,
+   so it lives inside the edit modal's own confirmation-shaped footer
+   instead of a one-click icon button next to Edit. */
+.user-header, .user-row { grid-template-columns: 1fr 110px 130px 32px; }
 
 .settings-header, .dlclient-header, .profile-header, .format-header, .quality-header,
 .task-header, .backup-header, .event-header, .log-header,
-.queue-header, .blocklist-header, .import-header, .missing-header, .cutoff-header {
+.queue-header, .blocklist-header, .import-header, .missing-header, .cutoff-header,
+.user-header {
   font-size: 11.5px;
   color: var(--text-muted);
   text-transform: uppercase;
@@ -909,7 +1190,8 @@ select {
 
 .settings-row, .dlclient-row, .profile-row, .format-row, .quality-row,
 .task-row, .backup-row, .health-row, .event-row, .log-row,
-.queue-row, .blocklist-row, .import-row, .missing-row, .cutoff-row {
+.queue-row, .blocklist-row, .import-row, .missing-row, .cutoff-row,
+.user-row {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   margin-bottom: 8px;
@@ -950,21 +1232,38 @@ select {
   100% { left: 100%; }
 }
 
-/* One-shot green flash for "this just succeeded" moments — originally
+/* Three-pulse green flash for "this just succeeded" moments — originally
    built for System > Tasks' running->done transition, reused as-is for
-   Download Clients' Test Connection succeeding (see flashOnNextRender in
-   system-tasks.js and settings-download-clients.js). Applied for exactly
-   one render right after the success is detected, so it plays once on the
-   DOM node that gets freshly inserted for that render and never replays on
-   a later, unrelated re-render. Works on any row that already has the
-   shared .settings-row-family background/border (.task-row, .dlclient-row,
-   etc. all qualify) — pure CSS, no JS timer needed to "turn it off," since
-   a non-infinite animation just stops on its own once it finishes playing. */
+   every other Test/success moment across the app (see flashOnNextRender in
+   system-tasks.js and settings-download-clients.js, and the same flashId
+   pattern in ConnectionManager.jsx). Applied for exactly one render right
+   after the success is detected, so it plays once on the DOM node that gets
+   freshly inserted for that render and never replays on a later, unrelated
+   re-render. Works on any row that already has the shared
+   .settings-row-family background/border (.task-row, .dlclient-row, etc.
+   all qualify) — pure CSS, no JS timer needed to "turn it off," since a
+   non-infinite animation just stops on its own once it finishes playing.
+   The three JS call sites above each still clear their own flashId after
+   1600ms (unchanged) — the animation's total runtime is kept at that same
+   1.6s, just split into 3 equal pulses instead of one long fade, so none of
+   those timers needed to change to match. */
 .row-flash-success {
-  animation: row-flash-success-anim 1.6s ease-out;
+  animation: row-flash-success-anim 0.5333s ease-out 3;
 }
 @keyframes row-flash-success-anim {
   0% { background: var(--success-bg); border-color: var(--success); }
+  100% { background: var(--surface-1); border-color: var(--border); }
+}
+
+/* Same three-pulse flash, red instead of green, for "this just failed" —
+   the counterpart to .row-flash-success above, applied the same one-shot
+   way (see ConnectionManager.jsx / DownloadClients.jsx's `flash` state:
+   { id, ok }, ok picking which of these two classes a row gets). */
+.row-flash-fail {
+  animation: row-flash-fail-anim 0.5333s ease-out 3;
+}
+@keyframes row-flash-fail-anim {
+  0% { background: var(--danger-bg); border-color: var(--danger); }
   100% { background: var(--surface-1); border-color: var(--border); }
 }
 
@@ -1046,6 +1345,14 @@ select {
 }
 .switch input:checked + .slider { background: var(--accent-bg); border-color: var(--accent-border); }
 .switch input:checked + .slider::before { transform: translateX(15px); background: var(--accent); }
+/* A disabled switch (e.g. Monitored on a complete series — series page
+   header and its Edit modal both gate this the same way) previously looked
+   pixel-identical to an enabled one — same colors, same pointer cursor —
+   with the only actual difference being that clicking it silently did
+   nothing. Dimmed + not-allowed here so "this can't be changed" is visible,
+   not just enforced. */
+.switch input:disabled + .slider { opacity: 0.45; cursor: not-allowed; }
+.switch input:disabled + .slider::before { cursor: not-allowed; }
 
 .btn-test { height: 30px; padding: 0 12px; font-size: 12px; }
 .btn-test:disabled { opacity: 0.6; cursor: default; }
@@ -1157,6 +1464,26 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 
 .field-control { width: 280px; flex-shrink: 0; display: flex; justify-content: flex-end; }
 .field-control.wide { width: 360px; }
+/* Edit Series' Path field (SeriesPage.jsx) — a real absolute filesystem
+   path is often longer than every other field-control here, and it now
+   holds an input + Browse button (.edit-series-path-row, below) rather than
+   a single fixed-width control. flex: 1 (instead of a fixed width) lets it
+   take whatever space is actually left in the row rather than truncating
+   against an arbitrary 360px cap. */
+.field-control.full { width: auto; flex: 1; justify-content: flex-start; }
+
+/* Settings > General's SSL cert/key upload fields (see GeneralPage.jsx's
+   SslFileField) — reuses .btn-test/.ep-action/.settings-meta rather than
+   introducing new button styles, same as every other in-row action in this
+   app. Wraps to a second line under its field-control's 280px if an error
+   message shows up, hence flex-wrap + full-width .form-error. */
+.ssl-file-field { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; width: 100%; }
+.ssl-file-current { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ssl-file-name {
+  font-size: 12.5px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 150px;
+}
+.ssl-file-field .form-error { width: 100%; text-align: right; margin: 0; }
 
 .field-input, .field-select {
   height: 32px;
@@ -1419,6 +1746,55 @@ input[type="range"].size-slider::-moz-range-track {
   margin: 0 0 14px;
 }
 
+/* Release picker's "showing simulated results" fallback notice (see
+   public/js/lib/release-picker-modal.js) — informational, not an error, so
+   it gets its own warning-toned style rather than reusing .form-error's
+   red. */
+.release-picker-notice {
+  font-size: 12px;
+  color: var(--warning);
+  margin: 0 0 14px;
+}
+
+/* ---------- Auth (public/login.html — sign-in / first-run setup) ---------- */
+/* The one page in the app with no .layout/.sidebar at all (see that page's
+   own comment on why it skips app.js/nav.js) — this is its entire visual
+   shell, a single centered card. */
+.auth-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.auth-card {
+  width: 360px;
+  max-width: 100%;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 28px 26px 26px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+}
+
+.auth-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 22px; }
+.auth-brand .brand-mark { width: 24px; height: 24px; color: var(--accent); }
+
+.auth-title { font-size: 18px; font-weight: 700; margin: 0 0 6px; letter-spacing: -0.01em; }
+
+.auth-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin: 14px 0 6px;
+}
+.auth-label:first-of-type { margin-top: 4px; }
+
+.auth-page .field-input { width: 100%; }
+.auth-submit { width: 100%; justify-content: center; margin-top: 20px; }
+
 /* Modal */
 .modal-overlay {
   display: none;
@@ -1489,6 +1865,36 @@ input[type="range"].size-slider::-moz-range-track {
 
 .modal-label { font-size: 12px; color: var(--text-secondary); margin: 0 0 10px; }
 
+/* Settings > Profiles' per-quality-tier allow-list (ProfilesPage.jsx) — a
+   checkbox per Settings > Quality tier, wrapping into as many rows as it
+   needs rather than a fixed-width single column, since the tier count is
+   entirely user-managed (could be a handful or over a dozen). */
+.quality-checklist {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 12px;
+  margin: 0 0 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.quality-checklist-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+.quality-checklist-item input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
 /* ---------- Episode details modal (public/js/lib/episode-details-modal.js) ---------- */
 
 .episode-detail-row {
@@ -1535,10 +1941,45 @@ input[type="range"].size-slider::-moz-range-track {
 
 /* ---------- Edit Series modal ---------- */
 
-.path-field-row { display: flex; gap: 6px; }
-.path-field-row .field-input { flex: 1; margin-bottom: 0 !important; }
-.path-browse-btn { width: 36px; height: 32px; padding: 0; justify-content: center; flex-shrink: 0; }
-.path-browse-btn svg { width: 14px; height: 14px; }
+/* Path: editable field + Browse button, same server-directory-browse widget
+   Settings > Media Management's "Add root folder" uses (see RootFolders.jsx/
+   file-browser-modal.js) — added so a series whose real on-disk folder name
+   doesn't match its title/alt_titles (defaultSeriesPathFor/
+   findExistingSeriesFolder on the server can only match by name) can still
+   be pointed at the right folder by hand instead of getting permanently
+   stuck on "couldn't find a matching folder". */
+/* width: 100% (not just display: flex) — .field-control.full is itself a
+   flex row (inherited from .field-control's base display: flex), so without
+   an explicit width/flex-grow this row was only ever as wide as its own
+   content (input + button, shrink-to-fit) rather than actually filling the
+   full-width space .field-control.full reserves for it — the real cause of
+   the input rendering narrow with a dead gap before the modal's right edge,
+   Browse button nowhere near "in line" with it. */
+.edit-series-path-row { display: flex; gap: 8px; align-items: center; width: 100%; }
+/* .modal-body .field-input's own margin-bottom: 16px (below, meant for a
+   plain field-input sitting directly in a modal body — e.g. a single-field
+   modal that needs breathing room before whatever comes next) matches by
+   class alone regardless of nesting depth, so it was reaching into this row
+   too. That stray 16px bottom margin made the input's own box taller than
+   the Browse button's, and align-items: center centers each flex item by
+   its full margin box — so the input's visible edges ended up sitting
+   noticeably higher than the button's, instead of level with it. This row
+   supplies its own spacing (the field's gap: 8px, above), so the input here
+   never wanted that margin to begin with. */
+.edit-series-path-row .field-input { margin-bottom: 0; }
+
+/* The Path row itself: label+desc and the input+Browse button used to share
+   .form-row's normal side-by-side layout (label capped at 380px, control
+   taking the rest), which is fine for every other field here but not for
+   this one — the description got long enough (explaining when/why to
+   browse) that on a real modal width the input+button had too little room
+   left and visually collided with the wrapped description text underneath.
+   Stacking (label+desc on their own full-width line, then the input+button
+   below on their own full-width line) removes that horizontal competition
+   entirely instead of just narrowing the collision window. */
+.edit-series-path-field { flex-direction: column; align-items: stretch; gap: 8px; }
+.edit-series-path-field .field-label { max-width: none; }
+.edit-series-path-field .field-control.full { width: 100%; }
 
 .edit-series-tags {
   display: flex;
@@ -1589,13 +2030,47 @@ input[type="range"].size-slider::-moz-range-track {
 .file-browser-row svg { width: 15px; height: 15px; color: var(--text-muted); }
 .file-browser-row.parent-row { color: var(--text-secondary); }
 
+/* ---------- Rename Files modal (SeriesPage.jsx) ---------- */
+/* Reuses .file-browser-list-wrap's bordered/scrollable box rather than a
+   new container — same "one list widget shape" every other in-modal list in
+   this app already shares (see also the file browser above). */
+.rename-select-all {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12.5px; color: var(--text-secondary); margin: 0 0 10px; cursor: pointer;
+}
+.rename-preview-list { max-height: 320px; overflow-y: auto; }
+.rename-file-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 9px 12px; cursor: pointer; border-bottom: 1px solid var(--border);
+}
+.rename-file-row:last-child { border-bottom: none; }
+.rename-file-row:hover { background: var(--surface-2); }
+.rename-file-names { min-width: 0; flex: 1; }
+.rename-old-name {
+  margin: 0 0 2px; font-size: 11.5px; color: var(--text-muted);
+  text-decoration: line-through; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rename-new-name {
+  margin: 0; font-size: 12.5px; font-weight: 600; color: var(--text-primary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
 /* ---------- Release picker modal (Wanted > Missing/Cutoff Unmet "Search") ---------- */
+
+/* Its own width rather than reusing .modal-box.wide (620px, shared by a
+   dozen other unrelated modals) — a release title is the one piece of
+   information this modal exists to show clearly (fansub/scene release
+   names run long, and the previous 620px box left the title column only
+   ~70px wide after the other five fixed-width columns, gaps, and padding —
+   almost everything ellipsized). 900px gives that column roughly 350px
+   instead, without needing to touch any other modal's sizing. */
+.modal-box.release-picker-box { width: 900px; }
 
 .release-list-wrap {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   overflow: hidden;
-  max-height: 340px;
+  max-height: 440px;
   overflow-y: auto;
 }
 .release-header, .release-row {
@@ -1624,7 +2099,37 @@ input[type="range"].size-slider::-moz-range-track {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: 12.5px;
+  color: inherit;
+  text-decoration: none;
+}
+/* A <span> (no real detail page to link to) stays plain; an <a> (release-
+   picker-modal.js's titleCell — a real infoUrl came back from Nyaa.si/
+   Prowlarr) gets a "this opens something" cue, same idea as Sonarr/Radarr's
+   own manual search letting you click through to a release's real page
+   before grabbing it. */
+a.release-title {
+  color: var(--accent);
+  cursor: pointer;
+}
+a.release-title:hover { text-decoration: underline; }
+/* A release outside the series' Quality Profile (release-picker-modal.js) —
+   never hidden, just visually deprioritized: dimmed row plus a small flag
+   next to its quality tag, matching the "flag, don't filter" behavior
+   server/lib/quality.js's rankReleaseCandidates already implements. */
+.release-row.out-of-profile { opacity: 0.55; }
+.release-row.out-of-profile:hover { opacity: 0.85; }
+.quality-flag.out-of-profile-flag {
+  display: inline-block;
+  margin-left: 5px;
+  padding: 1px 5px;
+  font-size: 9.5px;
+  font-family: var(--font-ui);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--warning);
+  background: var(--warning-bg);
+  border-radius: 4px;
 }
 
 /* ---------- Queue progress bar ---------- */
@@ -1632,6 +2137,24 @@ input[type="range"].size-slider::-moz-range-track {
 .queue-progress { display: flex; flex-direction: column; gap: 4px; }
 .queue-progress .progress { height: 5px; }
 .queue-progress .progress-label { font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); }
+
+/* ---------- Download Clients: Torrents modal (real qBittorrent torrent
+   list — see DownloadClients.jsx's TorrentsModal / server/lib/download-clients/qbittorrent.js) ---------- */
+.torrent-add-row { display: flex; gap: 8px; margin-bottom: 14px; }
+.torrent-add-row .field-input { flex: 1; }
+.torrent-list { display: flex; flex-direction: column; gap: 2px; max-height: 360px; overflow-y: auto; }
+.torrent-row {
+  display: grid;
+  grid-template-columns: 1fr 130px 32px 32px;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+.torrent-row:first-child { border-top: none; }
+.torrent-row-main { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.torrent-row-main .settings-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.torrent-row .queue-progress .progress-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ---------- Add New (Library) ---------- */
 
@@ -1748,20 +2271,9 @@ input[type="range"].size-slider::-moz-range-track {
   max-height: 220px;
   overflow-y: auto;
   margin: 0 0 12px;
-  /* Firefox: thin scrollbar in muted theme colors instead of the default
-     chunky OS one. */
-  scrollbar-width: thin;
-  scrollbar-color: var(--border-strong) transparent;
+  /* Scrollbar styling is global now (see the "Scrollbars" section near the
+     top of this file) — no need for a per-component override here anymore. */
 }
-/* Chromium/Safari: same idea via the vendor-prefixed pseudo-elements —
-   Firefox ignores these, so both rules are needed to cover every browser. */
-.preview-overview::-webkit-scrollbar { width: 6px; }
-.preview-overview::-webkit-scrollbar-track { background: transparent; }
-.preview-overview::-webkit-scrollbar-thumb {
-  background: var(--border-strong);
-  border-radius: 999px;
-}
-.preview-overview::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
 .preview-alt-titles { font-size: 12px; color: var(--text-muted); }
 .preview-alt-titles p { margin: 0 0 4px; }

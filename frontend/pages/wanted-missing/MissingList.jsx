@@ -52,10 +52,10 @@ export default function MissingList({ buttonContainer }) {
   async function handleSearchAll() {
     if (searching || !episodes || episodes.length === 0) return;
     setSearching(true);
-    // Grabs the top (best-sorted) simulated release for every currently
-    // visible row, same as real Sonarr's "Search All" — no picker, just the
-    // best match per episode. Sequential rather than Promise.all so the
-    // queue doesn't get N simultaneous POSTs racing each other.
+    // Grabs the top (best-sorted) release for every currently visible row,
+    // same as real Sonarr's "Search All" — no picker, just the best match
+    // per episode. Sequential rather than Promise.all so the queue doesn't
+    // get N simultaneous POSTs racing each other.
     for (const ep of episodes) {
       try {
         await fetch('/api/queue', {

@@ -29,6 +29,22 @@ function isPushover(section, item) {
   return section === 'connect' && item.type === 'pushover';
 }
 
+// The first real Indexers row — see server/lib/nyaa-search.js. Only its row
+// Test button goes real (POST /api/indexers/:id/test); the edit modal stays
+// on the generic Protocol/meta/Priority fields since Nyaa.si needs no
+// credentials to search, unlike Pushover's real fields above.
+function isNyaa(section, item) {
+  return section === 'indexers' && item.type === 'nyaa';
+}
+
+// The second real Indexers row — see server/lib/prowlarr-search.js. Unlike
+// Nyaa.si, Prowlarr needs real credentials (a base URL + API key) to reach
+// the user's own Prowlarr instance, so its edit modal gets its own real
+// fields, same idea as Pushover's User Key/API Token above.
+function isProwlarr(section, item) {
+  return section === 'indexers' && item.type === 'prowlarr';
+}
+
 function pushoverMetaLabel(item) {
   const on = PUSHOVER_TRIGGER_LABELS.filter(([key]) => item[key]).map(([, label]) => label);
   return on.length > 0 ? `On ${on.join(', ')}` : 'No triggers';
@@ -62,6 +78,7 @@ function FieldRow({ label, desc, children }) {
 // string arms.
 function EditModal({ item, section, metaLabel, onChange, onClose, onTest, testing, testResult }) {
   const pushover = isPushover(section, item);
+  const prowlarr = isProwlarr(section, item);
 
   return (
     <div className="modal-overlay open" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -110,6 +127,35 @@ function EditModal({ item, section, metaLabel, onChange, onClose, onTest, testin
                 {testResult ? testResult.message : ''}
               </p>
             </>
+          ) : prowlarr ? (
+            <>
+              <FieldRow label="Base URL" desc="Your Prowlarr instance's address, including http(s):// — e.g. http://192.168.1.20:9696.">
+                <input
+                  className="field-input" type="text" autoComplete="off"
+                  placeholder="http://192.168.1.20:9696"
+                  value={item.baseUrl || ''} onChange={(e) => onChange('baseUrl', e.target.value)}
+                />
+              </FieldRow>
+              <FieldRow label="API Key" desc="Settings > General > Security in Prowlarr.">
+                <input
+                  className="field-input" type="password" autoComplete="new-password"
+                  placeholder="Your Prowlarr API key"
+                  value={item.apiKey || ''} onChange={(e) => onChange('apiKey', e.target.value)}
+                />
+              </FieldRow>
+              <FieldRow label="Allow self-signed certificate" desc="Only enable this for an instance you trust — e.g. an internal address like prowlarr.example.lan with your own self-signed cert. Skips certificate verification for this indexer.">
+                <label style={{ display: 'flex', alignItems: 'center', gap: '7px', fontSize: '13px', fontWeight: 500 }}>
+                  <input type="checkbox" checked={!!item.allowInsecureSsl} onChange={(e) => onChange('allowInsecureSsl', e.target.checked)} />
+                  Skip certificate verification
+                </label>
+              </FieldRow>
+              <FieldRow label="Priority">
+                <input className="field-input" type="number" value={item.priority} onChange={(e) => onChange('priority', Number(e.target.value))} />
+              </FieldRow>
+              <p className={`form-error${testResult ? '' : ' is-collapsed'}`} style={{ color: testResult && testResult.ok ? 'var(--success)' : 'var(--danger)' }}>
+                {testResult ? testResult.message : ''}
+              </p>
+            </>
           ) : (
             <>
               <FieldRow label="Protocol">
@@ -130,6 +176,11 @@ function EditModal({ item, section, metaLabel, onChange, onClose, onTest, testin
               {testing ? 'Sending…' : 'Send Test Notification'}
             </button>
           )}
+          {prowlarr && (
+            <button type="button" className="btn-test" disabled={testing} onClick={onTest}>
+              {testing ? 'Testing…' : 'Test'}
+            </button>
+          )}
           <button className="btn-accent" type="button" onClick={onClose}>Done</button>
         </div>
       </div>
@@ -145,6 +196,15 @@ export default function ConnectionManager({ section, types, metaLabel, priorityL
   const [testingIds, setTestingIds] = useState(() => new Set());
   const [modalTesting, setModalTesting] = useState(false);
   const [modalTestResult, setModalTestResult] = useState(null);
+  // { id, ok } for exactly the one render right after its Test (row button
+  // or the modal's own Test) comes back — a green three-pulse flash when
+  // ok, red when it isn't (see .row-flash-success / .row-flash-fail in
+  // styles.css), shared by every Test button in the app the same way
+  // Download Clients established. A test run from inside the edit modal
+  // still sets this even though the row is hidden behind the modal at that
+  // instant; the flash plays the next time the row actually renders, i.e.
+  // the moment the modal closes.
+  const [flash, setFlash] = useState(null);
 
   const editingItem = editingId != null ? data.find((d) => d.id === editingId) || null : null;
 
@@ -199,6 +259,14 @@ export default function ConnectionManager({ section, types, metaLabel, priorityL
     setModalTestResult(null);
   }, [editingId]);
 
+  // The flash is meant for exactly one render — clear it right after so it
+  // doesn't replay on a later, unrelated re-render of the same row.
+  useEffect(() => {
+    if (!flash) return;
+    const t = setTimeout(() => setFlash(null), 1600);
+    return () => clearTimeout(t);
+  }, [flash]);
+
   function handleToggleEnabled(item, enabled) {
     setData((prev) => prev.map((d) => (d.id === item.id ? { ...d, enabled } : d)));
     patchItem(section, item.id, { enabled });
@@ -212,6 +280,7 @@ export default function ConnectionManager({ section, types, metaLabel, priorityL
   async function handleRowTest(item) {
     if (testingIds.has(item.id)) return;
     setTestingIds((prev) => new Set(prev).add(item.id));
+    let ok = false;
     if (isPushover(section, item)) {
       // A real test against whatever's already saved — no unsaved-field
       // overrides here, those only apply from inside the edit modal's own
@@ -222,6 +291,26 @@ export default function ConnectionManager({ section, types, metaLabel, priorityL
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
         });
         const result = await res.json();
+        ok = !!result.ok;
+        setData((prev) => prev.map((d) => (d.id === item.id ? (result.item ? { ...d, ...result.item } : { ...d, status: 'fail' }) : d)));
+      } catch {
+        setData((prev) => prev.map((d) => (d.id === item.id ? { ...d, status: 'fail' } : d)));
+      }
+    } else if (isNyaa(section, item) || isProwlarr(section, item)) {
+      // Real too — a plain connectivity check against Nyaa.si or Prowlarr
+      // itself (see server/lib/nyaa-search.js's testNyaaReachable and
+      // server/lib/prowlarr-search.js's testProwlarrReachable, both behind
+      // the same POST /api/indexers/:id/test route, which branches on the
+      // saved row's own type) — same real-vs-fail shape as Pushover's test
+      // above. Prowlarr's Base URL/API Key are already saved by the time
+      // this runs (every field auto-saves on change — see
+      // handleFieldChange), so testing straight from the saved row already
+      // reflects whatever's currently typed in the modal, no separate
+      // unsaved-overrides path needed the way Pushover's modal Test has.
+      try {
+        const res = await fetch(`/api/indexers/${item.id}/test`, { method: 'POST' });
+        const result = await res.json();
+        ok = !!result.ok;
         setData((prev) => prev.map((d) => (d.id === item.id ? (result.item ? { ...d, ...result.item } : { ...d, status: 'fail' }) : d)));
       } catch {
         setData((prev) => prev.map((d) => (d.id === item.id ? { ...d, status: 'fail' } : d)));
@@ -232,10 +321,12 @@ export default function ConnectionManager({ section, types, metaLabel, priorityL
       // healthy, same as the original's fake 700ms Test.
       await new Promise((r) => setTimeout(r, 700));
       const status = item.status === 'fail' ? 'fail' : 'ok';
+      ok = status === 'ok';
       setData((prev) => prev.map((d) => (d.id === item.id ? { ...d, status } : d)));
       patchItem(section, item.id, { status });
     }
     setTestingIds((prev) => { const next = new Set(prev); next.delete(item.id); return next; });
+    setFlash({ id: item.id, ok });
   }
 
   function handleFieldChange(key, value) {
@@ -257,6 +348,31 @@ export default function ConnectionManager({ section, types, metaLabel, priorityL
     if (modalTesting || !editingItem) return;
     setModalTesting(true);
     setModalTestResult(null);
+
+    if (isProwlarr(section, editingItem)) {
+      // No overrides body needed here the way Pushover's test below sends
+      // one — Base URL/API Key already auto-saved via handleFieldChange by
+      // the time a keystroke lands, so POST /api/indexers/:id/test (which
+      // reads the saved row, same as the row-level Test button) already
+      // reflects whatever's currently typed.
+      try {
+        const res = await fetch(`/api/indexers/${editingItem.id}/test`, { method: 'POST' });
+        const result = await res.json();
+        if (result.item) setData((prev) => prev.map((d) => (d.id === editingItem.id ? { ...d, ...result.item } : d)));
+        setModalTestResult({
+          message: result.ok ? 'Connected.' : (result.error || 'Could not reach Prowlarr.'),
+          ok: result.ok,
+        });
+        setFlash({ id: editingItem.id, ok: result.ok });
+      } catch {
+        setModalTestResult({ message: 'Request failed — is the Kitsune server reachable?', ok: false });
+        setFlash({ id: editingItem.id, ok: false });
+      } finally {
+        setModalTesting(false);
+      }
+      return;
+    }
+
     // Every field currently shown in the modal — controlled inputs mean
     // `editingItem` already holds whatever's currently typed (see
     // handleFieldChange, which writes into `data` on every change), so
@@ -277,8 +393,10 @@ export default function ConnectionManager({ section, types, metaLabel, priorityL
         message: result.ok ? 'Sent — check your device.' : (result.error || 'Could not send the test notification.'),
         ok: result.ok,
       });
+      setFlash({ id: editingItem.id, ok: result.ok });
     } catch {
       setModalTestResult({ message: 'Request failed — is the Kitsune server reachable?', ok: false });
+      setFlash({ id: editingItem.id, ok: false });
     } finally {
       setModalTesting(false);
     }
@@ -332,7 +450,7 @@ export default function ConnectionManager({ section, types, metaLabel, priorityL
         <p className="settings-empty">None configured yet.</p>
       ) : (
         data.map((item) => (
-          <div className="settings-row" data-id={item.id} key={item.id}>
+          <div className={`settings-row${flash && flash.id === item.id ? (flash.ok ? ' row-flash-success' : ' row-flash-fail') : ''}`} data-id={item.id} key={item.id}>
             <div className="settings-name">
               <p className="settings-title">{item.name}</p>
               <span className="audio-tag">{item.protocol}</span>

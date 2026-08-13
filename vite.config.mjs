@@ -73,6 +73,9 @@ export default defineConfig({
         'library-grid': resolve(process.cwd(), 'frontend/pages/library-grid/main.jsx'),
         'series': resolve(process.cwd(), 'frontend/pages/series/main.jsx'),
         'settings-metadata': resolve(process.cwd(), 'frontend/pages/settings-metadata/main.jsx'),
+        'login': resolve(process.cwd(), 'frontend/pages/login/main.jsx'),
+        'settings-users': resolve(process.cwd(), 'frontend/pages/settings-users/main.jsx'),
+        'account': resolve(process.cwd(), 'frontend/pages/account/main.jsx'),
       },
       output: {
         // Vite's default output filenames include a content hash

@@ -12,16 +12,42 @@ import { tagChipStyleObj as baseTagChipStyleObj } from '../../lib/tagChipStyleOb
 
 const badgeLabel = { airing: 'Airing', missing: 'Missing', downloading: 'Downloading', unmonitored: 'Unmonitored' };
 
-const LIBRARY_VIEW_KEY = 'kitsune-library-view';
 const VALID_VIEWS = new Set(['poster', 'table', 'overview']);
-function loadStoredView() {
-  try {
-    const stored = localStorage.getItem(LIBRARY_VIEW_KEY);
-    return VALID_VIEWS.has(stored) ? stored : 'poster';
-  } catch {
-    return 'poster'; // localStorage can throw in some locked-down contexts — just fall back
-  }
+
+// The episode-progress bar's color used to be a static `fill` column
+// (accent/success/warning) hand-set once at series creation and never
+// touched again — so a series could sit at 100% downloaded and still show
+// whatever color it happened to be seeded/added with. It's computed here
+// instead, live, from the same real `pct` (downloaded/total episodes,
+// see server/lib/series-stats.js) that already drives the bar's width, so
+// the color always means the same thing the width does: red-ish while
+// badly behind, blending through the app's existing warning yellow, solid
+// green once every episode is actually on disk. 0% renders neutral gray
+// rather than alarming red — a freshly-added series with nothing grabbed
+// yet hasn't failed anything, it just hasn't been searched.
+const PROGRESS_NEUTRAL = '#6b6c78'; // var(--text-muted)
+const PROGRESS_STOPS = [
+  [237, 91, 101],  // var(--danger)  #ed5b65 — 0% (once above neutral)
+  [242, 183, 5],   // var(--warning) #f2b705 — 50%
+  [62, 213, 152],  // var(--success) #3ed598 — 100%
+];
+function mixRgb(a, b, t) {
+  return a.map((v, i) => Math.round(v + (b[i] - v) * t));
 }
+function progressColor(pct) {
+  if (!pct || pct <= 0) return PROGRESS_NEUTRAL;
+  const t = Math.min(100, Math.max(0, pct)) / 100;
+  const [r, g, b] = t <= 0.5
+    ? mixRgb(PROGRESS_STOPS[0], PROGRESS_STOPS[1], t / 0.5)
+    : mixRgb(PROGRESS_STOPS[1], PROGRESS_STOPS[2], (t - 0.5) / 0.5);
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
+// Poster size slider bounds/default — a 140px card (the grid's own unscaled
+// base, see .series-grid in styles.css) scaled from 98px to 224px.
+const POSTER_SCALE_MIN = 0.7;
+const POSTER_SCALE_MAX = 1.6;
+const POSTER_SCALE_DEFAULT = 1;
 
 // The Library grid's own tag chips are shown a bit smaller (--tag-scale)
 // than Settings > Tags' or the Edit Series modal's — same base color math,
@@ -66,9 +92,18 @@ function statusChipFor(s) {
   return s.status === 'ended' ? { label: 'Ended', cls: 'ended' } : { label: 'Continuing', cls: 'continuing' };
 }
 
+// Same shortening SeriesPage.jsx applies to its own "Next airing" stat card
+// — MAL's full-sentence status labels ("Finished Airing", etc.) are too long
+// for a small table/overview cell. Display-only; the real label is still
+// what's stored.
+const SHORT_AIR_STATUS = {
+  'Finished Airing': 'Ended',
+  'Currently Airing': 'Airing',
+  'Not Yet Aired': 'Upcoming',
+};
 function nextAiringText(s) {
   if (s.nextAirDays != null) return `in ${s.nextAirDays}d`;
-  if (s.airStatus) return s.airStatus;
+  if (s.airStatus) return SHORT_AIR_STATUS[s.airStatus] || s.airStatus;
   if (s.status === 'ended') return 'Ended';
   return '—';
 }
@@ -94,7 +129,7 @@ function PosterCard({ s }) {
       </div>
       <div className="card-body">
         <p className="card-title">{s.title}</p>
-        <div className="progress"><div className={`fill ${s.fill}`} style={{ width: `${s.pct}%` }} /></div>
+        <div className="progress"><div className="fill" style={{ width: `${s.pct}%`, background: progressColor(s.pct) }} /></div>
       </div>
     </a>
   );
@@ -111,7 +146,7 @@ function TableRow({ s, tags }) {
       <span><span className={`status-chip ${chip.cls}`}>{chip.label}</span></span>
       <span className="series-table-eps">
         <span className="ep-date">{s.eps}</span>
-        <div className="progress"><div className={`fill ${s.fill}`} style={{ width: `${s.pct}%` }} /></div>
+        <div className="progress"><div className="fill" style={{ width: `${s.pct}%`, background: progressColor(s.pct) }} /></div>
       </span>
       <span className="settings-meta">{s.qualityProfile || '—'}</span>
       <span className="ep-date">{nextAiringText(s)}</span>
@@ -137,7 +172,7 @@ function OverviewRow({ s, tags }) {
         <p className="overview-meta">{s.meta || '—'}{s.monitored ? '' : ' · Unmonitored'}</p>
         <p className="overview-desc">{s.overview || 'No overview available yet.'}</p>
         <div className="overview-footer">
-          <div className="progress"><div className={`fill ${s.fill}`} style={{ width: `${s.pct}%` }} /></div>
+          <div className="progress"><div className="fill" style={{ width: `${s.pct}%`, background: progressColor(s.pct) }} /></div>
           <span>{s.eps} episodes</span>
           <span>{s.qualityProfile || 'No quality profile'}</span>
           <span>{nextAiringText(s)}</span>
@@ -188,9 +223,85 @@ export default function LibraryGridPage({ searchContainer }) {
   const [filter, setFilter] = useState('all');
   const [sort, setSort] = useState('title');
   const [query, setQuery] = useState('');
-  const [view, setView] = useState(loadStoredView);
+  const [view, setView] = useState('poster');
   const [tags, setTags] = useState([]);
   const tagsLoadedRef = useRef(false);
+
+  // Poster size slider (Poster view only). Written straight to the grid's
+  // own CSS custom property via refs, the same imperative pattern Settings
+  // > Tags' cloud-size slider already uses (see TagsPage.jsx) — a drag
+  // shouldn't cause a React re-render of every card, just a CSS relayout of
+  // the existing DOM nodes. Both this and `view` above are real per-user
+  // preferences, loaded from and saved to /api/user-prefs/library-ui-prefs
+  // (see server/routes/user-prefs.js) — one record per signed-in user, not
+  // a single value shared by the whole server or a browser-local
+  // localStorage entry, which is what each of these used to be before user
+  // accounts existed to hang a real per-user record off of. Size saves are
+  // debounced the same 400ms every other settings control in this app uses;
+  // view changes save immediately, same as before.
+  const gridRef = useRef(null);
+  const posterSliderRef = useRef(null);
+  const posterScaleRef = useRef(POSTER_SCALE_DEFAULT);
+  const posterSaveTimerRef = useRef(null);
+
+  function applyPosterScale(value) {
+    if (gridRef.current) gridRef.current.style.setProperty('--poster-scale', value);
+    const slider = posterSliderRef.current;
+    if (!slider) return;
+    slider.value = value;
+    const min = Number(slider.min);
+    const max = Number(slider.max);
+    const pct = ((value - min) / (max - min)) * 100;
+    slider.style.background = `linear-gradient(to right, var(--accent) 0%, var(--accent) ${pct}%, var(--surface-3) ${pct}%, var(--surface-3) 100%)`;
+  }
+
+  function handlePosterSliderInput() {
+    const slider = posterSliderRef.current;
+    if (!slider) return;
+    const value = Number(slider.value);
+    posterScaleRef.current = value;
+    applyPosterScale(value);
+    clearTimeout(posterSaveTimerRef.current);
+    posterSaveTimerRef.current = setTimeout(() => {
+      fetch('/api/user-prefs/library-ui-prefs', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ posterSize: value }),
+      }).catch(() => {});
+    }, 400);
+  }
+
+  // Load this user's saved view + poster size once on mount, in the one
+  // fetch — both fields live in the same /api/user-prefs/library-ui-prefs
+  // record. applyPosterScale() is a no-op on whichever ref (grid/slider)
+  // isn't around yet, same as before; setView() only fires for a genuinely
+  // valid stored value, so an empty/first-visit response (or a request that
+  // fails outright — e.g. offline) just leaves the 'poster'/default-scale
+  // state this component already started with.
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/user-prefs/library-ui-prefs');
+        const saved = await res.json();
+        if (VALID_VIEWS.has(saved.view)) setView(saved.view);
+        const value = Number(saved.posterSize);
+        if (value >= POSTER_SCALE_MIN && value <= POSTER_SCALE_MAX) posterScaleRef.current = value;
+      } catch { /* defaults stand */ }
+      applyPosterScale(posterScaleRef.current);
+    })();
+  }, []);
+
+  // The slider only exists in the DOM while view === 'poster' (it's
+  // conditionally rendered below), so re-apply the current value and
+  // (re)wire its input listener every time it (re)mounts — e.g. switching
+  // back to Poster from Table/Overview.
+  useEffect(() => {
+    if (view !== 'poster') return;
+    applyPosterScale(posterScaleRef.current);
+    const slider = posterSliderRef.current;
+    if (!slider) return;
+    slider.addEventListener('input', handlePosterSliderInput);
+    return () => slider.removeEventListener('input', handlePosterSliderInput);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view]);
 
   useEffect(() => {
     (async () => {
@@ -223,7 +334,9 @@ export default function LibraryGridPage({ searchContainer }) {
 
   function handleViewChange(nextView) {
     setView(nextView);
-    try { localStorage.setItem(LIBRARY_VIEW_KEY, nextView); } catch { /* best-effort */ }
+    fetch('/api/user-prefs/library-ui-prefs', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ view: nextView }),
+    }).catch(() => {});
   }
 
   let gridContent;
@@ -288,6 +401,16 @@ export default function LibraryGridPage({ searchContainer }) {
             <option value="next-airing">Sort: next airing</option>
             <option value="recently-added">Sort: recently added</option>
           </select>
+          {view === 'poster' && (
+            <div className="poster-size-control">
+              <span className="poster-size-label">Size</span>
+              <input
+                ref={posterSliderRef} className="size-slider" type="range"
+                min={POSTER_SCALE_MIN} max={POSTER_SCALE_MAX} step="0.1"
+                defaultValue={POSTER_SCALE_DEFAULT} aria-label="Poster size"
+              />
+            </div>
+          )}
           <div className="view-toggle">
             <button type="button" className={view === 'poster' ? 'active' : ''} aria-label="Poster view" title="Poster" onClick={() => handleViewChange('poster')}>{icons.viewPoster}</button>
             <button type="button" className={view === 'table' ? 'active' : ''} aria-label="Table view" title="Table" onClick={() => handleViewChange('table')}>{icons.viewTable}</button>
@@ -296,7 +419,7 @@ export default function LibraryGridPage({ searchContainer }) {
         </div>
       </div>
 
-      <div className={gridClassName} id="seriesGrid">{gridContent}</div>
+      <div className={gridClassName} id="seriesGrid" ref={gridRef}>{gridContent}</div>
     </>
   );
 }

@@ -61,11 +61,22 @@ const NAV_SECTIONS = [
       { href: 'settings-tags.html', label: 'Tags' },
       { href: 'settings-general.html', label: 'General' },
       { href: 'settings-ui.html', label: 'UI' },
+      // Admin-only (see requireAdmin in server/routes/auth.js — the page
+      // itself and its /api/users endpoints both enforce this too, this is
+      // just keeping a standard user from seeing a link that would 403).
+      { href: 'settings-users.html', label: 'Users', adminOnly: true },
     ],
   },
   {
     label: 'System',
     toggle: true,
+    // Admin-only, the whole section — Status/Tasks/Backup/Updates/Events/Logs
+    // are server-operator concerns (who's allowed to back up or restart the
+    // instance, read its logs, etc.), not something a standard user needs to
+    // see at all. Unlike Settings > Users (one adminOnly sub-link inside an
+    // otherwise-visible section), this hides the entire top-level nav item —
+    // see the adminOnly check in visibleSections() below.
+    adminOnly: true,
     icon: '<rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><circle cx="7" cy="7.5" r="0.8" fill="currentColor" stroke="none"/><circle cx="7" cy="16.5" r="0.8" fill="currentColor" stroke="none"/>',
     subs: [
       { href: 'system-status.html', label: 'Status' },
@@ -78,9 +89,33 @@ const NAV_SECTIONS = [
   },
 ];
 
+// Filled in by checkAuthAndInit() below before anything renders — every
+// function past that point can assume it's already resolved.
+let currentUser = null;
+
 function currentFile() {
   const file = location.pathname.split('/').pop();
   return file || 'index.html';
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+}
+
+// Two levels of admin-only gating: a whole top-level section (System) can be
+// hidden outright, or just one of its sub-links (Settings > Users) filtered
+// out while the rest of that section stays visible. Every other section/sub
+// passes through unchanged for a standard user.
+function isAdmin() {
+  return !!(currentUser && currentUser.role === 'admin');
+}
+function visibleSections() {
+  return NAV_SECTIONS
+    .filter((section) => !section.adminOnly || isAdmin())
+    .map((section) => {
+      if (section.divider || !section.subs) return section;
+      return { ...section, subs: section.subs.filter((s) => !s.adminOnly || isAdmin()) };
+    });
 }
 
 function sectionMatches(section, file) {
@@ -95,18 +130,62 @@ function sectionMatches(section, file) {
   return section.subs.some((s) => s.href === file);
 }
 
+// The sidebar's bottom-most block — avatar initial, username, role, and a
+// small dropdown (My Account / Log out). Pinned to the bottom by its own
+// margin-top: auto (see .user-chip-wrap in styles.css), not by DOM position
+// — it's simply the last thing rendered into the sidebar now that the
+// collapse toggle lives up in the brand row instead of below it.
+// Returns '' when signed out, but checkAuthAndInit() below never actually
+// renders the sidebar in that state (it redirects to login.html first), so
+// this is really just a defensive fallback.
+function renderUserChip() {
+  if (!currentUser) return '';
+  const initial = escapeHtml(currentUser.username.slice(0, 1).toUpperCase());
+  const name = escapeHtml(currentUser.username);
+  const roleLabel = currentUser.role === 'admin' ? 'Admin' : 'Standard';
+  return `
+    <div class="user-chip-wrap">
+      <div class="user-chip" id="userChip">
+        <div class="user-avatar">${initial}</div>
+        <div class="user-chip-info">
+          <span class="user-chip-name">${name}</span>
+          <span class="user-chip-role">${roleLabel}</span>
+        </div>
+        <svg class="user-chip-caret" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 9l6 6 6-6"/></svg>
+      </div>
+      <div class="user-menu" id="userMenu">
+        <a href="account.html">My Account</a>
+        <button type="button" id="logoutBtn">Log out</button>
+      </div>
+    </div>`;
+}
+
 function renderSidebar() {
   const sidebar = document.getElementById('sidebar');
   if (!sidebar) return;
   const file = currentFile();
+  const sections = visibleSections();
 
+  // The collapse toggle used to be its own full-width bar at the very
+  // bottom of the sidebar, right below the user chip. It now lives here
+  // instead, as a plain hamburger icon button at the right edge of the
+  // brand row — a hamburger rather than the old chevron+"Collapse" label
+  // since a ubiquitous, label-free icon reads fine at this smaller size and
+  // needs no text to explain what it does, unlike the old full-width bar.
+  // Same #collapseToggle id, so initSidebarInteractions() below needs no
+  // changes to find/wire it up.
   const brand = `
     <div class="brand">
-      <svg class="brand-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3c2 2.5 2 5 2 5s2.5-1 4-1 3 1 3 3-1.5 3-3 3c1 1.5 1 3.5-.5 5C16 19.5 14 19 12 21c-2-2-4-1.5-5.5-3-1.5-1.5-1.5-3.5-.5-5-1.5 0-3-1-3-3s1.5-3 3-3 4 1 4 1 0-2.5 2-5z"/></svg>
-      <span class="brand-name">Kitsune</span>
+      <div class="brand-identity">
+        <svg class="brand-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3c2 2.5 2 5 2 5s2.5-1 4-1 3 1 3 3-1.5 3-3 3c1 1.5 1 3.5-.5 5C16 19.5 14 19 12 21c-2-2-4-1.5-5.5-3-1.5-1.5-1.5-3.5-.5-5-1.5 0-3-1-3-3s1.5-3 3-3 4 1 4 1 0-2.5 2-5z"/></svg>
+        <span class="brand-name">Kitsune</span>
+      </div>
+      <button type="button" class="collapse-toggle" id="collapseToggle" aria-label="Collapse sidebar" title="Collapse sidebar">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+      </button>
     </div>`;
 
-  const sections = NAV_SECTIONS.map((section) => {
+  const sectionsHtml = sections.map((section) => {
     if (section.divider) return '<div class="nav-divider"></div>';
 
     const active = sectionMatches(section, file);
@@ -136,13 +215,7 @@ function renderSidebar() {
     return item + sub;
   }).join('\n');
 
-  const collapse = `
-    <div class="collapse-toggle" id="collapseToggle">
-      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
-      <span class="collapse-label">Collapse</span>
-    </div>`;
-
-  sidebar.innerHTML = brand + sections + collapse;
+  sidebar.innerHTML = brand + sectionsHtml + renderUserChip();
 }
 
 // ---------- Page tabs: the horizontal sub-nav at the top of most pages ----------
@@ -154,9 +227,9 @@ function renderSidebar() {
 // keeping a second hand-maintained copy in sync with the sidebar's.
 function renderPageTabs() {
   const container = document.querySelector('.page-tabs');
-  if (!container) return; // index.html, series.html, calendar.html have none
+  if (!container) return; // index.html, series.html, calendar.html, account.html have none
   const file = currentFile();
-  const section = NAV_SECTIONS.find((s) => !s.divider && sectionMatches(s, file));
+  const section = visibleSections().find((s) => !s.divider && sectionMatches(s, file));
   if (!section) return;
 
   container.innerHTML = section.subs
@@ -164,33 +237,96 @@ function renderPageTabs() {
     .join('\n      ');
 }
 
-renderSidebar();
-renderPageTabs();
-
-// ---------- Sidebar collapse ----------
-const sidebar = document.getElementById('sidebar');
-const collapseToggle = document.getElementById('collapseToggle');
-if (collapseToggle) {
-  if (localStorage.getItem('kitsune-sidebar-collapsed') === '1') {
-    sidebar.classList.add('collapsed');
+// ---------- Sidebar collapse + accordion + user menu ----------
+// Wired up once, right after the sidebar's real markup exists — was two
+// separate top-level blocks running at import time before the auth gate
+// below made rendering itself conditional (see checkAuthAndInit).
+function initSidebarInteractions() {
+  const sidebar = document.getElementById('sidebar');
+  const collapseToggle = document.getElementById('collapseToggle');
+  if (collapseToggle) {
+    if (localStorage.getItem('kitsune-sidebar-collapsed') === '1') {
+      sidebar.classList.add('collapsed');
+    }
+    collapseToggle.addEventListener('click', () => {
+      sidebar.classList.toggle('collapsed');
+      localStorage.setItem('kitsune-sidebar-collapsed', sidebar.classList.contains('collapsed') ? '1' : '0');
+    });
   }
-  collapseToggle.addEventListener('click', () => {
-    sidebar.classList.toggle('collapsed');
-    localStorage.setItem('kitsune-sidebar-collapsed', sidebar.classList.contains('collapsed') ? '1' : '0');
+
+  // Only one Settings/System sub-menu is open at a time. Whichever section
+  // the current page belongs to starts open (computed in renderSidebar()
+  // above); clicking either top-level item toggles its own sub-menu and
+  // closes the other.
+  document.querySelectorAll('.nav-item.nav-toggle').forEach((item) => {
+    item.addEventListener('click', (e) => {
+      e.preventDefault();
+      const sub = item.nextElementSibling;
+      if (!sub || !sub.classList.contains('nav-sub')) return;
+      const wasOpen = sub.classList.contains('open');
+      document.querySelectorAll('.nav-sub.open').forEach((s) => s.classList.remove('open'));
+      if (!wasOpen) sub.classList.add('open');
+    });
   });
+
+  // User chip dropdown (My Account / Log out) — closes on an outside click,
+  // same interaction shape as every modal-overlay in this app, just a small
+  // inline menu instead of a centered modal.
+  const userChip = document.getElementById('userChip');
+  const userMenu = document.getElementById('userMenu');
+  if (userChip && userMenu) {
+    userChip.addEventListener('click', (e) => {
+      e.stopPropagation();
+      userMenu.classList.toggle('open');
+    });
+    document.addEventListener('click', (e) => {
+      if (!userMenu.contains(e.target) && !userChip.contains(e.target)) userMenu.classList.remove('open');
+    });
+  }
+  const logoutBtn = document.getElementById('logoutBtn');
+  if (logoutBtn) {
+    logoutBtn.addEventListener('click', async () => {
+      logoutBtn.disabled = true;
+      try {
+        await fetch('/api/auth/logout', { method: 'POST' });
+      } catch {
+        // Falls through to the redirect either way — worst case the cookie
+        // outlives the session server-side and just expires on its own.
+      }
+      window.location.href = 'login.html';
+    });
+  }
 }
 
-// ---------- Sidebar accordion (Settings / System sub-menus) ----------
-// Only one sub-menu is open at a time. Whichever section the current page
-// belongs to starts open (computed above by renderSidebar()); clicking
-// either top-level item toggles its own sub-menu and closes the other.
-document.querySelectorAll('.nav-item.nav-toggle').forEach(item => {
-  item.addEventListener('click', (e) => {
-    e.preventDefault();
-    const sub = item.nextElementSibling;
-    if (!sub || !sub.classList.contains('nav-sub')) return;
-    const wasOpen = sub.classList.contains('open');
-    document.querySelectorAll('.nav-sub.open').forEach(s => s.classList.remove('open'));
-    if (!wasOpen) sub.classList.add('open');
-  });
-});
+// ---------- Auth gate ----------
+// Every page that loads app.js (i.e. every page except login.html — see
+// that page's own comment) runs this before rendering anything. One round
+// trip to GET /api/auth/state (see server/routes/auth.js) decides: nobody's
+// ever completed first-run setup, or nobody's currently signed in → bounce
+// to login.html (carrying `next` so it can send you back here after); else
+// render the real sidebar/page-tabs with the signed-in user available to
+// them (renderUserChip, the Settings > Users filter in visibleSections).
+async function checkAuthAndInit() {
+  let state;
+  try {
+    const res = await fetch('/api/auth/state');
+    state = await res.json();
+  } catch {
+    // Server unreachable — nothing renders correctly either way, but don't
+    // bounce to login.html on a transient network hiccup and risk a loop.
+    state = { needsSetup: false, user: 'unknown' };
+  }
+
+  if (state.needsSetup || !state.user) {
+    const next = encodeURIComponent(currentFile());
+    window.location.href = `login.html?next=${next}`;
+    return;
+  }
+
+  if (state.user !== 'unknown') currentUser = state.user;
+  renderSidebar();
+  renderPageTabs();
+  initSidebarInteractions();
+}
+
+checkAuthAndInit();

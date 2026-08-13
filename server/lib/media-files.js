@@ -113,6 +113,26 @@ function guessResolutionGroup(name) {
   return null;
 }
 
+// Same resolution-group vocabulary as guessResolutionGroup above
+// ('2160p'/'1080p'/'720p'/'SD'), derived from a real, ffprobe-read video
+// stream height instead of a filename tag — see server/lib/ffprobe.js's
+// probeMediaStreams, which is what actually reads this off the file.
+// Thresholds sit a little below each standard's nominal height (1080/720/
+// 480) since real encodes commonly crop a handful of pixels (1076, 1072,
+// etc. are unmistakably "1080p" to a human, just not exactly 1080) — this
+// is a real measurement, not a text match, so it needs some tolerance
+// instead of an exact-equality check. Below the SD threshold still returns
+// 'SD' rather than null: every real video stream has *some* height, so
+// "not really any of these" isn't a real case the way "no tag in the
+// filename at all" is for the text-based guess above.
+function resolutionGroupFromHeight(height) {
+  if (!height || height <= 0) return null;
+  if (height >= 1800) return '2160p';
+  if (height >= 900) return '1080p';
+  if (height >= 500) return '720p';
+  return 'SD';
+}
+
 function guessSourceLabel(name) {
   if (/\b(bluray|bd ?rip|bdmux)\b/i.test(name)) return 'Bluray';
   if (/\bweb[- ]?dl\b/i.test(name)) return 'WEBDL';
@@ -126,11 +146,21 @@ function guessSourceLabel(name) {
 // and README's Quality Definitions section), not a fixed list, so this
 // looks the guess up against whatever's actually configured right now
 // rather than returning a tier name that might not exist anymore.
-function guessQualityTierName(filename) {
+//
+// `probedResolutionGroup` — a real value from resolutionGroupFromHeight
+// above, when the caller has one — overrides whatever (if anything) the
+// filename itself says about resolution: a real, ffprobe-read pixel height
+// is simply more trustworthy than a text tag that might be wrong or absent
+// entirely. Every caller that has a real file to probe (Library Import,
+// the per-series Rescan button, the auto-scan-on-add, a real grab's
+// completion) passes one in now; source (WEBDL/Bluray/HDTV/...) still only
+// ever comes from the name — there's no signal for *that* in the video
+// bytes themselves, so it stays a best-effort guess either way.
+function guessQualityTierName(filename, probedResolutionGroup = null) {
   const tiers = getQualityTiers();
   if (tiers.length === 0) return null;
 
-  const resGroup = guessResolutionGroup(filename);
+  const resGroup = probedResolutionGroup || guessResolutionGroup(filename);
   if (!resGroup) {
     // No resolution tag, but a source is still identifiable ("HDTV", no
     // "1080p"/"720p" alongside it) — pick that source's lowest-resolution
@@ -189,9 +219,27 @@ function guessSeasonEpisode(filename, seasonHint) {
   m = /-\s*(\d{1,3})(?:v\d)?\s*(?=\[|\(|$)/.exec(noExt);
   if (m) return { season: seasonHint ?? null, episode: Number(m[1]), confident: seasonHint != null };
 
+  // Same idea without the hyphen — "Series Name 01.mkv" or "Series Name 01
+  // [1080p].mkv", a plain space before the number instead of " - ". Common
+  // on older fansub releases (confirmed against a real one: Kiss X Sis's
+  // Season 0/Specials folder, named exactly "Kiss X Sis 01.mkv" through
+  // "12.mkv", none of which matched anything until this was added). Same
+  // whitespace-before/bracket-or-end-after boundary as the hyphen pattern
+  // above keeps a resolution tag or a year elsewhere in the title from
+  // being misread as the episode number — tried last, only once every more
+  // specific pattern above has already failed to match.
+  m = /\s(\d{1,3})(?:v\d)?\s*(?=\[|\(|$)/.exec(noExt);
+  if (m) return { season: seasonHint ?? null, episode: Number(m[1]), confident: seasonHint != null };
+
   return { season: seasonHint ?? null, episode: null, confident: false };
 }
 
+// isVideoFile is also used by server/routes/queue.js's real-import
+// completion step, to filter a completed torrent's raw GET /torrents/files
+// listing (which includes every file the torrent contains — .nfo, .srt,
+// sample clips, etc.) down to the actual episode video file(s) before
+// trying to match any of them to an episode.
 module.exports = {
   isVideoFile, isSampleFile, walkVideoFiles, summarizeFiles, guessQualityTierName, guessSeasonEpisode,
+  resolutionGroupFromHeight,
 };
