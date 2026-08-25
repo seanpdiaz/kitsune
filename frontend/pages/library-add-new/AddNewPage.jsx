@@ -8,6 +8,14 @@ import { icons } from '../../lib/icons.jsx';
 // on the card/preview so it's clear where the data came from, not silently
 // different).
 
+// The Cmd/Ctrl+K handler below already checks both e.metaKey and e.ctrlKey,
+// so the shortcut itself works on every platform — this is only for what
+// the hint badge displays, so a Mac user isn't shown "Ctrl" for a key their
+// keyboard doesn't have (Mac uses Cmd/⌘, not Ctrl, for this class of
+// shortcut). Read once at module load rather than on every render; this
+// doesn't change while the page is open.
+const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.userAgent || navigator.platform || '');
+
 function libraryMatchFor(libraryIndex, s) {
   const byExternal = s.source && s.id !== undefined ? libraryIndex.byExternal.get(`${s.source}:${s.id}`) : null;
   if (byExternal) return byExternal;
@@ -25,6 +33,25 @@ function withMatch(libraryIndex, match, entry) {
 
 function PreviewTag({ children }) {
   return <span className="preview-tag">{children}</span>;
+}
+
+// The idle/loading/empty/error states used to be a single bare <p
+// className="settings-empty"> sitting in the top-left corner of an otherwise
+// completely blank #addNewGrid — accurate information, but with nothing to
+// fill the rest of a normally poster-grid-sized page, it read as broken
+// rather than "nothing searched yet." This gives each of those states the
+// same visual weight as the results grid it's standing in for: a centered
+// icon + heading + one line of guidance, spanning the grid's full width (see
+// .add-new-empty's grid-column in styles.css) instead of collapsing to one
+// grid cell in the corner.
+function EmptyState({ icon, title, message, spin }) {
+  return (
+    <div className="add-new-empty">
+      <div className={`add-new-empty-icon${spin ? ' spin' : ''}`}>{icon}</div>
+      <h3>{title}</h3>
+      <p>{message}</p>
+    </div>
+  );
 }
 
 function PreviewBody({ s }) {
@@ -110,6 +137,45 @@ function SeriesCard({ s, already, justAdded, onPreview, onAdd }) {
   );
 }
 
+// The idle (nothing typed yet) landing state — a full welcome screen
+// instead of the compact toolbar + a small "nothing searched yet" message.
+// Carries the actual live search input (searchInputRef is shared with the
+// compact toolbar's own input below, in AddNewPage — see its Cmd/Ctrl+K
+// handler). Deliberately minimal: just the heading and the search box, no
+// logo mark and no Root Folder/Quality Profile pickers here — those two
+// still work exactly as before, they just live solely on the compact
+// toolbar now (see AddNewPage's state !== 'idle' branch) rather than being
+// duplicated here too. This whole block unmounts the moment a real search
+// starts (state leaves 'idle') in favor of that compact toolbar + results
+// grid — a full-page landing screen only makes sense before you've
+// committed to typing something.
+function IdleHero({ query, onSearchInput, searchInputRef }) {
+  return (
+    <div className="add-new-hero">
+      <h1>Explore &amp; Add to Your Library</h1>
+
+      <div className="search-box add-new-hero-search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></svg>
+        <input
+          ref={searchInputRef}
+          type="text"
+          value={query}
+          onChange={(e) => onSearchInput(e.target.value)}
+          placeholder="Type a series title…"
+          autoFocus
+        />
+        {/* Decorative, but not a lie — the Cmd/Ctrl+K handler in AddNewPage
+            really does focus searchInputRef, whichever of the two <input>s
+            (this one or the compact toolbar's) happens to be mounted. Shows
+            the modifier key that's actually on the user's own keyboard (see
+            isMac above) rather than always saying "Ctrl", which isn't a key
+            a Mac keyboard has. */}
+        <span className="search-kbd-hint" aria-hidden="true"><kbd>{isMac ? '⌘' : 'Ctrl'}</kbd><span>+</span><kbd>K</kbd></span>
+      </div>
+    </div>
+  );
+}
+
 export default function AddNewPage() {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
@@ -136,6 +202,28 @@ export default function AddNewPage() {
 
   const requestSeqRef = useRef(0);
   const debounceRef = useRef(null);
+  // Shared between the idle hero's own <input> and the compact toolbar's —
+  // only one is ever mounted at a time (see the state === 'idle' branch
+  // below), so this always points at whichever one is currently on screen.
+  const searchInputRef = useRef(null);
+
+  // Cmd/Ctrl+K focuses search from anywhere on this page — the hero state's
+  // keyboard-shortcut badge (see IdleHero) would be a lie otherwise. Checks
+  // both e.metaKey (⌘, Mac) and e.ctrlKey (Ctrl, Windows/Linux) so the
+  // shortcut itself works regardless of platform — IdleHero's isMac check
+  // only controls what the badge displays, not which key actually works.
+  // Refocusing an already-focused input is a harmless no-op, so this
+  // doesn't need to check for that first.
+  useEffect(() => {
+    function onKeydown(e) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+      }
+    }
+    document.addEventListener('keydown', onKeydown);
+    return () => document.removeEventListener('keydown', onKeydown);
+  }, []);
 
   async function loadLibraryIndex() {
     try {
@@ -182,6 +270,16 @@ export default function AddNewPage() {
   // pick, same "worst case, the server's own default kicks in" fallback
   // loadLibraryIndex above already uses) rather than surfacing a hard error
   // on a page whose main job is search, not settings management.
+  //
+  // Quality Profile's initial selection prefers whichever profile Settings >
+  // Profiles has marked as the default for new series (see ProfilesPage.jsx's
+  // "Default" column and /api/app-settings/library-defaults) over just
+  // "whatever's first in the list" — the same real default POST /api/series
+  // itself falls back to server-side (see series.js's resolveQualityProfile)
+  // when this select's value is submitted empty, so a page load and a raw
+  // API call agree on what "no explicit choice" means. Falls through to the
+  // first profile exactly like before if no default is set, or the id it
+  // points to doesn't match any currently-configured profile (deleted since).
   async function loadOptions() {
     try {
       const res = await fetch('/api/settings-items/root-folders');
@@ -193,7 +291,18 @@ export default function AddNewPage() {
       const res = await fetch('/api/settings-items/profiles');
       const data = await res.json();
       setProfiles(data);
-      if (data.length > 0) setSelectedQualityProfile(data[0].name);
+      if (data.length > 0) {
+        let defaultProfile = data[0];
+        try {
+          const defaultsRes = await fetch('/api/app-settings/library-defaults');
+          const defaults = await defaultsRes.json();
+          const match = defaults.defaultQualityProfileId != null
+            ? data.find((p) => p.id === defaults.defaultQualityProfileId)
+            : null;
+          if (match) defaultProfile = match;
+        } catch { /* fall through to the first-configured profile below */ }
+        setSelectedQualityProfile(defaultProfile.name);
+      }
     } catch { /* leave profiles empty */ }
   }
 
@@ -256,20 +365,30 @@ export default function AddNewPage() {
     const body = await res.json().catch(() => ({}));
     if (res.status === 409) {
       // Someone/something beat us to it — another tab, or our own pre-check
-      // missed it. Fold it into libraryIndex so this result (and any other
-      // card for the same show) immediately shows "In Library" instead of a
-      // live "Add Series" button that would just 409 again.
+      // missed it. Either way the series genuinely exists now, so this is
+      // the same "go look at it" outcome as a fresh add below, not a
+      // failure — same as handlePreviewAddClick's own already-in-library
+      // branch just below.
       if (body.existingId) {
-        setLibraryIndex((prev) => withMatch(prev, match, { id: body.existingId, title: match.title }));
+        window.location.href = `series.html?id=${body.existingId}`;
       }
       return;
     }
     if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
-    // This is the part that actually lands the series in the Library —
-    // without this POST, clicking Add Series only ever changed local button
-    // state on this page and nothing else.
-    setAddedIds((prev) => new Set(prev).add(String(match.id)));
-    if (body && body.id) setLibraryIndex((prev) => withMatch(prev, match, body));
+    // Series added — head straight to its detail page rather than leaving
+    // the person on the search results with just a checkmark. Once a series
+    // is in the Library, its own page (episodes, monitoring, quality
+    // profile, etc.) is the next thing anyone actually wants, not more
+    // search results. setAddedIds/setLibraryIndex below are what used to
+    // flip the card to "Added"/"In Library" in place; kept as a fallback in
+    // case navigation is somehow interrupted (e.g. the response arrives
+    // just as this component is unmounting), not because anyone should
+    // normally see that state now.
+    if (body && body.id) {
+      setAddedIds((prev) => new Set(prev).add(String(match.id)));
+      setLibraryIndex((prev) => withMatch(prev, match, body));
+      window.location.href = `series.html?id=${body.id}`;
+    }
   }
 
   function openPreview(s) {
@@ -304,15 +423,35 @@ export default function AddNewPage() {
     setPreviewAdding(false);
   }
 
+  // 'idle' no longer has a branch here — it's handled entirely by IdleHero
+  // below, which replaces this grid (and the compact toolbar above it)
+  // outright rather than rendering a message inside it.
   let gridContent;
-  if (state === 'idle') {
-    gridContent = <p className="settings-empty">Search for a series above to see results from MyAnimeList.</p>;
-  } else if (state === 'loading') {
-    gridContent = <p className="settings-empty">Searching MyAnimeList…</p>;
+  if (state === 'loading') {
+    gridContent = (
+      <EmptyState
+        icon={icons.search}
+        spin
+        title="Searching…"
+        message={`Looking up "${query.trim()}" on MyAnimeList.`}
+      />
+    );
   } else if (state === 'error') {
-    gridContent = <p className="settings-empty">Couldn't load results: {errorMessage}</p>;
+    gridContent = (
+      <EmptyState
+        icon={icons.alert}
+        title="Search failed"
+        message={`Couldn't load results: ${errorMessage}`}
+      />
+    );
   } else if (state === 'empty') {
-    gridContent = <p className="settings-empty">No results.</p>;
+    gridContent = (
+      <EmptyState
+        icon={icons.search}
+        title="No results"
+        message={`Nothing matched "${query.trim()}" — try a different title or check the spelling.`}
+      />
+    );
   } else {
     gridContent = results.map((s) => {
       const already = libraryMatchFor(libraryIndex, s);
@@ -327,54 +466,79 @@ export default function AddNewPage() {
 
   return (
     <>
-      <p className="settings-subtitle">Search for a series to add to your library.</p>
+      {state === 'idle' ? (
+        <IdleHero query={query} onSearchInput={onSearchInput} searchInputRef={searchInputRef} />
+      ) : (
+        <>
+          <p className="settings-subtitle">Search for a series to add to your library.</p>
 
-      <div className="add-new-toolbar">
-        <div className="search-box">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></svg>
-          <input id="addNewSearch" type="text" value={query} onChange={(e) => onSearchInput(e.target.value)} placeholder="Search for a series..." />
-        </div>
-        {/* Real Settings > Media Management root folders / Settings >
-            Profiles quality profiles now (see loadOptions above) — every
-            newly-added series actually lands under whichever root folder is
-            selected here and gets this quality profile assigned, both sent
-            straight through to POST /api/series (see addSeries). Disabled
-            with a specific empty-state option when nothing's configured yet
-            (matches Settings > Media Management/Profiles' own "nothing
-            configured" empty states) rather than showing a picker with
-            nothing real to pick. */}
-        <span className="field-label-inline">Root Folder</span>
-        <select
-          className="field-select"
-          value={selectedRootFolder}
-          onChange={(e) => setSelectedRootFolder(e.target.value)}
-          disabled={rootFolders.length === 0}
-        >
-          {rootFolders.length === 0
-            ? <option value="">No root folders configured</option>
-            : rootFolders.map((f) => <option key={f.id} value={f.path}>{f.path}</option>)}
-        </select>
-        <span className="field-label-inline">Quality Profile</span>
-        <select
-          className="field-select"
-          value={selectedQualityProfile}
-          onChange={(e) => setSelectedQualityProfile(e.target.value)}
-          disabled={profiles.length === 0}
-        >
-          {profiles.length === 0
-            ? <option value="">No profiles configured</option>
-            : profiles.map((p) => <option key={p.id} value={p.name}>{p.name}</option>)}
-        </select>
-      </div>
+          <div className="add-new-toolbar">
+            {/* The search box used to share the same cramped 360px width and
+                36px height as every other page's compact toolbar search —
+                fine for narrowing an already-visible grid, but this page's
+                entire job is this one input, so it reads as the whole page's
+                hero control now: wider, taller, and set off on its own row
+                instead of competing with two selects for space. */}
+            <div className="search-box add-new-search">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></svg>
+              <input
+                ref={searchInputRef}
+                id="addNewSearch" type="text" value={query} onChange={(e) => onSearchInput(e.target.value)}
+                placeholder="Search MyAnimeList for a series to add…" autoFocus
+              />
+            </div>
 
-      <div className="series-grid" id="addNewGrid">{gridContent}</div>
+            {/* Real Settings > Media Management root folders / Settings >
+                Profiles quality profiles now (see loadOptions above) — every
+                newly-added series actually lands under whichever root folder
+                is selected here and gets this quality profile assigned, both
+                sent straight through to POST /api/series (see addSeries).
+                Disabled with a specific empty-state option when nothing's
+                configured yet (matches Settings > Media Management/Profiles'
+                own "nothing configured" empty states) rather than showing a
+                picker with nothing real to pick. Demoted to a smaller
+                secondary row below the search box — these are defaults for
+                whatever gets added, not the thing this page is for. */}
+            <div className="add-new-filters">
+              <label className="add-new-field">
+                <span className="field-label-inline">Root Folder</span>
+                <select
+                  className="field-select"
+                  value={selectedRootFolder}
+                  onChange={(e) => setSelectedRootFolder(e.target.value)}
+                  disabled={rootFolders.length === 0}
+                >
+                  {rootFolders.length === 0
+                    ? <option value="">No root folders configured</option>
+                    : rootFolders.map((f) => <option key={f.id} value={f.path}>{f.path}</option>)}
+                </select>
+              </label>
+              <label className="add-new-field">
+                <span className="field-label-inline">Quality Profile</span>
+                <select
+                  className="field-select"
+                  value={selectedQualityProfile}
+                  onChange={(e) => setSelectedQualityProfile(e.target.value)}
+                  disabled={profiles.length === 0}
+                >
+                  {profiles.length === 0
+                    ? <option value="">No profiles configured</option>
+                    : profiles.map((p) => <option key={p.id} value={p.name}>{p.name}</option>)}
+                </select>
+              </label>
+            </div>
+          </div>
+
+          <div className="series-grid" id="addNewGrid">{gridContent}</div>
+        </>
+      )}
 
       {previewedResult && (
         <div className="modal-overlay open" onClick={(e) => { if (e.target === e.currentTarget) closePreview(); }}>
           <div className="modal-box wide">
             <div className="modal-header">
               <h2>Series Details</h2>
-              <button className="modal-close" type="button" aria-label="Close" onClick={closePreview}>{icons.x}</button>
+              <button className="modal-close" type="button" aria-label="Close" data-tooltip="Close" onClick={closePreview}>{icons.x}</button>
             </div>
             <div className="modal-body">
               <div className="preview-layout"><PreviewBody s={previewedResult} /></div>

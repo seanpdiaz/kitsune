@@ -3,7 +3,7 @@
 // Download Clients, Import Lists, Connect, Profiles, Custom Formats, Root
 // Folders). rowToItem is also reused by routes/root-folders.js.
 // ---------------------------------------------------------------------------
-const { db, DB_PATH } = require('../db');
+const { db, DB_PATH, SEED_DEMO_DATA } = require('../db');
 const { logInfo } = require('../logger');
 const { sendJson, readJsonBody } = require('../lib/http');
 const { refreshDiskUsage } = require('../lib/disk-usage');
@@ -164,7 +164,7 @@ const LIST_SECTION_SEEDS = {
 const countBySection = db.prepare('SELECT COUNT(*) AS n FROM settings_items WHERE section = ?');
 const insertItem = db.prepare('INSERT INTO settings_items (section, data, position) VALUES (?, ?, ?)');
 for (const [section, items] of Object.entries(LIST_SECTION_SEEDS)) {
-  if (countBySection.get(section).n === 0) {
+  if (countBySection.get(section).n === 0 && SEED_DEMO_DATA) {
     items.forEach((item, i) => insertItem.run(section, JSON.stringify(item), i));
     logInfo('Database', `Seeded ${items.length} default "${section}" items into ${DB_PATH}`);
   }

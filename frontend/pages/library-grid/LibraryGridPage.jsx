@@ -56,6 +56,19 @@ function tagChipStyleObj(hex) {
   return { '--tag-scale': 0.85, ...baseTagChipStyleObj(hex) };
 }
 
+// Backs the "Missing episodes" stat card below — s.eps is always a real
+// "N / M" string (server/lib/series-stats.js keeps it in sync with real
+// per-episode downloaded flags, respecting each series' own Ignore
+// Specials toggle — see routes/series.js), so "missing" for one series is
+// just its own M - N. Same regex SeriesPage.jsx's own eps parsing uses.
+function missingCountFor(s) {
+  const m = /(\d+)\s*\/\s*(\d+)/.exec(s.eps || '');
+  if (!m) return 0;
+  const done = parseInt(m[1], 10);
+  const total = parseInt(m[2], 10);
+  return Math.max(0, total - done);
+}
+
 function matchesFilter(s, filter) {
   switch (filter) {
     case 'monitored': return s.monitored;
@@ -226,6 +239,19 @@ export default function LibraryGridPage({ searchContainer }) {
   const [view, setView] = useState('poster');
   const [tags, setTags] = useState([]);
   const tagsLoadedRef = useRef(false);
+  // Backs the "Downloading" stat card — a real count of active grabs, not a
+  // per-series field: series.badge (what a "Downloading"-labeled stat would
+  // naturally reach for) turns out to be dead data, only ever set by the
+  // original seed rows and never updated by anything real since (see
+  // routes/series.js's SERIES_SEED and POST /api/series, which never even
+  // sets it). The queue table is the one place download state is actually
+  // live (server/routes/queue.js's background poll keeps status/progress_pct
+  // current), so this counts real 'downloading' rows there instead — 'paused'
+  // rows are deliberately excluded, since a paused grab isn't currently
+  // downloading. Fetched once on mount, same as seriesData below; doesn't
+  // poll for live updates, so a grab starting/finishing while this page is
+  // open won't move the number until it's reloaded.
+  const [downloadingCount, setDownloadingCount] = useState(0);
 
   // Poster size slider (Poster view only). Written straight to the grid's
   // own CSS custom property via refs, the same imperative pattern Settings
@@ -316,6 +342,22 @@ export default function LibraryGridPage({ searchContainer }) {
     })();
   }, []);
 
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/queue');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const body = await res.json();
+        const rows = Array.isArray(body.queue) ? body.queue : [];
+        setDownloadingCount(rows.filter((q) => q.status === 'downloading').length);
+      } catch {
+        // Stat card just falls back to 0 rather than blocking the rest of
+        // the page — same "a failed secondary fetch shouldn't break Library
+        // loading" rule DiskUsageStat's own catch below already follows.
+      }
+    })();
+  }, []);
+
   // Tags aren't part of the Poster view at all, but both Table and Overview
   // show them — fetched once, lazily, the first time either view actually
   // needs them rather than unconditionally on every Library page load.
@@ -338,6 +380,19 @@ export default function LibraryGridPage({ searchContainer }) {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ view: nextView }),
     }).catch(() => {});
   }
+
+  // Backs the "Series"/"Missing episodes" stat cards below. Both used to be
+  // hardcoded literal numbers, always showing whatever the original mockup
+  // was seeded with regardless of what's actually in the Library. Missing
+  // episodes only counts monitored series — an unmonitored series' own
+  // missing count doesn't mean anything you'd want surfaced here, since
+  // monitored=false means Kitsune isn't trying to get those episodes in the
+  // first place; it takes precedence over everything else (Ignore Specials,
+  // status, filters), not just one factor among several.
+  const seriesCount = seriesData.length;
+  const missingEpisodesCount = seriesData
+    .filter((s) => s.monitored)
+    .reduce((sum, s) => sum + missingCountFor(s), 0);
 
   let gridContent;
   let gridClassName = 'series-grid';
@@ -383,9 +438,9 @@ export default function LibraryGridPage({ searchContainer }) {
       )}
 
       <div className="stat-grid">
-        <div className="stat-card"><p className="label">Series</p><p className="value">184</p></div>
-        <div className="stat-card"><p className="label">Missing episodes</p><p className="value" style={{ color: 'var(--warning)' }}>27</p></div>
-        <div className="stat-card"><p className="label">Downloading</p><p className="value" style={{ color: 'var(--accent)' }}>4</p></div>
+        <div className="stat-card"><p className="label">Series</p><p className="value">{seriesLoaded ? seriesCount : '—'}</p></div>
+        <div className="stat-card"><p className="label">Missing episodes</p><p className="value" style={{ color: 'var(--warning)' }}>{seriesLoaded ? missingEpisodesCount : '—'}</p></div>
+        <div className="stat-card"><p className="label">Downloading</p><p className="value" style={{ color: 'var(--accent)' }}>{downloadingCount}</p></div>
         <div className="stat-card"><p className="label">Disk usage</p><DiskUsageStat /></div>
       </div>
 

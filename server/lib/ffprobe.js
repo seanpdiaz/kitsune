@@ -17,8 +17,17 @@
 // fabricated/simulated one, and this module has no opinion on when it's
 // appropriate to call; that's each caller's job.
 // ---------------------------------------------------------------------------
-const { execFileSync } = require('child_process');
+const { execFile, execFileSync } = require('child_process');
+const { promisify } = require('util');
 const { logWarn } = require('../logger');
+
+// Promise-based ffprobe spawn, used by probeMediaStreams below. Deliberately
+// NOT used for checkFfprobeAvailability just below — that one-time PATH
+// check is cheap and only ever runs once per process (memoized), so it's not
+// worth restructuring its own caching into async just to shave a rare,
+// single blocking call; probeMediaStreams is the one that runs once per real
+// media file and is worth making non-blocking.
+const execFileAsync = promisify(execFile);
 
 // Checked once per process (not once per file — ffprobe either exists on
 // this machine's PATH or it doesn't, and re-spawning a process just to find
@@ -76,13 +85,25 @@ function channelsLabel(channels, channelLayout) {
 // than two separate spawns — cheaper, and keeps "what does this real file
 // actually have" as one atomic answer instead of two probes that could
 // disagree if the file changed between them.
-function probeMediaStreams(filePath) {
+//
+// Async (execFile via promisify, not execFileSync) on purpose — this used to
+// spawn ffprobe synchronously, which blocks Node's single-threaded event
+// loop for the whole process, not just the request that triggered it: every
+// other open tab/API call/page load froze for as long as ffprobe took to run
+// (confirmed real case: adding a series with existing local episode files
+// froze the entire UI while the add-time auto-scan probed each matched file
+// in turn — see scanExistingFilesForSeries in routes/episodes.js). An async
+// spawn lets the event loop keep serving other requests while ffprobe runs
+// in its own OS process; the wait for any one file's probe is the same
+// either way, only how much else the server can do at the same time changes.
+async function probeMediaStreams(filePath) {
   if (!checkFfprobeAvailability()) return null;
   let out;
   try {
-    out = execFileSync('ffprobe', [
+    const result = await execFileAsync('ffprobe', [
       '-v', 'quiet', '-print_format', 'json', '-show_streams', filePath,
     ], { timeout: 20000, maxBuffer: 10 * 1024 * 1024 });
+    out = result.stdout;
   } catch (err) {
     logWarn('Ffprobe', `Could not probe "${filePath}": ${err.message}`);
     return null;
