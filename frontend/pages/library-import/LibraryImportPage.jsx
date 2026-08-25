@@ -7,29 +7,45 @@ import { icons } from '../../lib/icons.jsx';
 // configured root folder (GET /api/root-folders/:id/subfolders), each
 // subfolder flagged as already matching a Library series ('existing') or
 // not, with a real per-folder file summary; expanding a row lazy-loads its
-// actual files (GET .../subfolders/:name/files) and "Import files" (POST
-// /api/series/:id/import-files) links those real files to the series' real
-// episodes. See README's "Library Import: real file scanning" section for
-// the fuller design writeup — none of that changed here, just the rendering.
+// actual files (GET .../subfolders/:name/files) for a look, read-only. An
+// 'existing' row used to also carry its own "Import files" button (POST
+// /api/series/:id/import-files) — dropped as a duplicate of Series >
+// "Rescan for local files" (see SeriesPage.jsx, the one remaining place
+// that endpoint is called from), so an already-matched row here is now
+// purely informational: "Already in Library", nothing to click. See
+// README's "Library Import: real file scanning" section for the fuller
+// design writeup on the scan itself, which didn't change.
 
 const folderIcon = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 7h4l2-2h6l2 2h4v12H3z" /></svg>;
 const chevronRightIcon = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="M9 6l6 6-6 6" /></svg>;
 
 const rowKey = (item) => `${item.rootFolderId}:${item.name}`;
 
-function StatusCell({ item, importing, onImportFiles }) {
+// item.files.fileCount === 0/undefined means there's nothing to expand — a
+// row for a folder with no video files at all shouldn't toggle open into an
+// empty panel just because the row itself got clicked (see rowIsExpandable
+// below, shared by both the row-level click handler and this cell).
+function rowIsExpandable(item) {
+  return !!(item.files && item.files.fileCount > 0);
+}
+
+function StatusCell({ item }) {
+  // A folder that already matches a Library series is just a status here,
+  // not an action — re-importing/re-linking its files is what Series >
+  // "Rescan for local files" is for (see SeriesPage.jsx), so this used to
+  // duplicate that same Import files button on every already-matched row,
+  // whether or not there was anything new in the folder to actually import.
   if (item.status === 'existing') {
-    return (
-      <>
-        <span className="status-pill status-off">{icons.check}Already in Library</span>
-        <button className="btn-test" type="button" disabled={importing} onClick={onImportFiles}>
-          {importing ? 'Importing…' : 'Import files'}
-        </button>
-      </>
-    );
+    return <span className="status-pill status-off">{icons.check}Already in Library</span>;
   }
+  // "Search" stops the click from bubbling to the row's own onClick — it's
+  // its own action (a navigation), not an expand/collapse toggle.
   return (
-    <a className="status-pill status-warn" href={`library-add-new.html?q=${encodeURIComponent(item.guessedTitle)}`}>
+    <a
+      className="status-pill status-warn"
+      href={`library-add-new.html?q=${encodeURIComponent(item.guessedTitle)}`}
+      onClick={(e) => e.stopPropagation()}
+    >
       {icons.search}Search
     </a>
   );
@@ -37,12 +53,20 @@ function StatusCell({ item, importing, onImportFiles }) {
 
 function FilesCell({ item, open, onToggle }) {
   const f = item.files;
-  if (!f || f.fileCount === 0) {
+  if (!rowIsExpandable(item)) {
     return <span className="settings-meta" style={{ color: 'var(--text-muted)' }}>No video files</span>;
   }
   const summary = `${f.fileCount} file${f.fileCount === 1 ? '' : 's'} · ${f.totalFormatted} · ${f.extensions.join(', ')}`;
+  // stopPropagation here too — this button already toggles the row itself;
+  // without it, the click would bubble up to the row's own onClick and fire
+  // a second toggle, immediately undoing the first.
   return (
-    <button className={`import-files-toggle${open ? ' open' : ''}`} type="button" aria-expanded={open} onClick={onToggle}>
+    <button
+      className={`import-files-toggle${open ? ' open' : ''}`}
+      type="button"
+      aria-expanded={open}
+      onClick={(e) => { e.stopPropagation(); onToggle(); }}
+    >
       {chevronRightIcon}
       <span>{summary}</span>
     </button>
@@ -73,32 +97,6 @@ function FilesPanel({ cached }) {
   return <div className="import-files-panel">{body}</div>;
 }
 
-function ImportResult({ result }) {
-  if (!result || result === 'importing') return null;
-  if (result.message) {
-    return <p className="import-result warn">{result.message}</p>;
-  }
-  const matchedCount = result.matched.length;
-  const unmatchedCount = result.unmatched.length;
-  const resetCount = result.reset ? result.reset.length : 0;
-  const cls = unmatchedCount === 0 ? 'ok' : 'warn';
-  return (
-    <p className={`import-result ${cls}`}>
-      Linked {matchedCount} file{matchedCount === 1 ? '' : 's'} to episodes
-      {unmatchedCount > 0 ? (
-        <>
-          , {unmatchedCount} couldn't be matched:<br />
-          {result.unmatched.map((u, i) => (
-            <span key={i}>{u.fileName}: {u.reason}<br /></span>
-          ))}
-        </>
-      ) : '.'}
-      {resetCount > 0 ? ` ${resetCount} previously-downloaded episode${resetCount === 1 ? '' : 's'} had no matching file in this scan and ${resetCount === 1 ? 'was' : 'were'} marked not downloaded.` : ''}
-      {result.seriesEps ? ` Now showing ${result.seriesEps} downloaded.` : ''}
-    </p>
-  );
-}
-
 export default function LibraryImportPage({ addBtnContainer }) {
   const [items, setItems] = useState([]);
   const [state, setState] = useState('loading'); // 'loading' | 'ok' | 'no-root-folders' | 'error'
@@ -106,7 +104,6 @@ export default function LibraryImportPage({ addBtnContainer }) {
   const [rescanning, setRescanning] = useState(false);
   const [openRows, setOpenRows] = useState(() => new Set());
   const [fileListCache, setFileListCache] = useState(() => new Map());
-  const [importResults, setImportResults] = useState(() => new Map());
 
   async function scan() {
     setState('loading');
@@ -166,22 +163,6 @@ export default function LibraryImportPage({ addBtnContainer }) {
     if (!openRows.has(key) && !fileListCache.has(key)) loadFileList(item);
   }
 
-  async function importFiles(item) {
-    const key = rowKey(item);
-    if (!item.matchedSeriesId) return;
-    setImportResults((prev) => new Map(prev).set(key, 'importing'));
-    try {
-      const res = await fetch(`/api/series/${item.matchedSeriesId}/import-files`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rootFolderId: item.rootFolderId, folderName: item.name }),
-      });
-      const body = await res.json();
-      setImportResults((prev) => new Map(prev).set(key, body));
-    } catch {
-      setImportResults((prev) => new Map(prev).set(key, { message: "Couldn't import files — network error." }));
-    }
-  }
-
   let content;
   if (state === 'loading') {
     content = <p className="settings-empty">Scanning root folders…</p>;
@@ -195,10 +176,21 @@ export default function LibraryImportPage({ addBtnContainer }) {
     content = items.map((item) => {
       const key = rowKey(item);
       const open = openRows.has(key);
-      const result = importResults.get(key);
+      const expandable = rowIsExpandable(item);
       return (
         <div key={key}>
-          <div className="import-row" data-key={key}>
+          {/* Clicking anywhere on the row (outside the Import files/Search
+              controls, which stop propagation) expands or contracts its
+              file list — same toggle the Files column's own chevron button
+              already drove, just no longer requiring a click on that one
+              small button specifically. Rows with no video files at all
+              have nothing to expand, so they don't get the pointer cursor
+              or a click handler. */}
+          <div
+            className={`import-row${expandable ? ' expandable' : ''}`}
+            data-key={key}
+            onClick={expandable ? () => toggleRow(item) : undefined}
+          >
             {/* item.path is the real absolute path (root folder + this
                 subfolder — see GET /api/root-folders/:id/subfolders in
                 server/routes/root-folders.js), useful server-side but not
@@ -213,11 +205,8 @@ export default function LibraryImportPage({ addBtnContainer }) {
             <span className="settings-title" title={item.path}>/{item.name}</span>
             <span className="settings-meta">{item.matchedTitle || item.guessedTitle}</span>
             <FilesCell item={item} open={open} onToggle={() => toggleRow(item)} />
-            <span><StatusCell item={item} importing={result === 'importing'} onImportFiles={() => importFiles(item)} /></span>
+            <span><StatusCell item={item} /></span>
           </div>
-          {result && result !== 'importing' && (
-            <div style={{ margin: '-6px 0 8px 54px' }}><ImportResult result={result} /></div>
-          )}
           {open && <FilesPanel cached={fileListCache.get(key)} />}
         </div>
       );

@@ -116,11 +116,42 @@ function mapTvdbResult(r) {
 // filter was silently dropping real matches whenever genres came back empty,
 // making the fallback look like it wasn't firing at all. So this only
 // excludes a result when TVDB gives us genre data AND it doesn't include
-// Anime (a confirmed non-match) — missing/empty genres is treated as
-// "unknown," not "excluded."
-function isExcludedByGenre(genres) {
-  if (!Array.isArray(genres) || genres.length === 0) return false; // unknown — don't exclude
-  return !genres.some((g) => String(g).toLowerCase() === 'anime');
+// Anime (a confirmed non-match) — missing/empty genres falls through to a
+// second, independent signal below rather than being treated as "excluded."
+//
+// Confirmed real case that motivated the second signal: searching
+// "scarlett a" surfaced "Mariana & Scarlett" (2010), a Mexican telenovela,
+// with an empty `genres` array — the genre-only check above had no way to
+// catch it. TheTVDB's SearchResult schema also carries `country` and
+// `primary_language` (both 3-letter lowercase codes, e.g. "jpn"/"mex",
+// same convention as `translations`/`overviews`) — fields the lightweight
+// search index seems to populate far more reliably than `genres`. Anime is
+// Japanese in origin, so a result confidently tagged with a non-Japanese
+// country AND a non-Japanese primary language, with no genre data to say
+// otherwise, is very unlikely to be anime.
+//
+// Deliberately requires BOTH fields to be present and BOTH to disagree with
+// Japan before excluding — not just one. A single field alone (e.g. only
+// `primary_language` present, no `country`) isn't trusted on its own, since
+// that's exactly the kind of partial-data situation that caused the
+// genre-only version of this function to over-filter real anime before (see
+// above) — a real anime show with an English dub flagged as its
+// `primary_language`, or a co-production with a non-Japanese `country`,
+// would otherwise get wrongly excluded on a single ambiguous field. Only
+// excludes when both signals independently agree it's not Japanese in
+// origin, which is what actually distinguishes "Mariana & Scarlett" (both
+// `country` and `primary_language` are Mexican/Spanish) from a genuine
+// under-tagged anime result.
+function isNotAnime(r) {
+  const genres = Array.isArray(r.genres) ? r.genres : [];
+  if (genres.length > 0) {
+    return !genres.some((g) => String(g).toLowerCase() === 'anime');
+  }
+  const country = r.country ? String(r.country).toLowerCase() : null;
+  const language = r.primary_language ? String(r.primary_language).toLowerCase() : null;
+  if (!country || !language) return false; // not enough signal — don't exclude
+  if (country === 'jpn' || language === 'jpn') return false; // either says Japan — don't exclude
+  return true; // both present, neither says Japan — confident exclude
 }
 
 async function tvdbSearchAnimeOnly(query) {
@@ -156,9 +187,9 @@ async function tvdbSearchAnimeOnly(query) {
       logWarn('TvdbService', `Diagnostic no-type-filter retry itself failed: ${err.message}`);
     }
   }
-  const results = raw.filter((r) => !isExcludedByGenre(r.genres)).map((r) => ({ ...mapTvdbResult(r), source: 'tvdb' }));
-  logWarn('TvdbService', `Fallback search: ${raw.length} raw result(s), ${results.length} after genre filter` +
-    (raw.length > 0 ? ` | genres seen: ${JSON.stringify(raw.map((r) => r.genres))}` : ''));
+  const results = raw.filter((r) => !isNotAnime(r)).map((r) => ({ ...mapTvdbResult(r), source: 'tvdb' }));
+  logWarn('TvdbService', `Fallback search: ${raw.length} raw result(s), ${results.length} after anime filter` +
+    (raw.length > 0 ? ` | genres/country/primary_language seen: ${JSON.stringify(raw.map((r) => [r.genres, r.country, r.primary_language]))}` : ''));
   return results;
 }
 

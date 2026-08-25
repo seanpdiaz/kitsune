@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // /api/tags — tag CRUD, plus the tags table itself and its default seed.
 // ---------------------------------------------------------------------------
-const { db, DB_PATH } = require('../db');
+const { db, DB_PATH, SEED_DEMO_DATA } = require('../db');
 const { logInfo } = require('../logger');
 const { sendJson, readJsonBody } = require('../lib/http');
 
@@ -30,7 +30,7 @@ if (!tagColumns.includes('color')) {
 }
 
 const tagCount = db.prepare('SELECT COUNT(*) AS n FROM tags').get().n;
-if (tagCount === 0) {
+if (tagCount === 0 && SEED_DEMO_DATA) {
   const seed = db.prepare('INSERT INTO tags (name, color, usage_count) VALUES (?, ?, ?)');
   const defaults = [
     ['anime', '#f2703d', 184], ['seasonal', '#4d8df6', 22], ['dual-audio', '#a78bfa', 31],

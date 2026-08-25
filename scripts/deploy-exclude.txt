@@ -1,0 +1,32 @@
+# Files/folders rsync should never touch on the remote when `npm run deploy`
+# runs (see scripts/deploy.sh). Same shape as .gitignore, but this list is
+# rsync's own --exclude-from syntax (one pattern per line, gitignore-style
+# matching), so it's kept separate rather than pointed at .gitignore
+# directly — a couple of these entries (data/, dist/) are deliberately
+# different from what git ignores vs. what a deploy should skip.
+
+# Installed locally, platform-specific — run `npm install` on the remote
+# instead of syncing this over.
+node_modules/
+
+# Version control metadata has no reason to exist on a deploy target.
+.git/
+
+# The live SQLite DB + its WAL/SHM files. Syncing this would overwrite
+# whatever the remote's own Kitsune instance has stored — each environment
+# keeps its own.
+data/
+
+# Real API keys (TVDB/MAL) — set up its own .env on the remote instead of
+# shipping local secrets over rsync.
+.env
+.env.deploy
+
+# Built frontend bundle — run `npm run build` on the remote after deploying
+# source, rather than shipping a locally-built (and possibly stale) copy.
+public/dist/
+
+# OS/editor/repo junk.
+.DS_Store
+*.log
+_to_delete/

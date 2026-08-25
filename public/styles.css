@@ -45,6 +45,57 @@ html, body {
   line-height: 1.5;
 }
 
+/* Global safety net against page-level horizontal scroll — added after a
+   real regression: the Library page's view-toggle buttons (top-right of
+   the filter row, see LibraryGridPage.jsx) sit in ordinary page flow, not
+   inside any of the specific panels (.sidebar/.episode-list-scroll/
+   .torrent-list, below) already clipped for this exact reason. Their
+   hover tooltip renders centered above the button and pokes a little past
+   the button's own right edge; with nothing upstream clipping it, that
+   invisible-until-hover overflow was still enough to give the WHOLE page
+   a permanent horizontal scrollbar, the same underlying CSS Overflow
+   coupling described on .sidebar's own rule below — except this time
+   there's no scrollable panel to blame, it's the page itself. Any one of
+   the ~65 icon tooltips added across this app can sit near a left/right
+   viewport edge on some page (a rightmost toolbar button, a table's last
+   column, a narrow browser window), so rather than chase each one
+   individually this clips the actual root scroll container the same way:
+   overflow-x: clip never shows a scrollbar on that axis (unlike the
+   coupled auto silently caused by overflow-y below), and
+   overflow-clip-margin still lets a tooltip that pokes past the viewport
+   edge render in full on hover instead of getting cut off — exactly the
+   same tradeoff already made for .sidebar/.episode-list-scroll/
+   .torrent-list, just applied once at the top instead of per-container.
+   overflow-y is set explicitly (rather than left to the implicit
+   visible-becomes-auto coupling) so real page-level vertical scrolling
+   keeps behaving exactly as it always did.
+
+   Deliberately applied to <html> ONLY, not <body>: giving both elements
+   their own non-visible overflow value turns <body> into a second,
+   independent scroll container nested inside <html>'s. Per the CSS
+   Overflow spec, that only kicks in (the "propagate body's overflow to
+   the viewport" special-case stops applying) once <html> itself has a
+   non-visible overflow — so it's specifically the combination that's
+   dangerous, not either alone. <body> being its own scroll container is
+   invisible in the common case (it auto-sizes to its content, so it never
+   actually has anything of its own to scroll), but position: sticky
+   elements don't care whether a scroll container is currently scrollable —
+   only whether one exists between them and the viewport. .sidebar below is
+   position: sticky, expecting to stick to the *viewport* as the page
+   scrolls; with <body> also a scroll container, it became .sidebar's
+   nearest one instead — and since <body> itself never visibly moves (real
+   scrolling happens on <html>), sticky positioning relative to it was
+   inert, and confirmed real regression: the sidebar scrolled away with the
+   rest of the page instead of staying pinned. Keeping this rule on <html>
+   alone avoids creating that second scroll container, so <body> is never a
+   scroll container at all and .sidebar sticks to the viewport correctly,
+   exactly as it did before this rule existed. */
+html {
+  overflow-x: clip;
+  overflow-y: auto;
+  overflow-clip-margin: 200px;
+}
+
 a { color: inherit; text-decoration: none; }
 button, select, input {
   font-family: var(--font-ui);
@@ -111,7 +162,37 @@ html {
   top: 0;
   height: 100vh;
   overflow-y: auto;
+  /* CSS overflow-control quirk (see .modal-body's own comment further down
+     for the general rule): setting overflow-y to anything but visible with
+     overflow-x left unset silently computes overflow-x as auto too — no
+     scrollbar in practice as long as nothing actually overflows
+     horizontally, but the collapsed-sidebar nav icons' hover tooltip
+     (data-tooltip-pos="right" in js/nav.js) does exactly that on purpose,
+     rendering past the sidebar's own right edge — and that's normally
+     invisible screen space (visibility:hidden/opacity:0 in this file's own
+     [data-tooltip] rules, see the "Tooltips" section) but still counts
+     toward the sidebar's scrollable overflow area, which is what actually
+     triggers the auto rule above and puts a real, permanently-visible
+     horizontal scrollbar on the sidebar (confirmed real regression from
+     adding those tooltips). overflow-x: clip (rather than the coupled auto,
+     or a flat hidden) never shows a scrollbar on this axis at all, and
+     overflow-clip-margin gives it enough of a buffer that the tooltip still
+     renders fully outside the sidebar's box on hover instead of getting cut
+     off right at the edge — the one thing plain overflow-x: hidden would
+     have broken. overflow-y keeps its real, scrolling auto behavior
+     untouched; only the x axis changes. */
+  overflow-x: clip;
+  overflow-clip-margin: 220px;
 }
+
+/* Matches the temporary marker public/js/sidebar-boot.js puts on <html>
+   before #sidebar even exists in the DOM (a plain, parser-blocking <script>
+   in <head>, not the deferred module nav.js runs as) — same width as
+   .sidebar.collapsed below, just reachable early enough that the browser
+   never gets to paint the sidebar at its default 216px for a collapsed
+   user. js/nav.js's applyStoredSidebarCollapse() removes the marker once it
+   applies the real .collapsed class to #sidebar itself a moment later. */
+html.sidebar-collapsed-boot .sidebar { width: 64px; }
 
 .sidebar.collapsed { width: 64px; }
 .sidebar.collapsed .nav-label,
@@ -904,6 +985,15 @@ select {
   overflow-y: auto;
   /* Scrollbar styling is global now (see the "Scrollbars" section near the
      top of this file) — no need for a per-component override here anymore. */
+  /* Same overflow-x-gets-implicitly-coupled-to-overflow-y fix as .sidebar/
+     .episode-list-scroll/.torrent-list (see .sidebar's own comment for the
+     full explanation) — applied defensively here too rather than only after
+     a reported regression, since this is plain text today but the same
+     shape of bug (a small fixed-height overflow-y: auto box, per the CSS
+     Overflow spec) would resurface silently the moment anything inside ever
+     pokes past the edge (a future tooltip, a stray inline element). */
+  overflow-x: clip;
+  overflow-clip-margin: 100px;
 }
 
 .detail-stats {
@@ -966,6 +1056,18 @@ select {
 .episode-list-scroll {
   min-height: 0;
   overflow-y: auto;
+  /* Same overflow-x-gets-implicitly-coupled-to-overflow-y fix as .sidebar
+     above (see that rule's comment for the full explanation) — the row
+     action icons' hover tooltips (search/cancel/grab-best-match/options,
+     see EpisodeRow/EpisodeActionsMenu in SeriesPage.jsx) sit right at each
+     row's own right edge and render centered above the icon, which pokes
+     past this panel's right edge just enough to trigger a real, always-on
+     horizontal scrollbar here too — the "series list" scrollbar reported
+     alongside the sidebar one. Same fix: clip that axis instead of
+     scrolling it, with enough margin that the tooltip still shows in full
+     on hover instead of getting cut off. */
+  overflow-x: clip;
+  overflow-clip-margin: 120px;
 }
 .main-series .episode-list-scroll { flex: 1; }
 /* Column labels stay pinned to the top of the scroll panel rather than
@@ -1156,7 +1258,36 @@ select {
    page's Edit/Remove pair does (ConnectionManager.jsx, Users) — this adds
    the missing 32px slot for it, ahead of Remove's. */
 .dlclient-header, .dlclient-row { grid-template-columns: 1fr 160px 110px 70px 120px 50px 90px 32px 32px 32px; }
-.profile-header, .profile-row { grid-template-columns: 1fr 160px 110px 100px 32px 32px; }
+/* 7th column added for the "Default for new series" toggle (see
+   ProfilesPage.jsx's renderRow) — sits right before Edit/Remove, same 32px
+   width as those so all three trailing icon-buttons line up evenly. */
+.profile-header, .profile-row { grid-template-columns: 1fr 160px 110px 100px 32px 32px 32px; }
+
+/* Settings > Profiles' "Default for new series" toggle — an empty ring
+   normally, filled solid accent-orange with a checkmark (same "settled"
+   language .btn-accent's own icon color already uses) on whichever profile
+   is currently the default. Only one row is ever active at a time — see
+   ProfilesPage.jsx, which drives `.active` off a single defaultProfileId. */
+.default-profile-btn {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1.5px solid var(--border-strong);
+}
+.default-profile-btn:hover { border-color: var(--accent-border); background: var(--accent-bg); }
+.default-profile-btn svg { width: 12px; height: 12px; }
+.default-profile-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #1a0d06;
+}
+.default-profile-btn.active:hover { background: var(--accent); }
+
 .format-header, .format-row { grid-template-columns: 1fr 130px 140px 32px 32px; }
 .quality-header, .quality-row { grid-template-columns: 170px 1fr 110px 110px 110px; }
 .task-header, .task-row { grid-template-columns: 1fr 140px 140px 140px 100px; }
@@ -1384,6 +1515,13 @@ select {
 .type-chip:hover { border-color: var(--accent-border); color: var(--accent); }
 
 .settings-empty { color: var(--text-muted); padding: 10px 2px; }
+
+/* Library Import: the whole row toggles its file panel open/closed on
+   click, not just the Files column's own chevron button (see
+   LibraryImportPage.jsx's rowIsExpandable) — only applied when the folder
+   actually has files to show, so a row with none doesn't look clickable. */
+.import-row.expandable { cursor: pointer; }
+.import-row.expandable:hover { border-color: var(--border-strong); background: var(--surface-2); }
 
 /* Library Import's real per-file detail panel (lazy-loaded — see
    public/js/pages/library-import.js) and the Files column's expand
@@ -2014,7 +2152,11 @@ input[type="range"].size-slider::-moz-range-track {
   border-bottom: 1px solid var(--border);
 }
 
-.file-browser-list { max-height: 320px; overflow-y: auto; }
+/* overflow-x: clip + overflow-clip-margin here for the exact same reason as
+   .sidebar/.episode-list-scroll/.torrent-list (see .sidebar's own comment) —
+   applied defensively (this list's rows carry real icon tooltips, e.g.
+   RootFolders.jsx's file-browser modal). */
+.file-browser-list { max-height: 320px; overflow-y: auto; overflow-x: clip; overflow-clip-margin: 100px; }
 
 .file-browser-row {
   display: grid;
@@ -2038,7 +2180,9 @@ input[type="range"].size-slider::-moz-range-track {
   display: flex; align-items: center; gap: 8px;
   font-size: 12.5px; color: var(--text-secondary); margin: 0 0 10px; cursor: pointer;
 }
-.rename-preview-list { max-height: 320px; overflow-y: auto; }
+/* Same overflow-x: clip + overflow-clip-margin defensive fix as .sidebar/
+   .episode-list-scroll/.torrent-list (see .sidebar's own comment). */
+.rename-preview-list { max-height: 320px; overflow-y: auto; overflow-x: clip; overflow-clip-margin: 100px; }
 .rename-file-row {
   display: flex; align-items: center; gap: 12px;
   padding: 9px 12px; cursor: pointer; border-bottom: 1px solid var(--border);
@@ -2069,9 +2213,15 @@ input[type="range"].size-slider::-moz-range-track {
 .release-list-wrap {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  overflow: hidden;
   max-height: 440px;
   overflow-y: auto;
+  /* overflow-x: clip (not the plain overflow: hidden this used to fall back
+     to on the x axis) for the same reason as .sidebar/.episode-list-scroll/
+     .torrent-list — never shows a scrollbar either way, but clip plus a
+     margin still lets a release row's own tooltips render past this list's
+     edge on hover instead of getting cut off. */
+  overflow-x: clip;
+  overflow-clip-margin: 100px;
 }
 .release-header, .release-row {
   display: grid;
@@ -2142,7 +2292,13 @@ a.release-title:hover { text-decoration: underline; }
    list — see DownloadClients.jsx's TorrentsModal / server/lib/download-clients/qbittorrent.js) ---------- */
 .torrent-add-row { display: flex; gap: 8px; margin-bottom: 14px; }
 .torrent-add-row .field-input { flex: 1; }
-.torrent-list { display: flex; flex-direction: column; gap: 2px; max-height: 360px; overflow-y: auto; }
+/* overflow-x: clip + overflow-clip-margin here for the exact same reason as
+   .sidebar and .episode-list-scroll above — this list's own pause/resume
+   and remove row-action icons (DownloadClients.jsx) now carry hover
+   tooltips too, and without this it'd show the same always-on horizontal
+   scrollbar the moment this modal is opened, just not yet noticed since
+   nobody had reported opening it since those tooltips shipped. */
+.torrent-list { display: flex; flex-direction: column; gap: 2px; max-height: 360px; overflow-y: auto; overflow-x: clip; overflow-clip-margin: 120px; }
 .torrent-row {
   display: grid;
   grid-template-columns: 1fr 130px 32px 32px;
@@ -2157,17 +2313,158 @@ a.release-title:hover { text-decoration: underline; }
 .torrent-row .queue-progress .progress-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ---------- Add New (Library) ---------- */
+/* This page's whole job is one search box, but it used to share the same
+   compact 360px/36px sizing as every other page's toolbar search — a
+   secondary control there, narrowing an already-visible grid. Here it's the
+   entire point, so it gets its own row and hero-sized treatment (see
+   .add-new-search below); Root Folder/Quality Profile move to a smaller
+   secondary row underneath, since they're just defaults for whatever gets
+   added, not what the user came to this page to do. */
 
 .add-new-toolbar {
   display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-bottom: 28px;
+}
+
+.add-new-toolbar .add-new-search {
+  width: 100%;
+  max-width: 640px;
+}
+.add-new-toolbar .add-new-search svg { width: 18px; height: 18px; left: 16px; }
+.add-new-toolbar .add-new-search input {
+  height: 52px;
+  padding: 0 18px 0 48px;
+  font-size: 15px;
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  border-color: var(--border);
+}
+.add-new-toolbar .add-new-search input:focus {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 4px var(--accent-bg);
+}
+
+.add-new-filters {
+  display: flex;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 20px;
+  gap: 20px;
   flex-wrap: wrap;
 }
-.add-new-toolbar .search-box { width: 360px; flex-shrink: 0; }
+.add-new-field { display: flex; align-items: center; gap: 8px; }
 .add-new-toolbar .field-select { width: 200px; height: 36px; }
 .add-new-toolbar .field-label-inline { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+
+/* The idle/loading/empty/error states each span the full grid (see
+   #addNewGrid's grid-template-columns — grid-column: 1 / -1 opts this one
+   child out of it) and get the same centered icon+heading+message treatment
+   real Sonarr/Radarr use for "nothing here yet" states, instead of a single
+   line of muted text stranded in the top-left corner of an otherwise blank
+   page. */
+.add-new-empty {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 6px;
+  padding: 90px 20px 110px;
+  min-height: 360px;
+}
+.add-new-empty-icon {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+.add-new-empty-icon svg { width: 26px; height: 26px; }
+.add-new-empty-icon.spin svg { animation: add-new-spin 1s linear infinite; }
+@keyframes add-new-spin { to { transform: rotate(360deg); } }
+.add-new-empty h3 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+.add-new-empty p {
+  font-size: 13px;
+  color: var(--text-secondary);
+  max-width: 360px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* Add New's idle landing screen (IdleHero in AddNewPage.jsx) — shown only
+   in the 'idle' state, in place of both the compact .add-new-toolbar above
+   and the old one-line "nothing searched yet" message that used to sit in
+   .add-new-empty's spot. Deliberately just a heading and the hero search
+   input — no logo mark, no Root Folder/Quality Profile chips here (those
+   still live on the compact toolbar, see .add-new-filters below). */
+.add-new-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 22px;
+  padding: 100px 20px 60px;
+}
+.add-new-hero h1 {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.add-new-hero-search { width: 100%; max-width: 640px; }
+.add-new-hero-search svg { width: 18px; height: 18px; left: 16px; }
+.add-new-hero-search input {
+  width: 100%;
+  height: 54px;
+  padding: 0 100px 0 48px;
+  font-size: 15px;
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  border: 1px solid var(--accent-border);
+  box-shadow: 0 0 0 4px var(--accent-bg);
+  outline: none;
+}
+.add-new-hero-search input:focus { border-color: var(--accent-border); box-shadow: 0 0 0 4px var(--accent-bg); }
+
+/* Decorative "Ctrl + K" hint sitting inside the search input's right edge —
+   backed by a real Cmd/Ctrl+K handler in AddNewPage (see searchInputRef),
+   not just a label, so this isn't promising a shortcut that doesn't work.
+   pointer-events: none so it never intercepts a click meant for the input
+   underneath it. */
+.search-kbd-hint {
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  pointer-events: none;
+}
+.search-kbd-hint kbd {
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  padding: 2px 6px;
+  color: var(--text-secondary);
+}
 
 .card-overview {
   font-size: 11.5px;
@@ -2273,6 +2570,13 @@ a.release-title:hover { text-decoration: underline; }
   margin: 0 0 12px;
   /* Scrollbar styling is global now (see the "Scrollbars" section near the
      top of this file) — no need for a per-component override here anymore. */
+  /* Same overflow-x-gets-implicitly-coupled-to-overflow-y defensive fix as
+     .sidebar/.episode-list-scroll/.torrent-list (see .sidebar's own
+     comment) — plain text today, but the same box shape (overflow-y: auto,
+     overflow-x left unset) as every other spot this bug has already shown
+     up in. */
+  overflow-x: clip;
+  overflow-clip-margin: 100px;
 }
 
 .preview-alt-titles { font-size: 12px; color: var(--text-muted); }
@@ -2525,3 +2829,406 @@ a.release-title:hover { text-decoration: underline; }
 .rs-unlimited-btn[aria-pressed="true"] { background: var(--danger); border-color: var(--danger); color: #fff; }
 .rs-unlimited-btn[aria-pressed="true"]:hover { background: #d9434e; border-color: #d9434e; color: #fff; }
 .rs-label-max-text.is-unlimited { color: var(--danger); font-weight: 600; }
+
+/* ---------- Tooltips ---------- */
+/* Pure-CSS hover/focus tooltips driven by a `data-tooltip="label"`
+   attribute — no JS component needed, and no separate implementation for
+   the static public/*.html pages vs. the React pages: JSX passes an
+   unrecognized `data-*` prop straight through to the rendered DOM node, so
+   `<button data-tooltip="Refresh">` in a .jsx file and
+   `<button data-tooltip="Refresh">` typed directly into a .html file are
+   the exact same thing by the time this CSS sees them. Scoped to icon-only
+   controls throughout the app — anywhere a button/control has no visible
+   text label of its own, hover (or keyboard focus, for anyone tabbing
+   through instead of using a mouse) reveals what it does.
+   Default position is centered above the trigger. Add
+   `data-tooltip-pos="right"`/`"bottom"`/`"left"` on elements where "above"
+   would clip against a viewport edge or a narrow rail — the collapsed
+   sidebar's icon-only nav column is the main real case (see js/nav.js),
+   hence "right" existing at all. */
+[data-tooltip] {
+  position: relative;
+}
+[data-tooltip]::after,
+[data-tooltip]::before {
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.12s ease, visibility 0.12s ease;
+  transition-delay: 0s;
+  z-index: 200; /* above .modal-overlay (100) — a tooltip inside a modal still needs to clear it */
+}
+[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--surface-3);
+  color: var(--text-primary);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 5px 9px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+  white-space: normal;
+  max-width: 200px;
+  width: max-content;
+  text-align: center;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+[data-tooltip]::before {
+  content: '';
+  position: absolute;
+  bottom: calc(100% + 3px);
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: var(--surface-3);
+}
+/* Shows after a short "hover intent" delay (avoids a flash of every
+   tooltip on the way to somewhere else), hides instantly on mouse-out —
+   the delay only applies to the transition-in direction, since it's set on
+   the hover/focus rule rather than the base one. */
+[data-tooltip]:hover::after, [data-tooltip]:hover::before,
+[data-tooltip]:focus-visible::after, [data-tooltip]:focus-visible::before {
+  opacity: 1;
+  visibility: visible;
+  transition-delay: 0.35s;
+}
+
+[data-tooltip-pos="right"]::after {
+  bottom: auto; top: 50%; left: calc(100% + 8px);
+  transform: translateY(-50%);
+}
+[data-tooltip-pos="right"]::before {
+  bottom: auto; top: 50%; left: calc(100% + 3px);
+  transform: translateY(-50%);
+  border-top-color: transparent;
+  border-right-color: var(--surface-3);
+}
+
+[data-tooltip-pos="bottom"]::after {
+  bottom: auto; top: calc(100% + 8px); left: 50%;
+  transform: translateX(-50%);
+}
+[data-tooltip-pos="bottom"]::before {
+  bottom: auto; top: calc(100% + 3px); left: 50%;
+  transform: translateX(-50%);
+  border-top-color: transparent;
+  border-bottom-color: var(--surface-3);
+}
+
+[data-tooltip-pos="left"]::after {
+  bottom: auto; top: 50%; left: auto; right: calc(100% + 8px);
+  transform: translateY(-50%);
+}
+[data-tooltip-pos="left"]::before {
+  bottom: auto; top: 50%; left: auto; right: calc(100% + 3px);
+  transform: translateY(-50%);
+  border-top-color: transparent;
+  border-left-color: var(--surface-3);
+}
+
+/* ==========================================================================
+   ---------- Mobile / responsive ----------
+   ==========================================================================
+   Nothing below this point exists yet anywhere else in this file — before
+   this, every layout in the app assumed a desktop-width viewport: a fixed
+   216px sidebar always on screen, ~15 different data tables built as CSS
+   Grid rows with fixed pixel column widths (.settings-row/.dlclient-row/
+   .ep-row/etc. — see their grid-template-columns above), fixed-width
+   sidebars/fields in Settings forms (.field-control), and a couple of
+   4-column stat grids. One breakpoint (860px — narrower than a small
+   laptop, comfortably wider than any phone in portrait, and still well
+   under the ~900-1000px a lot of tablets report in portrait) covers the
+   structural change every page needs: the sidebar goes from an
+   always-visible column that pushes .main over, to an off-canvas drawer
+   toggled by a hamburger button, so .main gets the full viewport width
+   back. Everything else here (data tables, forms, the Series header,
+   Calendar) rides on that same breakpoint rather than introducing several
+   competing ones, since none of these pages actually needs a distinct
+   "tablet" treatment between "sidebar visible" and "sidebar hidden."
+
+   The guiding choice for the ~15 fixed-column data tables specifically:
+   turn each one horizontally scrollable rather than reflowing every row
+   into a stacked card (which would mean redesigning — and hand-maintaining
+   — ~15 separate row layouts, one per settings/activity/wanted/system
+   page). A horizontally-scrollable table keeps every column exactly where
+   a desktop user already knows to find it, just reachable with a swipe
+   instead of all visible at once — the same tradeoff most admin-style
+   dashboards (this app's own Sonarr/Radarr inspiration included) make for
+   dense tabular data on a phone. */
+
+/* Base (all-viewport) rules for the mobile-only chrome the 860px block
+   below turns on — .mobile-nav-toggle/.mobile-nav-scrim/.mobile-topbar are
+   injected into every sidebar-bearing page once by nav.js's
+   ensureMobileChrome() regardless of viewport width, so they need an
+   explicit display: none of their own here, ABOVE the @media block, to
+   stay inert on a wide viewport. Order matters: at equal specificity the
+   later rule in the file wins wherever both apply, so these unconditional
+   "off" rules have to come before the media query's conditional "on"
+   rules below, not after — the reverse order would have this always-on
+   display: none beat the media query's display: flex even once the
+   viewport actually is narrow enough to match it. */
+.mobile-nav-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.mobile-nav-toggle:hover { background: var(--surface-2); }
+.mobile-nav-toggle svg { width: 20px; height: 20px; }
+.mobile-nav-scrim { display: none; }
+.mobile-topbar { display: none; }
+
+@media (max-width: 860px) {
+  /* ---------- Sidebar becomes an off-canvas drawer ---------- */
+  /* position: fixed pulls .sidebar out of .layout's flex flow entirely, so
+     .main already gets the full viewport width back with no change needed
+     on .layout/.main themselves. translateX(-100%) keeps it fully off
+     (rather than display: none) so the slide transition below has
+     something to animate; #mobileNavToggle/#mobileNavScrim (both injected
+     by nav.js's ensureMobileChrome(), see that file) drive the
+     .mobile-open class that brings it on screen. 100dvh (not 100vh) so the
+     drawer's real height accounts for a mobile browser's collapsing
+     address bar instead of being taller than the visible viewport on
+     first paint. */
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 272px;
+    max-width: 84vw;
+    height: 100dvh;
+    transform: translateX(-100%);
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+    z-index: 210;
+    transition: transform 0.2s ease;
+  }
+  .sidebar.mobile-open { transform: translateX(0); }
+
+  /* The desktop icon-only "collapsed" rail (64px, labels hidden) is a
+     space-saving preference for a screen that already has the sidebar
+     permanently visible — meaningless once the sidebar is an off-canvas
+     drawer that's either fully open (full labels, easy to tap) or fully
+     hidden. Rather than touch .sidebar.collapsed's own desktop rules above
+     (and risk that breakpoint's behavior), this just overrides their
+     effect back to "expanded" whenever a collapsed preference happens to
+     be stored while the viewport is this narrow — same cascade trick
+     html.sidebar-collapsed-boot relies on elsewhere in this file: later
+     source order wins ties at equal specificity. */
+  .sidebar.collapsed { width: 272px; }
+  .sidebar.collapsed .nav-label,
+  .sidebar.collapsed .nav-badge,
+  .sidebar.collapsed .nav-sub,
+  .sidebar.collapsed .brand-name,
+  .sidebar.collapsed .user-chip-info,
+  .sidebar.collapsed .user-chip-caret { display: revert; }
+  .sidebar.collapsed .nav-item,
+  .sidebar.collapsed .user-chip { justify-content: flex-start; }
+  .sidebar.collapsed .brand { justify-content: space-between; }
+  .sidebar.collapsed .brand-mark { display: block; }
+  /* Same boot-time flash fix as html.sidebar-collapsed-boot .sidebar above,
+     just neutralized for the same reason as .sidebar.collapsed itself on
+     this narrow a viewport — the very first paint shouldn't show a 64px
+     rail either. */
+  html.sidebar-collapsed-boot .sidebar { width: 272px; }
+
+  /* The desktop hamburger inside the brand row still exists (see nav.js's
+     renderSidebar) and still works — initSidebarInteractions() branches
+     its click handler on this same 860px breakpoint to close the drawer
+     here instead of toggling the desktop collapsed/expanded width. */
+
+  /* Hamburger button that opens the drawer, and the dimmed backdrop behind
+     it — both injected once per page load by nav.js's ensureMobileChrome()
+     rather than hand-added to all 30 sidebar-bearing HTML files, the same
+     "one source of truth" reasoning NAV_SECTIONS itself already follows
+     (see the top of nav.js). Hidden outright above this breakpoint via the
+     default display: none on their base (non-media-query) rules further
+     down this file. */
+  .mobile-nav-toggle { display: flex; }
+  .mobile-nav-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(8, 9, 12, 0.55);
+    z-index: 205;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+  }
+  .mobile-nav-scrim.visible { opacity: 1; pointer-events: auto; }
+  /* Stops the page underneath from also scrolling while the drawer's open
+     — without this, a long Library grid or episode list keeps scrolling
+     under a finger dragging inside the (fixed-position, so visually
+     stationary) drawer or scrim. */
+  body.mobile-nav-open { overflow: hidden; }
+
+  /* ---------- Mobile top bar ---------- */
+  /* A real, in-flow bar (not just a floating button over content) so
+     .main's own content always starts below it instead of a hamburger
+     overlapping whatever the page happens to render at the very top —
+     injected as the first child of <body>, immediately before .layout, by
+     the same ensureMobileChrome(). position: sticky (not fixed) keeps it
+     simple: it's already the first thing in normal document flow, so
+     sticking it to the top of the viewport once the page scrolls needs no
+     extra height/offset math the way pulling it out of flow with fixed
+     would. */
+  .mobile-topbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: 52px;
+    padding: 0 14px;
+    background: var(--surface-1);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 190;
+  }
+  .mobile-topbar .brand-mark { width: 20px; height: 20px; color: var(--accent); flex-shrink: 0; }
+  .mobile-topbar .mobile-topbar-title {
+    font-weight: 700;
+    font-size: 15px;
+    letter-spacing: -0.01em;
+  }
+
+  /* ---------- Content area ---------- */
+  .main { padding: 16px 16px 32px; }
+  /* .main-series's desktop design (further up this file) is a fixed-height
+     box with overflow: hidden, where only .episode-list-scroll — one flex
+     child — scrolls internally, so the header/tabs stay pinned above it.
+     That relies on the header being short enough to leave real room for
+     the episode list beneath it, true on desktop's single-row layout
+     (poster and info side by side, 4 stat cards in one row). Stacking the
+     poster above .detail-info and the stat cards into 2 rows (both above,
+     "Series detail header") makes the header alone taller than a lot of
+     phones' viewport height — .episode-list-scroll (flex: 1, min-height:
+     0) simply has nothing left to grow into and collapses toward 0
+     height, with no way to reach it: overflow: hidden here blocks page
+     scroll by design, and the internal scroller it was supposed to
+     delegate to is invisible. Confirmed real regression, reported as
+     "scrolling doesn't work" on the Series page.
+
+     The fix: don't try to keep the fixed-height/internal-scroll scheme
+     working at a height budget it no longer fits — auto height +
+     overflow: visible here turns .main-series back into an ordinary block
+     that grows with its content, the same as every other page (Library,
+     Settings, etc. already page-scroll normally, see .main's own comment
+     further up). #seriesRoot's flex: 1 and .episode-list-scroll's flex: 1
+     both become no-ops once their containing chain no longer has a fixed
+     height to distribute (nothing left to "grow into"), so this one
+     change is enough — nothing else in that flex chain needs touching. */
+  .main-series { height: auto; overflow: visible; }
+
+  .top-row { flex-wrap: wrap; row-gap: 12px; }
+  .search-box { width: 100%; }
+  .filter-row { flex-wrap: wrap; row-gap: 10px; }
+  .filter-row-right { flex-wrap: wrap; row-gap: 8px; }
+
+  .stat-grid,
+  .detail-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  /* ---------- Data tables: scroll horizontally instead of squeezing fixed
+     columns down to nothing, or (worse) silently overflowing the page —
+     see this section's own top comment for why scroll rather than reflow
+     into cards. Every settings/activity/wanted/system/library-table page
+     mounts its React content into one `<div id="somethingRoot">` sitting
+     directly under `<main class="main">` — id assigned per page, but
+     always ending in "Root" (see nav.js's own README reference and every
+     public/*.html file) — so this one attribute-suffix selector reaches
+     every one of them without needing to list ~20 ids individually, or
+     touch a single page's markup. #seriesRoot is the one exception: Series
+     already has its own fixed-height flex layout (.main-series above) that
+     manages its own internal scrolling, and adding a second, competing
+     horizontal scroll container there would fight it rather than help. */
+  .main > [id$="Root"]:not(#seriesRoot) {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* These panels were deliberately clipped (overflow-x: clip) or hidden
+     (.modal-body's overflow-x: hidden) rather than left to scroll — see
+     each rule's own comment further up this file — specifically to hide
+     harmless sub-pixel/tooltip overflow on a desktop-width layout where
+     nothing real was ever supposed to run past the edge. On a phone-width
+     viewport, several of these now genuinely contain fixed-width content
+     wider than the panel itself (.ep-row's 7-column grid inside
+     .episode-list-scroll, a release's column grid inside .modal-body,
+     etc.) — clip/hidden would make that content silently unreachable
+     instead of just unscrollable-when-it-doesn't-need-to-be. Switching to
+     auto here trades back a little of the "no accidental scrollbar" polish
+     for "nothing is ever actually inaccessible," which matters more once
+     the content routinely doesn't fit. */
+  .episode-list-scroll,
+  .torrent-list,
+  .file-browser-list,
+  .rename-preview-list,
+  .release-list-wrap,
+  .modal-body { overflow-x: auto; }
+
+  /* ---------- Settings forms: side-by-side label + control stacks ---------- */
+  /* .field-control's fixed 280/360px width (row-content-shrinks-around-it)
+     is the desktop layout: label and control sit on the same line with the
+     control right-aligned. There's no room for a fixed-width control next
+     to a label on a phone, so this stacks them — label on top, control
+     below at the row's full width — the standard mobile settings-form
+     pattern, and just a flex-direction flip since .form-row is already a
+     flex row, not a rewrite. */
+  .form-row { flex-direction: column; gap: 8px; }
+  .field-label { max-width: none; }
+  .field-control,
+  .field-control.wide,
+  .field-control.full { width: 100%; justify-content: flex-start; }
+  .ssl-file-field { justify-content: flex-start; }
+  .ssl-file-field .form-error { text-align: left; }
+
+  /* ---------- Series detail header ---------- */
+  /* .detail-poster's fixed 220px plus .detail-header's 40px gap leaves a
+     phone-width .detail-info column too narrow for a title, let alone the
+     stat cards below it — stacking the poster above the info column
+     (instead of beside it) is the same "reflow, don't shrink past
+     legibility" call every other section here makes. The poster gets a
+     shorter, centered cap (180px) rather than stretching full-width: nothing
+     about a poster's 2:3 aspect ratio benefits from being edge-to-edge on a
+     phone, and a huge poster would just push the title/overview/stats
+     further down the page for no readability gain. */
+  .detail-header { flex-direction: column; gap: 16px; }
+  /* .detail-poster has no aspect-ratio of its own by design on desktop
+     (see its own comment above) — its height there comes entirely from
+     .detail-header's flex-row stretch matching .detail-info's height.
+     Once .detail-header switches to a column above, that stretch resolves
+     along the now-horizontal cross axis (width, already fixed by this
+     rule) instead, so the poster's height would fall back to auto — and
+     since its only child (the <img>) is position: absolute and so
+     contributes nothing to intrinsic height, it'd collapse to 0 with
+     nothing on screen. An explicit aspect-ratio (2:3, same as .poster's
+     library-grid cards use) is what every other poster box in this app
+     relies on for its height, so it's the fix here too. */
+  .detail-poster { width: 180px; max-width: 100%; aspect-ratio: 2 / 3; margin: 0 auto; }
+  .title-row { flex-wrap: wrap; row-gap: 10px; }
+  .detail-actions { flex-wrap: wrap; }
+  .overview { max-width: none; }
+  .segment-tabs-row { flex-wrap: wrap; row-gap: 8px; }
+
+  /* ---------- Calendar ---------- */
+  /* Same "scroll instead of squeeze" call as the data tables above, just
+     applied by hand instead of through the generic #calendarRoot rule:
+     repeat(7, 1fr) is fluid, so on its own it would rather shrink every
+     day cell down to an unreadably narrow ~40px than overflow — a
+     min-width forces it to overflow (and therefore actually scroll inside
+     #calendarRoot, already covered by the [id$="Root"] rule above) at a
+     width where a day cell can still fit a date number and an episode
+     title or two. */
+  .calendar-weekdays,
+  .calendar-grid { min-width: 700px; }
+}
