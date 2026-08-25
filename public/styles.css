@@ -1160,7 +1160,7 @@ select {
 .format-header, .format-row { grid-template-columns: 1fr 130px 140px 32px 32px; }
 .quality-header, .quality-row { grid-template-columns: 170px 1fr 110px 110px 110px; }
 .task-header, .task-row { grid-template-columns: 1fr 140px 140px 140px 100px; }
-.backup-header, .backup-row { grid-template-columns: 90px 1fr 90px 150px 70px 32px; }
+.backup-header, .backup-row { grid-template-columns: 90px 1fr 90px 150px 130px 32px; }
 .health-row { grid-template-columns: 150px 1fr; }
 .event-header, .event-row { grid-template-columns: 90px 100px 1fr; }
 .log-header, .log-row { grid-template-columns: 90px 70px 160px 1fr; }
