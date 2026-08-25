@@ -522,7 +522,11 @@ function loadCachedEpisodes(seriesId) {
 // at the first real match; returns null (a completely normal, common
 // outcome for a series with nothing downloaded anywhere yet) if nothing on
 // disk looks like this series at all, or if no root folders are configured.
-function findExistingSeriesFolder(series) {
+// Async (fs.promises.readdir, not readdirSync) — see walkVideoFiles' own
+// comment in lib/media-files.js for why: a synchronous scan across every
+// configured root folder blocks the whole app, not just this lookup,
+// however long those folders (often a network mount) take to answer.
+async function findExistingSeriesFolder(series) {
   const candidateNames = [series.title];
   try {
     const altTitles = series.alt_titles ? JSON.parse(series.alt_titles) : [];
@@ -536,7 +540,7 @@ function findExistingSeriesFolder(series) {
   for (const rootPath of rootFolderPaths) {
     let entries;
     try {
-      entries = fs.readdirSync(rootPath, { withFileTypes: true });
+      entries = await fs.promises.readdir(rootPath, { withFileTypes: true });
     } catch (err) {
       logWarn('EpisodeService', `Could not scan root folder "${rootPath}" for "${series.title}": ${err.code || err.message}`);
       continue;
@@ -557,11 +561,11 @@ function findExistingSeriesFolder(series) {
 // ever adds matches, silently skipping anything it can't confidently place
 // (no episode number, an ambiguous season, no matching episode row) rather
 // than guessing wrong.
-function scanExistingFilesForSeries(series, episodeRows) {
-  const folderPath = findExistingSeriesFolder(series);
+async function scanExistingFilesForSeries(series, episodeRows) {
+  const folderPath = await findExistingSeriesFolder(series);
   if (!folderPath) return { matchedCount: 0, folderPath: null };
 
-  const files = walkVideoFiles(folderPath);
+  const files = await walkVideoFiles(folderPath);
   if (files.length === 0) return { matchedCount: 0, folderPath };
 
   // A bare "05"-style filename with no SxxExx tag and no "Season N" ancestor
@@ -606,7 +610,7 @@ function scanExistingFilesForSeries(series, episodeRows) {
     // function couldn't confirm. A confirmed real resolution overrides
     // whatever (if anything) the filename itself claims — see
     // guessQualityTierName's own comment for why a probe beats a text tag.
-    const streams = probeMediaStreams(realPath);
+    const streams = await probeMediaStreams(realPath);
     const probedResolutionGroup = streams && streams.video ? resolutionGroupFromHeight(streams.video.height) : null;
     const quality = guessQualityTierName(file.name, probedResolutionGroup);
     update.run(quality, file.sizeBytes, realPath, streams ? JSON.stringify(streams) : null, episode.id);
@@ -644,7 +648,7 @@ async function resolveAndCacheEpisodesForSeries(series) {
       // is first added (see warmEpisodesInBackground) or the first time
       // anyone opens its detail page.
       const episodeRows = db.prepare('SELECT id, season_number, num FROM episodes WHERE series_id = ?').all(series.id);
-      const scanResult = scanExistingFilesForSeries(series, episodeRows);
+      const scanResult = await scanExistingFilesForSeries(series, episodeRows);
       if (scanResult.matchedCount > 0) {
         logInfo('EpisodeService', `Found ${scanResult.matchedCount} already-downloaded episode(s) for "${series.title}" already on disk at "${scanResult.folderPath}"`);
       }

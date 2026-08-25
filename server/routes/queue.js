@@ -752,7 +752,7 @@ async function realTick() {
 
       if ((t.progress || 0) >= 1) {
         const files = await filesForHash(row.torrent_hash);
-        completeRealDownload(row, t, client, files);
+        await completeRealDownload(row, t, client, files);
       } else if (t.state === 'error' || t.state === 'missingFiles') {
         failRealDownload(row, t);
       } else {
@@ -814,7 +814,7 @@ function pickFileForEpisode(files, episode) {
   return null;
 }
 
-function completeRealDownload(row, torrent, client, files) {
+async function completeRealDownload(row, torrent, client, files) {
   db.prepare('DELETE FROM queue WHERE id = ?').run(row.id);
 
   // Full row (not just title/path) — episodeFileNameFor/seriesFolderNameFor
@@ -893,7 +893,7 @@ function completeRealDownload(row, torrent, client, files) {
       // row.quality untouched whenever nothing was confirmed, rather than
       // re-deriving a full guess that might disagree with what a real
       // indexer's own parsing already decided at grab time.
-      mediaStreams = probeMediaStreams(localSourcePath);
+      mediaStreams = await probeMediaStreams(localSourcePath);
       const probedResolutionGroup = mediaStreams && mediaStreams.video ? resolutionGroupFromHeight(mediaStreams.video.height) : null;
       if (probedResolutionGroup) {
         quality = guessQualityTierName(row.release_title, probedResolutionGroup) || row.quality;

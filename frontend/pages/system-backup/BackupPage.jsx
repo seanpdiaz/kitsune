@@ -95,7 +95,7 @@ export default function BackupPage({ buttonContainer }) {
             <button className="btn-test" type="button" onClick={() => { window.location.href = `/api/backups/${encodeURIComponent(b.id)}/download`; }}>
               {icons.download}Download
             </button>
-            <button className="ep-action" type="button" aria-label={`Delete ${b.name}`} onClick={() => handleRemove(b.id)}>
+            <button className="ep-action" type="button" aria-label={`Delete ${b.name}`} data-tooltip="Delete backup" onClick={() => handleRemove(b.id)}>
               {icons.x}
             </button>
           </div>

@@ -28,14 +28,27 @@ const { db } = require('../db');
 // can no longer keep an otherwise-complete series' progress bar short of
 // 100% — the Specials tab itself is untouched by this; it still renders
 // every cached special either way (see SeriesPage.jsx's groupEpisodesBySeason).
+//
+// Also excludes episodes with no `aired` date (TheTVDB's own placeholder for
+// "we know this episode number exists in a future/unannounced season but
+// don't have an air date for it yet" — see tvdb.js's `aired: e.aired ||
+// null`) from the total, unless one's somehow already downloaded (a leaked
+// release ahead of an official air date being set — still counts, since we
+// obviously do have it). Otherwise a newly-revealed Season 2 with a single
+// placeholder episode row and no air date yet permanently held an otherwise
+// fully-downloaded series' progress bar below 100%, for a season that, per
+// TVDB, doesn't really exist yet.
 function recomputeSeriesEpisodeStats(seriesId) {
   const series = db.prepare('SELECT ignore_specials FROM series WHERE id = ?').get(seriesId);
   const ignoreSpecials = series && series.ignore_specials ? 1 : 0;
   const row = db.prepare(`
     SELECT COUNT(*) AS total, COALESCE(SUM(downloaded), 0) AS done
-    FROM episodes WHERE series_id = ? AND (? = 0 OR season_number > 0)
+    FROM episodes
+    WHERE series_id = ?
+      AND (? = 0 OR season_number > 0)
+      AND (downloaded = 1 OR aired IS NOT NULL)
   `).get(seriesId, ignoreSpecials);
-  if (!row || row.total === 0) return; // no cached (non-special, if ignored) episodes yet — leave eps/pct as whatever they were seeded with
+  if (!row || row.total === 0) return; // no cached (non-special, if ignored; aired-or-downloaded) episodes yet — leave eps/pct as whatever they were seeded with
 
   const pct = Math.round((row.done / row.total) * 100);
   db.prepare('UPDATE series SET eps = ?, pct = ? WHERE id = ?')

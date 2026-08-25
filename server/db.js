@@ -36,4 +36,26 @@ const db = new DatabaseSync(DB_PATH);
 // data/kitsune.db.corrupted-<timestamp>.
 db.exec('PRAGMA journal_mode = WAL;');
 
-module.exports = { db, DB_PATH };
+// ---------------------------------------------------------------------------
+// Demo data seeding toggle
+//
+// series.js/tags.js/settings-items.js each seed a small set of fake default
+// rows (demo anime, demo tags, demo indexers/connections/quality profiles)
+// into their own table the first time it's empty — see each file's own
+// "Seeded ..." log line. That's the right default for this repo's actual
+// purpose (README/package.json both call it a "click-through visual
+// mockup") and for a fresh local dev copy: there's something to click
+// through immediately instead of a blank Library. It's the wrong default
+// the moment this gets deployed somewhere as a real instance, though —
+// SEED_DEMO_DATA=false in .env (or the real environment) skips all three,
+// so a freshly deployed, freshly emptied database starts genuinely empty
+// instead of with 18 anime nobody added. Defaults to seeding (true) so
+// every existing local/demo setup that's never heard of this var keeps
+// behaving exactly as it always has; only an explicit "false"/"0"/"no"
+// opts out, so a typo like SEED_DEMO_DATA=flase fails safe (still seeds)
+// rather than silently doing the opposite of what someone typed.
+const SEED_DEMO_DATA = !['false', '0', 'no'].includes(
+  String(process.env.SEED_DEMO_DATA ?? 'true').trim().toLowerCase()
+);
+
+module.exports = { db, DB_PATH, SEED_DEMO_DATA };
