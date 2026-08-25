@@ -291,7 +291,7 @@ function EpisodeActionsMenu({ ep, onMediaInfo, onDeleteFile }) {
   return (
     <div className="ep-action-wrap" ref={wrapRef}>
       <button
-        type="button" className="ep-action" aria-label="Episode options"
+        type="button" className="ep-action" aria-label="Episode options" data-tooltip="Episode options"
         aria-haspopup="true" aria-expanded={open} onClick={() => setOpen((o) => !o)}
       >
         {icons.dots}
@@ -332,19 +332,19 @@ function EpisodeRow({ ep, onSearch, onGrabBest, grabbingBestId, onCancel, onDeta
     // real sizeBytes/path/quality-tier-name behind it for Media Info to show.
     action = canAct
       ? <EpisodeActionsMenu ep={ep} onMediaInfo={onMediaInfo} onDeleteFile={onDeleteFile} />
-      : <button className="ep-action" aria-label="Options" disabled style={{ opacity: 0.4 }}>{icons.dots}</button>;
+      : <button className="ep-action" aria-label="Options" data-tooltip="Episode options" disabled style={{ opacity: 0.4 }}>{icons.dots}</button>;
   } else if (ep.state === 'missing') {
     status = <span className="ep-status status-missing">{icons.alert}Missing</span>;
     const grabbingThis = grabbingBestId === ep.id;
     action = canAct
       ? (
         <div className="ep-action-group">
-          <button className="ep-action" type="button" aria-label="Search episode" onClick={() => onSearch(ep.id)}>{icons.search}</button>
+          <button className="ep-action" type="button" aria-label="Search episode" data-tooltip="Search episode" onClick={() => onSearch(ep.id)}>{icons.search}</button>
           <button
             className="ep-action"
             type="button"
             aria-label="Grab best match"
-            title="Search and grab the best release for this series' Quality Profile — no picker"
+            data-tooltip="Grab best match"
             disabled={grabbingBestId != null}
             style={grabbingThis ? { opacity: 0.5 } : undefined}
             onClick={() => onGrabBest(ep.id)}
@@ -353,15 +353,15 @@ function EpisodeRow({ ep, onSearch, onGrabBest, grabbingBestId, onCancel, onDeta
           </button>
         </div>
       )
-      : <button className="ep-action" aria-label="Search episode" disabled style={{ opacity: 0.4 }}>{icons.search}</button>;
+      : <button className="ep-action" aria-label="Search episode" data-tooltip="Search episode" disabled style={{ opacity: 0.4 }}>{icons.search}</button>;
   } else if (ep.state === 'downloading') {
     status = <span className="ep-status status-dl">{icons.download}{ep.pct}%</span>;
     action = canAct && ep.queueId != null
-      ? <button className="ep-action" type="button" aria-label="Cancel download" onClick={() => onCancel(ep.queueId)}>{icons.x}</button>
-      : <button className="ep-action" aria-label="Cancel download" disabled style={{ opacity: 0.4 }}>{icons.x}</button>;
+      ? <button className="ep-action" type="button" aria-label="Cancel download" data-tooltip="Cancel download" onClick={() => onCancel(ep.queueId)}>{icons.x}</button>
+      : <button className="ep-action" aria-label="Cancel download" data-tooltip="Cancel download" disabled style={{ opacity: 0.4 }}>{icons.x}</button>;
   } else {
     status = <span className="ep-status status-pending">{icons.clock}Not aired</span>;
-    action = <button className="ep-action" aria-label="Search episode" disabled style={{ opacity: 0.4 }}>{icons.dots}</button>;
+    action = <button className="ep-action" aria-label="Search episode" data-tooltip="Search episode" disabled style={{ opacity: 0.4 }}>{icons.dots}</button>;
   }
 
   const extraTags = [];
@@ -515,7 +515,7 @@ function EditSeriesModal({ series, isComplete, onClose, onSaved, onDeleteInstead
       <div className="modal-box wide">
         <div className="modal-header">
           <h2>Edit - {series.title}</h2>
-          <button className="modal-close" type="button" aria-label="Close" onClick={onClose}>{icons.x}</button>
+          <button className="modal-close" type="button" aria-label="Close" data-tooltip="Close" onClick={onClose}>{icons.x}</button>
         </div>
         <div className="modal-body">
           <div className="form-row">
@@ -586,7 +586,7 @@ function EditSeriesModal({ series, isComplete, onClose, onSaved, onDeleteInstead
                   {selectedTags.map((t) => (
                     <span className="tag-chip" style={tagChipStyleObj(t.color)} key={t.id}>
                       {t.name}
-                      <button type="button" aria-label={`Remove ${t.name}`} onClick={() => removeTag(t.id)}>{icons.x}</button>
+                      <button type="button" aria-label={`Remove ${t.name}`} data-tooltip="Remove tag" onClick={() => removeTag(t.id)}>{icons.x}</button>
                     </span>
                   ))}
                 </div>
@@ -622,7 +622,7 @@ function EditSeriesModal({ series, isComplete, onClose, onSaved, onDeleteInstead
       <div className="modal-box wide">
         <div className="modal-header">
           <h2>File Browser</h2>
-          <button className="modal-close" type="button" id="fileBrowserModalClose" aria-label="Close">{icons.x}</button>
+          <button className="modal-close" type="button" id="fileBrowserModalClose" aria-label="Close" data-tooltip="Close">{icons.x}</button>
         </div>
         <div className="modal-body">
           <input type="text" className="field-input" id="fileBrowserPathInput" placeholder="Start typing or select a path below" style={{ width: '100%', marginBottom: '12px' }} />
@@ -680,7 +680,7 @@ function RenameSeasonModal({ seriesId, seasonNumber, currentLabel, onClose, onRe
       <div className="modal-box">
         <div className="modal-header">
           <h2>Rename Season</h2>
-          <button className="modal-close" type="button" aria-label="Close" onClick={onClose}>{icons.x}</button>
+          <button className="modal-close" type="button" aria-label="Close" data-tooltip="Close" onClick={onClose}>{icons.x}</button>
         </div>
         <div className="modal-body">
           <div className="form-row" style={{ borderTop: 'none', paddingTop: 0 }}>
@@ -723,7 +723,7 @@ function DeleteSeriesModal({ series, onClose }) {
       <div className="modal-box">
         <div className="modal-header">
           <h2>Delete Series</h2>
-          <button className="modal-close" type="button" aria-label="Close" onClick={onClose}>{icons.x}</button>
+          <button className="modal-close" type="button" aria-label="Close" data-tooltip="Close" onClick={onClose}>{icons.x}</button>
         </div>
         <div className="modal-body">
           <p>{error || `Are you sure you want to delete "${series.title}"? This can't be undone.`}</p>
@@ -821,7 +821,7 @@ function RenameFilesModal({ series, onClose, onRenamed }) {
       <div className="modal-box wide">
         <div className="modal-header">
           <h2>Rename Files — {series.title}</h2>
-          <button className="modal-close" type="button" aria-label="Close" onClick={onClose}>{icons.x}</button>
+          <button className="modal-close" type="button" aria-label="Close" data-tooltip="Close" onClick={onClose}>{icons.x}</button>
         </div>
         <div className="modal-body">
           {renameToggleOff && (
@@ -898,7 +898,7 @@ function MediaInfoModal({ ep, resolutionGroupByQuality, onClose }) {
       <div className="modal-box">
         <div className="modal-header">
           <h2>Media Info — {code}</h2>
-          <button className="modal-close" type="button" aria-label="Close" onClick={onClose}>{icons.x}</button>
+          <button className="modal-close" type="button" aria-label="Close" data-tooltip="Close" onClick={onClose}>{icons.x}</button>
         </div>
         <div className="modal-body">
           <div className="episode-details-list">
@@ -949,7 +949,7 @@ function DeleteEpisodeFileModal({ ep, onClose, onDeleted }) {
       <div className="modal-box">
         <div className="modal-header">
           <h2>Delete File — {code}</h2>
-          <button className="modal-close" type="button" aria-label="Close" onClick={onClose}>{icons.x}</button>
+          <button className="modal-close" type="button" aria-label="Close" data-tooltip="Close" onClick={onClose}>{icons.x}</button>
         </div>
         <div className="modal-body">
           <p>{error || `Are you sure you want to delete the media file for "${ep.title}"? This removes it from disk and can't be undone.`}</p>
@@ -1442,7 +1442,7 @@ export default function SeriesPage() {
             type="button"
             className="ep-action"
             aria-label="Search season"
-            title="Search for this season as one batch release"
+            data-tooltip="Search season"
             onClick={() => handleSearchSeason(activeGroup.seasonNumber)}
           >
             {icons.search}
@@ -1453,7 +1453,7 @@ export default function SeriesPage() {
             type="button"
             className="ep-action"
             aria-label="Grab best match for season"
-            title="Search and grab this season's best-match batch release for this series' Quality Profile — no picker"
+            data-tooltip="Grab best match"
             disabled={grabbingBestScope != null}
             onClick={() => handleGrabBestScope('season', activeGroup.seasonNumber)}
           >
@@ -1461,7 +1461,7 @@ export default function SeriesPage() {
           </button>
         )}
         {canRenameActiveSeason && (
-          <button type="button" className="ep-action" aria-label="Rename season" title="Rename season" onClick={() => setRenamingSeason(true)}>
+          <button type="button" className="ep-action" aria-label="Rename season" data-tooltip="Rename season" onClick={() => setRenamingSeason(true)}>
             {icons.edit}
           </button>
         )}

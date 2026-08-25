@@ -105,22 +105,28 @@ async function handleRootFoldersApi(req, res, urlPath) {
       db.prepare('SELECT id, title FROM series').all().map((r) => [normalizeFolderName(r.title), r])
     );
 
-    const subfolders = entries
-      .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
-      .map((e) => {
-        const matched = seriesByNormalized.get(normalizeFolderName(e.name)) || null;
-        const files = summarizeFiles(walkVideoFiles(path.join(folderPath, e.name)));
-        return {
-          name: e.name,
-          path: path.join(folderPath, e.name),
-          guessedTitle: guessTitleFromFolderName(e.name),
-          matchedTitle: matched ? matched.title : null,
-          matchedSeriesId: matched ? matched.id : null,
-          status: matched ? 'existing' : 'unmatched',
-          files,
-        };
-      })
-      .sort((a, b) => a.name.localeCompare(b.name));
+    // walkVideoFiles is async (see its own comment in lib/media-files.js for
+    // why) — Promise.all here runs every subfolder's walk concurrently
+    // rather than the old .map()'s implicit serial-and-blocking order, so a
+    // big library's first scan both keeps the rest of the app responsive
+    // AND doesn't get any slower for switching off the sync API.
+    const subfolders = (await Promise.all(
+      entries
+        .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+        .map(async (e) => {
+          const matched = seriesByNormalized.get(normalizeFolderName(e.name)) || null;
+          const files = summarizeFiles(await walkVideoFiles(path.join(folderPath, e.name)));
+          return {
+            name: e.name,
+            path: path.join(folderPath, e.name),
+            guessedTitle: guessTitleFromFolderName(e.name),
+            matchedTitle: matched ? matched.title : null,
+            matchedSeriesId: matched ? matched.id : null,
+            status: matched ? 'existing' : 'unmatched',
+            files,
+          };
+        })
+    )).sort((a, b) => a.name.localeCompare(b.name));
 
     sendJson(res, 200, { path: folderPath, subfolders });
     return true;
@@ -155,7 +161,7 @@ async function handleRootFoldersApi(req, res, urlPath) {
       return true;
     }
 
-    const files = walkVideoFiles(subfolderPath)
+    const files = (await walkVideoFiles(subfolderPath))
       .map((f) => {
         const guess = guessSeasonEpisode(f.name, f.seasonHint);
         return {

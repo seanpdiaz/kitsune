@@ -201,8 +201,8 @@ export default function TagsPage({ addBtnContainer }) {
           tags.map((tag) => (
             <span className="tag-chip" data-id={tag.id} key={tag.id} style={tagChipStyleObj(tag.color)}>
               {tag.name}<span className="tag-count">{tag.count}</span>
-              <button type="button" aria-label={`Edit ${tag.name}`} onClick={() => openModal('edit', tag)}>{icons.edit}</button>
-              <button type="button" aria-label={`Remove ${tag.name}`} disabled={removingIds.has(tag.id)} onClick={() => handleRemove(tag)}>{icons.x}</button>
+              <button type="button" aria-label={`Edit ${tag.name}`} data-tooltip="Edit tag" onClick={() => openModal('edit', tag)}>{icons.edit}</button>
+              <button type="button" aria-label={`Remove ${tag.name}`} data-tooltip="Remove tag" disabled={removingIds.has(tag.id)} onClick={() => handleRemove(tag)}>{icons.x}</button>
             </span>
           ))
         )}
@@ -213,7 +213,7 @@ export default function TagsPage({ addBtnContainer }) {
           <div className="modal-box">
             <div className="modal-header">
               <h2>{mode === 'edit' ? 'Edit Tag' : 'Create New Tag'}</h2>
-              <button className="modal-close" type="button" aria-label="Close" onClick={closeModal}>{icons.x}</button>
+              <button className="modal-close" type="button" aria-label="Close" data-tooltip="Close" onClick={closeModal}>{icons.x}</button>
             </div>
             <div className="modal-body">
               <input className="field-input" type="text" placeholder="New tag name" value={modalName} onChange={(e) => setModalName(e.target.value)} autoFocus />
@@ -231,6 +231,7 @@ export default function TagsPage({ addBtnContainer }) {
                   type="button" className={`color-swatch-add${!isPreset(selectedColor) ? ' has-custom' : ''}`}
                   style={!isPreset(selectedColor) ? { background: selectedColor, borderColor: selectedColor } : undefined}
                   aria-label="Custom color"
+                  data-tooltip="Custom color"
                   onClick={() => customColorRef.current && customColorRef.current.click()}
                 >
                   {!isPreset(selectedColor)

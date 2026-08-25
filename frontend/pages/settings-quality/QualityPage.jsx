@@ -122,9 +122,9 @@ function QualityTierRow({ tier, idx, total, bounds, format, parse, onCommit, onF
         <p className="settings-meta" ref={targetNoteRef} style={{ fontSize: '10px', margin: '2px 0 0' }}></p>
       </div>
       <div className="quality-tier-actions">
-        <button className="ep-action" type="button" disabled={idx === 0} aria-label={`Move ${tier.name} up in rank`} onClick={onMoveUp}>{icons.arrowUp}</button>
-        <button className="ep-action" type="button" disabled={idx === total - 1} aria-label={`Move ${tier.name} down in rank`} onClick={onMoveDown}>{icons.arrowDown}</button>
-        <button className="ep-action" type="button" aria-label={`Remove ${tier.name}`} onClick={onRemove}>{icons.x}</button>
+        <button className="ep-action" type="button" disabled={idx === 0} aria-label={`Move ${tier.name} up in rank`} data-tooltip="Move up" onClick={onMoveUp}>{icons.arrowUp}</button>
+        <button className="ep-action" type="button" disabled={idx === total - 1} aria-label={`Move ${tier.name} down in rank`} data-tooltip="Move down" onClick={onMoveDown}>{icons.arrowDown}</button>
+        <button className="ep-action" type="button" aria-label={`Remove ${tier.name}`} data-tooltip="Remove quality" onClick={onRemove}>{icons.x}</button>
       </div>
     </div>
   );
@@ -427,7 +427,7 @@ export default function QualityPage({ addBtnContainer }) {
           <div className="modal-box">
             <div className="modal-header">
               <h2>Add Quality</h2>
-              <button className="modal-close" type="button" aria-label="Close" onClick={() => setAddOpen(false)}>{icons.x}</button>
+              <button className="modal-close" type="button" aria-label="Close" data-tooltip="Close" onClick={() => setAddOpen(false)}>{icons.x}</button>
             </div>
             <div className="modal-body">
               <p className="modal-label">Name</p>
