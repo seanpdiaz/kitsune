@@ -3,3 +3,10 @@ node_modules/
 data/*.db
 .DS_Store
 data/*
+.env
+.env.deploy
+node_modules/
+data/*.db
+.DS_Store
+public/dist/
+data/

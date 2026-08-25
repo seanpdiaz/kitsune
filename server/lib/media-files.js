@@ -52,10 +52,23 @@ function seasonNumberFromFolderName(name) {
 // video container — with its real size and a season hint inherited from
 // whichever ancestor folder (relative to the original `dirPath`) looked
 // like a season folder, if any.
-function walkVideoFiles(dirPath, relativeDir = '', seasonHint = null) {
+//
+// Async (fs.promises, not the *Sync variants this used to use) on purpose —
+// readdirSync/statSync block Node's single-threaded event loop for however
+// long the real disk (or network mount — root folders regularly live on
+// something like /Volumes/Media) takes to answer, freezing every other
+// request the server is handling at the same time, not just this walk.
+// Confirmed real case: adding a series with existing local episode files
+// froze the whole UI while the add-time auto-scan walked its folder (see
+// scanExistingFilesForSeries in routes/episodes.js). Awaiting fs.promises
+// calls instead lets the event loop keep serving other requests while the
+// real I/O happens off the main thread — the walk itself takes the same
+// wall-clock time either way, only how much else the server can do
+// meanwhile changes.
+async function walkVideoFiles(dirPath, relativeDir = '', seasonHint = null) {
   let entries;
   try {
-    entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
   } catch (err) {
     logWarn('MediaFiles', `Could not read "${dirPath}": ${err.code || err.message}`);
     return [];
@@ -68,12 +81,12 @@ function walkVideoFiles(dirPath, relativeDir = '', seasonHint = null) {
     if (entry.isDirectory()) {
       const hint = seasonNumberFromFolderName(entry.name);
       files = files.concat(
-        walkVideoFiles(full, path.join(relativeDir, entry.name), hint != null ? hint : seasonHint)
+        await walkVideoFiles(full, path.join(relativeDir, entry.name), hint != null ? hint : seasonHint)
       );
     } else if (entry.isFile() && isVideoFile(entry.name)) {
       let sizeBytes = null;
       try {
-        sizeBytes = fs.statSync(full).size;
+        sizeBytes = (await fs.promises.stat(full)).size;
       } catch (err) {
         logWarn('MediaFiles', `Could not stat "${full}": ${err.code || err.message}`);
         continue;
@@ -205,18 +218,34 @@ function guessQualityTierName(filename, probedResolutionGroup = null) {
 // rather than silently picking season 1.
 function guessSeasonEpisode(filename, seasonHint) {
   const noExt = filename.replace(/\.[^.]+$/, '');
+  // Every pattern below finds the episode number by looking for a real
+  // whitespace character next to it — but some release groups (Chihiro is a
+  // real, confirmed example: "[Chihiro]_Jitsu_wa_Watashi_wa_-_01_[Blu-ray_
+  // 1080p_Hi10P_FLAC][8E8EC91B].mkv") use underscores as the word separator
+  // throughout the entire filename instead of spaces, including around the
+  // episode number itself. None of the patterns' `\s` ever matched an
+  // underscore, so a perfectly parseable "- 01 [" shape hidden behind
+  // "-_01_[" came back completely unmatched. `normalized` is a local search
+  // copy only — the real `filename`/`noExt` strings this function was given
+  // are never touched, so nothing downstream (an unmatched file's reason
+  // string, the real path used to update the episode row) ever sees an
+  // underscore silently turned into a space — this makes every existing
+  // pattern see the same shape it already handles for a space-separated
+  // release, with no separate underscore-aware copy of each pattern to keep
+  // in sync.
+  const normalized = noExt.replace(/_/g, ' ');
 
-  let m = /S(\d{1,2})E(\d{1,3})/i.exec(noExt);
+  let m = /S(\d{1,2})E(\d{1,3})/i.exec(normalized);
   if (m) return { season: Number(m[1]), episode: Number(m[2]), confident: true };
 
-  m = /\bE(?:P)?\.?\s?(\d{1,3})\b/i.exec(noExt);
+  m = /\bE(?:P)?\.?\s?(\d{1,3})\b/i.exec(normalized);
   if (m) return { season: seasonHint ?? null, episode: Number(m[1]), confident: seasonHint != null };
 
   // Common anime convention: "Series Name - 05 [1080p][hash]" — a lone
   // 1-3 digit number set off by " - " and followed by a bracket/paren or
   // the end of the name, so a bare number anywhere else in a longer title
   // (a year, a resolution digit) doesn't match.
-  m = /-\s*(\d{1,3})(?:v\d)?\s*(?=\[|\(|$)/.exec(noExt);
+  m = /-\s*(\d{1,3})(?:v\d)?\s*(?=\[|\(|$)/.exec(normalized);
   if (m) return { season: seasonHint ?? null, episode: Number(m[1]), confident: seasonHint != null };
 
   // Same idea without the hyphen — "Series Name 01.mkv" or "Series Name 01
@@ -228,7 +257,46 @@ function guessSeasonEpisode(filename, seasonHint) {
   // above keeps a resolution tag or a year elsewhere in the title from
   // being misread as the episode number — tried last, only once every more
   // specific pattern above has already failed to match.
-  m = /\s(\d{1,3})(?:v\d)?\s*(?=\[|\(|$)/.exec(noExt);
+  m = /\s(\d{1,3})(?:v\d)?\s*(?=\[|\(|$)/.exec(normalized);
+  if (m) return { season: seasonHint ?? null, episode: Number(m[1]), confident: seasonHint != null };
+
+  // Kitsune's OWN Anime naming format ({Series Title} - {absolute:000} -
+  // {Episode Title} [{Quality Full}]..., see episode-paths.js's mm-2) puts
+  // the number between two " - " separators instead of directly before the
+  // bracket the two patterns above expect — confirmed real bug: a file
+  // Kitsune itself just renamed to that format (e.g. "Chainsmoker Cat - 001
+  // - I'm Yani Neko, Nya [WEBDL-1080p].mkv") came back completely
+  // unparseable (episode: null) on the very next Rescan, silently flipping
+  // an already-matched, already-downloaded episode back to "missing" for no
+  // reason other than Kitsune having renamed its own file. Tried last,
+  // after every bracket-adjacent pattern above has already failed to match
+  // — a plain "Series - 05 [1080p]" release with no episode title still
+  // matches one of those first and never reaches this one. The lookahead
+  // requires a real title-looking word (not another number/bracket) right
+  // after the second " - ", which is what actually distinguishes this from
+  // a coincidental "-NNN-" inside a title that itself contains a hyphen
+  // (e.g. "Re:ZERO -Starting Life in Another World-" — that hyphen isn't
+  // immediately followed by a digit, so it can't match this pattern at all).
+  m = /-\s*(\d{1,4})(?:v\d)?\s+-\s+\S/.exec(normalized);
+  if (m) return { season: seasonHint ?? null, episode: Number(m[1]), confident: seasonHint != null };
+
+  // A lone episode number followed by " - " and a real episode title, with
+  // no bracket/paren ever closing it out and no show name in the filename
+  // at all — confirmed real case: a "Nobunaga-sensei no Osanazuma" release
+  // with files named exactly "01 - It Is Good That My Wife Came.mkv"
+  // through "12 - My Wife Is Not Going Home.mkv" inside a "Season 01"
+  // folder. Every pattern above requires the number to sit right before a
+  // bracket/paren/end (guessResolutionGroup-tagged releases) or between two
+  // separate " - " runs (Kitsune's own naming format) — neither shape
+  // exists here, so all five came back unmatched despite the folder-level
+  // series match (findExistingSeriesFolder, episodes.js) working fine and
+  // the season hint being available. Tried last, since anchoring on "number
+  // right at the start of the name, or right after whitespace, followed by
+  // ' - ' and more text" is the least specific shape here — a number that
+  // only incidentally precedes " - " elsewhere in a longer title (a part
+  // number, an in-title year) could false-positive, so every more
+  // specific/anchored pattern above already had first shot at it.
+  m = /(?:^|\s)(\d{1,3})(?:v\d)?\s*-\s*\S/.exec(normalized);
   if (m) return { season: seasonHint ?? null, episode: Number(m[1]), confident: seasonHint != null };
 
   return { season: seasonHint ?? null, episode: null, confident: false };

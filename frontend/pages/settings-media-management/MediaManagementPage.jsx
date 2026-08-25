@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { useSettingsForm } from '../../lib/useSettingsForm.js';
 import { SettingsCard, FormRow, ToggleField, TextField, NumberField, SelectField } from '../../components/SettingsFormFields.jsx';
 import RootFolders from '../../components/RootFolders.jsx';
@@ -7,7 +8,12 @@ import RootFolders from '../../components/RootFolders.jsx';
 // all backed by the generic useSettingsForm('media-management', ...) hook
 // (the same one General/UI use); Root Folders is its own component since it
 // isn't part of that one settings object (backed by /api/settings-items/
-// root-folders instead).
+// root-folders instead). New Series Defaults is a third, separate case: it
+// reads/writes the same 'library-defaults' app_settings section Settings >
+// Profiles' "Default for new series" toggle already uses (see
+// ProfilesPage.jsx) — sharing that section (rather than folding this into
+// 'media-management') is what lets server/routes/series.js resolve every
+// new-series default from one place.
 const DEFAULTS = {
   renameEpisodesToggle: true,
   'mm-1': '{Series Title} - S{season:00}E{episode:00} - {Episode Title} [{Quality Full}]',
@@ -33,6 +39,28 @@ export default function MediaManagementPage() {
   const { values: v, setField } = useSettingsForm('media-management', DEFAULTS);
   const namingDisabled = !v.renameEpisodesToggle;
   const permissionsDisabled = !v.setPermissionsToggle;
+
+  // Not part of the useSettingsForm('media-management', ...) blob above —
+  // this lives in the shared 'library-defaults' section instead (see the
+  // import comment), so it gets its own fetch-on-mount + its own PUT rather
+  // than routing through setField, same pattern ProfilesPage.jsx's own
+  // defaultProfileId/setAsDefault already established for that section.
+  const [defaultIgnoreSpecials, setDefaultIgnoreSpecials] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/app-settings/library-defaults')
+      .then((res) => res.json())
+      .then((data) => { if (!cancelled) setDefaultIgnoreSpecials(!!data.defaultIgnoreSpecials); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+  function setIgnoreSpecialsDefault(val) {
+    setDefaultIgnoreSpecials(val);
+    fetch('/api/app-settings/library-defaults', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ defaultIgnoreSpecials: val }),
+    }).catch(() => {});
+  }
 
   return (
     <>
@@ -64,6 +92,12 @@ export default function MediaManagementPage() {
 
       <SettingsCard title="Root Folders" desc="Default locations Kitsune can import series into.">
         <RootFolders />
+      </SettingsCard>
+
+      <SettingsCard title="New Series Defaults" desc="Applied automatically when a series is added — change it per-series afterward in Edit Series.">
+        <FormRow name="Ignore Specials by Default" desc="Newly added series start with Ignore Specials turned on, so their Season 0 extras don't show up in Wanted or count toward the episode total.">
+          <ToggleField id="defaultIgnoreSpecialsToggle" checked={defaultIgnoreSpecials} onChange={setIgnoreSpecialsDefault} />
+        </FormRow>
       </SettingsCard>
 
       <SettingsCard title="File Management" desc="How Kitsune treats files during import and on disk.">
