@@ -40,7 +40,7 @@ function EditModal({ item, onChange, onClose, renderEditFields }) {
       <div className="modal-box wide">
         <div className="modal-header">
           <h2>Edit {item.name}</h2>
-          <button className="modal-close" type="button" aria-label="Close" onClick={onClose}>{icons.x}</button>
+          <button className="modal-close" type="button" aria-label="Close" data-tooltip="Close" onClick={onClose}>{icons.x}</button>
         </div>
         <div className="modal-body">{renderEditFields(item, onChange)}</div>
         <div className="modal-footer">
@@ -124,8 +124,8 @@ export default function SimpleList({
         data.map((item) => (
           <div className={`${baseClass}-row`} data-id={item.id} key={item.id}>
             {renderRow(item)}
-            <button className="ep-action" type="button" aria-label={`Edit ${item.name}`} onClick={() => setEditingId(item.id)}>{icons.edit}</button>
-            <button className="ep-action" type="button" aria-label={`Remove ${item.name}`} onClick={() => handleRemove(item)}>{icons.x}</button>
+            <button className="ep-action" type="button" aria-label={`Edit ${item.name}`} data-tooltip="Edit" onClick={() => setEditingId(item.id)}>{icons.edit}</button>
+            <button className="ep-action" type="button" aria-label={`Remove ${item.name}`} data-tooltip="Remove" onClick={() => handleRemove(item)}>{icons.x}</button>
           </div>
         ))
       )}

@@ -36,7 +36,7 @@ export default function BlocklistList() {
       <span className="settings-meta">{b.reason || '—'}</span>
       <span className="audio-tag">{b.indexer || '—'}</span>
       <span className="ep-date">{timeAgo(b.createdAt)}</span>
-      <button className="ep-action" type="button" aria-label="Remove from blocklist" onClick={() => handleRemove(b.id)}>
+      <button className="ep-action" type="button" aria-label="Remove from blocklist" data-tooltip="Remove from blocklist" onClick={() => handleRemove(b.id)}>
         {icons.x}
       </button>
     </div>

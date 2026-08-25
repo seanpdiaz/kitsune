@@ -59,7 +59,7 @@ function AddUserModal({ onClose, onCreated }) {
       <div className="modal-box wide">
         <div className="modal-header">
           <h2>Add user</h2>
-          <button className="modal-close" type="button" aria-label="Close" onClick={onClose}>{icons.x}</button>
+          <button className="modal-close" type="button" aria-label="Close" data-tooltip="Close" onClick={onClose}>{icons.x}</button>
         </div>
         <form onSubmit={handleSubmit}>
           <div className="modal-body">
@@ -132,7 +132,7 @@ function EditUserModal({ item, currentUser, onClose, onSaved, onRemoved }) {
       <div className="modal-box wide">
         <div className="modal-header">
           <h2>Edit {item.username}</h2>
-          <button className="modal-close" type="button" aria-label="Close" onClick={onClose}>{icons.x}</button>
+          <button className="modal-close" type="button" aria-label="Close" data-tooltip="Close" onClick={onClose}>{icons.x}</button>
         </div>
         <div className="modal-body">
           {fieldRow('Username', null, (
@@ -232,7 +232,7 @@ export default function UsersPage({ addBtnContainer }) {
               {item.role === 'admin' ? 'Admin' : 'Standard'}
             </span>
             <span className="settings-meta">{new Date(item.createdAt).toLocaleDateString()}</span>
-            <button className="ep-action" type="button" aria-label={`Edit ${item.username}`} onClick={() => setEditingId(item.id)}>{icons.edit}</button>
+            <button className="ep-action" type="button" aria-label={`Edit ${item.username}`} data-tooltip="Edit user" onClick={() => setEditingId(item.id)}>{icons.edit}</button>
           </div>
         ))
       )}

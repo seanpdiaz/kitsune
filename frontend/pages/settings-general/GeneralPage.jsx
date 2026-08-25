@@ -61,7 +61,7 @@ function SslFileField({ label, status, error, uploading, onUpload, onRemove }) {
         <div className="ssl-file-current">
           <span className="ssl-file-name" title={status.filename}>{status.filename}</span>
           <span className="settings-meta">{formatBytes(status.sizeBytes)}</span>
-          <button type="button" className="ep-action" aria-label={`Remove ${label}`} onClick={onRemove}>{icons.x}</button>
+          <button type="button" className="ep-action" aria-label={`Remove ${label}`} data-tooltip="Remove file" onClick={onRemove}>{icons.x}</button>
         </div>
       ) : (
         <button type="button" className="btn-test" disabled={uploading} onClick={() => inputRef.current?.click()}>

@@ -412,9 +412,9 @@ export default function LibraryGridPage({ searchContainer }) {
             </div>
           )}
           <div className="view-toggle">
-            <button type="button" className={view === 'poster' ? 'active' : ''} aria-label="Poster view" title="Poster" onClick={() => handleViewChange('poster')}>{icons.viewPoster}</button>
-            <button type="button" className={view === 'table' ? 'active' : ''} aria-label="Table view" title="Table" onClick={() => handleViewChange('table')}>{icons.viewTable}</button>
-            <button type="button" className={view === 'overview' ? 'active' : ''} aria-label="Overview view" title="Overview" onClick={() => handleViewChange('overview')}>{icons.viewOverview}</button>
+            <button type="button" className={view === 'poster' ? 'active' : ''} aria-label="Poster view" data-tooltip="Poster view" onClick={() => handleViewChange('poster')}>{icons.viewPoster}</button>
+            <button type="button" className={view === 'table' ? 'active' : ''} aria-label="Table view" data-tooltip="Table view" onClick={() => handleViewChange('table')}>{icons.viewTable}</button>
+            <button type="button" className={view === 'overview' ? 'active' : ''} aria-label="Overview view" data-tooltip="Overview view" onClick={() => handleViewChange('overview')}>{icons.viewOverview}</button>
           </div>
         </div>
       </div>
