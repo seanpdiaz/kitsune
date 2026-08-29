@@ -1069,7 +1069,20 @@ select {
   overflow-x: clip;
   overflow-clip-margin: 120px;
 }
-.main-series .episode-list-scroll { flex: 1; }
+/* min-width: 0 overrides the flex-item default of min-width: auto, which
+   otherwise refuses to let a flex child shrink below its content's
+   intrinsic width. On the series page's mobile layout (see the 860px media
+   query below), .ep-header/.ep-row got a min-width: 660px so the episode
+   table can scroll horizontally inside this panel instead of squeezing its
+   columns unreadably thin. Without this override, .episode-list-scroll
+   (this panel, a flex: 1 child of .main-series's flex column) would refuse
+   to shrink below that same 660px and drag the whole #seriesRoot column —
+   and every sibling in it (toolbar, synopsis, stat cards) — wider than the
+   viewport, turning what should be a scrollbar contained to just the
+   episode table into the entire page scrolling sideways together. Same
+   min-width: 0 flex-shrink fix already used ~11 other places in this file
+   (e.g. .user-chip-info). */
+.main-series .episode-list-scroll { flex: 1; min-width: 0; }
 /* Column labels stay pinned to the top of the scroll panel rather than
    scrolling away with the rows underneath them — same sticky-table-header
    pattern .sidebar's own comment describes for the page-level nav, just
