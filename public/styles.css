@@ -1142,10 +1142,10 @@ select {
    any of that up, but a bare-class CSS selector doesn't know that: sharing
    the name meant this episode's "Not aired" badge silently gained that
    pill's background box while Available/Missing/Downloading (each their
-   own uniquely-named class) stayed plain colored text — the same row
-   suddenly rendering a wider, differently-shaped badge than its neighbors
-   is what threw off the "..." menu button's apparent alignment next to it.
-   Own name, so it only ever matches this. */
+   own uniquely-named class) stayed plain colored text. A real, separate
+   bug from the action-button alignment below (fixed with its own comment
+   on .ep-row > .ep-action) — this one's just the badge itself looking
+   different from its neighbors. Own name, so it only ever matches this. */
 .status-not-aired { color: var(--text-muted); }
 .status-dl { color: var(--accent); }
 
@@ -1158,6 +1158,22 @@ select {
   justify-content: center;
 }
 .ep-action svg { width: 14px; height: 14px; }
+/* Every state that actually offers a working action (Available's real
+   .ep-action-wrap menu below, a Missing/Downloading episode's live
+   buttons) wraps or groups it in a flex container that centers/right-
+   aligns it within the grid's last (68px) column. The disabled placeholder
+   button rendered for states with nothing to do yet (no id to act on, and
+   — see EpisodeRow's final else branch — a not-yet-aired episode always)
+   skips that wrapper and lands directly as the grid item instead, which
+   defaults to start-aligned rather than centered: visually indistinguishable
+   from a wrapped button most of the time, since a "done" row is usually the
+   one right above/below it, but a whole run of not-yet-aired rows (a season
+   TVDB has already revealed dates for) made the gap obvious — the same "..."
+   column suddenly sitting ~20px further left than every wrapped row above
+   it. Scoped to a direct .ep-row grid child only, so every other .ep-action
+   usage elsewhere in the app (quality tiers, segment tabs, etc. — none of
+   them this grid) is untouched. */
+.ep-row > .ep-action { justify-self: center; }
 /* A missing episode's two action buttons (Search + Grab best match — see
    EpisodeRow in SeriesPage.jsx) side by side in the same grid cell. */
 .ep-action-group { display: flex; gap: 4px; justify-content: flex-end; }
