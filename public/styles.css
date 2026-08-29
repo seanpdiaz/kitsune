@@ -3203,6 +3203,22 @@ a.release-title:hover { text-decoration: underline; }
   .release-list-wrap,
   .modal-body { overflow-x: auto; }
 
+  /* Same "scroll instead of squeeze" call as .calendar-grid below:
+     .episode-list-scroll above already turns overflow-x on, but there was
+     nothing for it to actually scroll — .ep-row's fixed 44/84/80/76/110/68px
+     columns only ever summed to ~510px + gaps, well under a phone's
+     viewport, and its 1fr title column (with no min-width of its own) just
+     shrank to whatever was left instead of ever making the row wider than
+     its container. The result wasn't a scrollable row at all: every other
+     column kept its exact desktop width while the title got squeezed down
+     to a sliver, wrapping a normal episode title across 3-4 lines and
+     making the whole table unreadable rather than reachable-by-swipe like
+     every other data table on a narrow viewport. An explicit min-width
+     (fixed columns + gaps/padding, plus a real floor for the title) forces
+     genuine overflow, so the row scrolls horizontally at full desktop
+     width instead of collapsing. */
+  .ep-header, .ep-row { min-width: 660px; }
+
   /* ---------- Settings forms: side-by-side label + control stacks ---------- */
   /* .field-control's fixed 280/360px width (row-content-shrinks-around-it)
      is the desktop layout: label and control sit on the same line with the
