@@ -6,7 +6,7 @@
 // detection on POST /api/series.
 // ---------------------------------------------------------------------------
 const fs = require('fs');
-const { db } = require('../db');
+const db = require('../db');
 const { logWarn } = require('../logger');
 // ---------------------------------------------------------------------------
 // Real filesystem access — the server-side folder browser behind "Add Root
@@ -61,7 +61,7 @@ function formatBytes(bytes) {
 // page load). fs.statfsSync has been available since Node 18.15 — already
 // below the Node 22.5+ floor node:sqlite requires, so no extra version
 // dependency.
-function computeRootFolderStats(dirPath) {
+async function computeRootFolderStats(dirPath) {
   let free = '—';
   // Raw byte counts, alongside the already-formatted `free` string above —
   // added so callers that need to do math across more than one root folder
@@ -94,7 +94,7 @@ function computeRootFolderStats(dirPath) {
 
   let unmapped = 0;
   try {
-    const knownTitles = new Set(db.prepare('SELECT title FROM series').all().map((r) => normalizeFolderName(r.title)));
+    const knownTitles = new Set((await db.prepare('SELECT title FROM series').all()).map((r) => normalizeFolderName(r.title)));
     const subfolders = fs.readdirSync(dirPath, { withFileTypes: true }).filter((e) => e.isDirectory() && !e.name.startsWith('.'));
     unmapped = subfolders.filter((f) => !knownTitles.has(normalizeFolderName(f.name))).length;
   } catch {

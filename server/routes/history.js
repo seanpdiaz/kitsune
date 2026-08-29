@@ -6,23 +6,25 @@
 // downloader's completion tick (see queue.js) writes 'imported' on success
 // or 'failed' on the rare simulated failure.
 // ---------------------------------------------------------------------------
-const { db } = require('../db');
+const db = require('../db');
 const { sendJson } = require('../lib/http');
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS history (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    series_id INTEGER,
-    episode_id INTEGER,
-    event_type TEXT NOT NULL,
-    release_title TEXT,
-    quality TEXT,
-    indexer TEXT,
-    size_bytes INTEGER,
-    message TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-  )
-`);
+db.init(async () => {
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS history (
+      id ${db.PK},
+      series_id INTEGER,
+      episode_id INTEGER,
+      event_type TEXT NOT NULL,
+      release_title TEXT,
+      quality TEXT,
+      indexer TEXT,
+      size_bytes INTEGER,
+      message TEXT,
+      created_at TEXT NOT NULL
+    )
+  `);
+});
 
 const MAX_HISTORY_ROWS = 500;
 
@@ -30,12 +32,12 @@ const MAX_HISTORY_ROWS = 500;
 // already uses (see logger.js) — a long-running server shouldn't grow this
 // forever, and nobody's paging back through history further than that in a
 // mockup with no real long-term archival need.
-function insertHistoryRow({ seriesId, episodeId, eventType, releaseTitle, quality, indexer, sizeBytes, message }) {
-  db.prepare(`
-    INSERT INTO history (series_id, episode_id, event_type, release_title, quality, indexer, size_bytes, message)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(seriesId ?? null, episodeId ?? null, eventType, releaseTitle ?? null, quality ?? null, indexer ?? null, sizeBytes ?? null, message ?? null);
-  db.exec(`
+async function insertHistoryRow({ seriesId, episodeId, eventType, releaseTitle, quality, indexer, sizeBytes, message }) {
+  await db.prepare(`
+    INSERT INTO history (series_id, episode_id, event_type, release_title, quality, indexer, size_bytes, message, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(seriesId ?? null, episodeId ?? null, eventType, releaseTitle ?? null, quality ?? null, indexer ?? null, sizeBytes ?? null, message ?? null, db.now());
+  await db.exec(`
     DELETE FROM history WHERE id NOT IN (
       SELECT id FROM history ORDER BY id DESC LIMIT ${MAX_HISTORY_ROWS}
     )
@@ -69,7 +71,7 @@ async function handleHistoryApi(req, res, urlPath) {
   const limit = Math.min(parseInt(url.searchParams.get('limit'), 10) || 100, MAX_HISTORY_ROWS);
 
   const whereType = type && type !== 'all' ? 'WHERE h.event_type = ?' : '';
-  const rows = db.prepare(`
+  const rows = await db.prepare(`
     SELECT h.*, s.title AS series_title, e.season_number, e.num
     FROM history h
     LEFT JOIN series s ON s.id = h.series_id

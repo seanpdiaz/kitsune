@@ -1,4 +1,4 @@
-const { db } = require('../db');
+const db = require('../db');
 const { LOG_LEVELS, MAX_LOG_ROWS } = require('../logger');
 const { sendJson } = require('../lib/http');
 
@@ -33,9 +33,9 @@ async function handleLogsApi(req, res, urlPath) {
 
   let rows;
   if (level !== 'all' && LOG_LEVELS.includes(level)) {
-    rows = db.prepare('SELECT * FROM logs WHERE level = ? ORDER BY id DESC LIMIT ?').all(level, limit);
+    rows = await db.prepare('SELECT * FROM logs WHERE level = ? ORDER BY id DESC LIMIT ?').all(level, limit);
   } else {
-    rows = db.prepare('SELECT * FROM logs ORDER BY id DESC LIMIT ?').all(limit);
+    rows = await db.prepare('SELECT * FROM logs ORDER BY id DESC LIMIT ?').all(limit);
   }
   sendJson(res, 200, rows.map(rowToLog));
   return true;

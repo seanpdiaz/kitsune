@@ -4,7 +4,7 @@
 // the sole source of real per-episode data (routes/episodes.js).
 // ---------------------------------------------------------------------------
 const { logInfo, logWarn, logError } = require('../logger');
-const { db } = require('../db');
+const db = require('../db');
 const { sleep } = require('./util');
 
 // ---------------------------------------------------------------------------
@@ -323,7 +323,7 @@ async function resolveTvdbEpisodeSourceId(series) {
   }
 
   if (tvdbId) {
-    db.prepare('UPDATE series SET tvdb_episode_id = ? WHERE id = ?').run(tvdbId, series.id);
+    await db.prepare('UPDATE series SET tvdb_episode_id = ? WHERE id = ?').run(tvdbId, series.id);
     if (matchedTitle && matchedTitle !== series.title) {
       logInfo('EpisodeService', `Resolved "${series.title}" on TheTVDB via alternate title "${matchedTitle}"`);
     }

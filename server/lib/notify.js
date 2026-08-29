@@ -14,7 +14,7 @@
 // don't include the event that just happened — same "opt in per event
 // type" shape Sonarr's own Connect page has.
 // ---------------------------------------------------------------------------
-const { db } = require('../db');
+const db = require('../db');
 const { logInfo, logWarn } = require('../logger');
 const { sendPushoverNotification } = require('./pushover');
 
@@ -29,13 +29,13 @@ const TITLE_BY_EVENT = { grab: 'Kitsune — Grabbed', import: 'Kitsune — Impor
 // unreachable Pushover shouldn't hold up the grab/tick that triggered it,
 // the same reasoning warmEpisodesInBackground (server/routes/episodes.js)
 // already uses for its own background TVDB fetch.
-function notifyConnections(event, message) {
+async function notifyConnections(event, message) {
   const triggerKey = TRIGGER_KEY_BY_EVENT[event];
   if (!triggerKey) return; // programmer error (unknown event) — nothing to send, nothing to crash
 
   let rows;
   try {
-    rows = db.prepare("SELECT * FROM settings_items WHERE section = 'connect'").all();
+    rows = await db.prepare("SELECT * FROM settings_items WHERE section = 'connect'").all();
   } catch (err) {
     logWarn('ConnectService', `Could not read Connect items to notify: ${err.message}`);
     return;

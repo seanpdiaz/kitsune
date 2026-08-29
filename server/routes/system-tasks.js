@@ -28,7 +28,7 @@ async function handleSystemTasksApi(req, res, urlPath) {
   // to pick up the real result once the scan actually finishes.
   if (req.method === 'POST' && urlPath === '/api/system-tasks/disk-usage/run') {
     logInfo('SystemTasks', 'Disk Usage Recompute triggered manually (Run Now)');
-    runNow();
+    runNow().catch((err) => logWarn('SystemTasks', `Run Now failed: ${err.stack || err}`));
     sendJson(res, 200, { ok: true, task: getTaskInfo() });
     return true;
   }
@@ -49,7 +49,7 @@ async function handleSystemTasksApi(req, res, urlPath) {
       sendJson(res, 400, { error: 'intervalHours must be a positive number' });
       return true;
     }
-    const applied = setIntervalHours(hours);
+    const applied = await setIntervalHours(hours);
     if (applied !== hours) {
       logWarn('SystemTasks', `Requested Disk Usage Recompute interval ${hours}h was clamped to ${applied}h`);
     }

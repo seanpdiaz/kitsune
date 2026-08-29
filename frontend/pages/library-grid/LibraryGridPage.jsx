@@ -220,6 +220,13 @@ export default function LibraryGridPage({ searchContainer }) {
   const [seriesData, setSeriesData] = useState([]);
   const [seriesLoaded, setSeriesLoaded] = useState(false);
   const [seriesLoadError, setSeriesLoadError] = useState(false);
+  // Library dashboard stat cards (Missing episodes / Downloading) used to
+  // be hardcoded placeholder numbers left over from this page's pre-React
+  // mockup days — real now, the same way the Series count below reads live
+  // off the /api/series fetch this page already does. null means "not
+  // loaded yet" (renders '—', same convention as DiskUsageStat).
+  const [missingCount, setMissingCount] = useState(null);
+  const [downloadingCount, setDownloadingCount] = useState(null);
   const [filter, setFilter] = useState('all');
   const [sort, setSort] = useState('title');
   const [query, setQuery] = useState('');
@@ -316,6 +323,30 @@ export default function LibraryGridPage({ searchContainer }) {
     })();
   }, []);
 
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/wanted/missing');
+        const body = await res.json();
+        setMissingCount((body.episodes || []).length);
+      } catch {
+        setMissingCount(null);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/queue');
+        const body = await res.json();
+        setDownloadingCount((body.queue || []).filter((q) => q.status === 'downloading').length);
+      } catch {
+        setDownloadingCount(null);
+      }
+    })();
+  }, []);
+
   // Tags aren't part of the Poster view at all, but both Table and Overview
   // show them — fetched once, lazily, the first time either view actually
   // needs them rather than unconditionally on every Library page load.
@@ -383,9 +414,9 @@ export default function LibraryGridPage({ searchContainer }) {
       )}
 
       <div className="stat-grid">
-        <div className="stat-card"><p className="label">Series</p><p className="value">184</p></div>
-        <div className="stat-card"><p className="label">Missing episodes</p><p className="value" style={{ color: 'var(--warning)' }}>27</p></div>
-        <div className="stat-card"><p className="label">Downloading</p><p className="value" style={{ color: 'var(--accent)' }}>4</p></div>
+        <div className="stat-card"><p className="label">Series</p><p className="value">{seriesLoaded ? seriesData.length : '—'}</p></div>
+        <div className="stat-card"><p className="label">Missing episodes</p><p className="value" style={{ color: 'var(--warning)' }}>{missingCount ?? '—'}</p></div>
+        <div className="stat-card"><p className="label">Downloading</p><p className="value" style={{ color: 'var(--accent)' }}>{downloadingCount ?? '—'}</p></div>
         <div className="stat-card"><p className="label">Disk usage</p><DiskUsageStat /></div>
       </div>
 

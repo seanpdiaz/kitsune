@@ -24,7 +24,7 @@
 // ---------------------------------------------------------------------------
 const fs = require('fs');
 const path = require('path');
-const { db } = require('../db');
+const db = require('../db');
 const { logInfo, logWarn } = require('../logger');
 const { formatBytes } = require('./fs-helpers');
 
@@ -34,13 +34,15 @@ const { formatBytes } = require('./fs-helpers');
 // doesn't want to depend on require() order against a route module to make
 // sure the table exists first. Running the identical CREATE TABLE IF NOT
 // EXISTS from two files against the same DB connection is harmless.
-db.exec(`
-  CREATE TABLE IF NOT EXISTS app_settings (
-    section TEXT PRIMARY KEY,
-    data TEXT NOT NULL DEFAULT '{}',
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-  )
-`);
+db.init(async () => {
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      section TEXT PRIMARY KEY,
+      data TEXT NOT NULL DEFAULT '{}',
+      updated_at TEXT NOT NULL
+    )
+  `);
+});
 
 const SETTINGS_SECTION = 'scheduled-tasks';
 const CACHE_SECTION = 'disk-usage-cache';
@@ -49,8 +51,8 @@ const TASK_NAME = 'Disk Usage Recompute';
 const MIN_INTERVAL_HOURS = 1;
 const MAX_INTERVAL_HOURS = 168; // 1 week
 
-function loadPersistedIntervalHours(fallback) {
-  const row = db.prepare('SELECT data FROM app_settings WHERE section = ?').get(SETTINGS_SECTION);
+async function loadPersistedIntervalHours(fallback) {
+  const row = await db.prepare('SELECT data FROM app_settings WHERE section = ?').get(SETTINGS_SECTION);
   if (!row) return fallback;
   try {
     const hours = Number(JSON.parse(row.data).diskUsageIntervalHours);
@@ -60,13 +62,13 @@ function loadPersistedIntervalHours(fallback) {
   }
 }
 
-function persistIntervalHours(hours) {
-  const row = db.prepare('SELECT data FROM app_settings WHERE section = ?').get(SETTINGS_SECTION);
+async function persistIntervalHours(hours) {
+  const row = await db.prepare('SELECT data FROM app_settings WHERE section = ?').get(SETTINGS_SECTION);
   const merged = { ...(row ? JSON.parse(row.data) : {}), diskUsageIntervalHours: hours };
-  db.prepare(`
-    INSERT INTO app_settings (section, data, updated_at) VALUES (?, ?, datetime('now'))
+  await db.prepare(`
+    INSERT INTO app_settings (section, data, updated_at) VALUES (?, ?, ?)
     ON CONFLICT(section) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at
-  `).run(SETTINGS_SECTION, JSON.stringify(merged));
+  `).run(SETTINGS_SECTION, JSON.stringify(merged), db.now());
 }
 
 // The scan result itself, persisted separately from the interval above (own
@@ -80,13 +82,18 @@ function persistIntervalHours(hours) {
 // number was still perfectly good to show in the meantime. Loading this at
 // startup before the first scan kicks off is what fixes that; see
 // startDiskUsageScheduler below.
-function loadPersistedDiskUsage() {
-  const row = db.prepare('SELECT data FROM app_settings WHERE section = ?').get(CACHE_SECTION);
+async function loadPersistedDiskUsage() {
+  const row = await db.prepare('SELECT data FROM app_settings WHERE section = ?').get(CACHE_SECTION);
   if (!row) return null;
   try {
     const parsed = JSON.parse(row.data);
-    const bytes = Number(parsed.bytes);
-    if (!Number.isFinite(bytes) || !parsed.computedAt) return null;
+    // `bytes: null` is a legitimate persisted state — it means the last scan
+    // ran against zero configured root folders (see the `rootFolders.length
+    // === 0` branch in refreshDiskUsage below), not a corrupt/missing
+    // record. Only fall through to `return null` for an actually-unparseable
+    // or non-numeric, non-null value.
+    const bytes = parsed.bytes === null ? null : Number(parsed.bytes);
+    if ((bytes !== null && !Number.isFinite(bytes)) || !parsed.computedAt) return null;
     const computedAt = new Date(parsed.computedAt);
     if (Number.isNaN(computedAt.getTime())) return null;
     return { bytes, computedAt };
@@ -95,11 +102,11 @@ function loadPersistedDiskUsage() {
   }
 }
 
-function persistDiskUsage(bytes, computedAt) {
-  db.prepare(`
-    INSERT INTO app_settings (section, data, updated_at) VALUES (?, ?, datetime('now'))
+async function persistDiskUsage(bytes, computedAt) {
+  await db.prepare(`
+    INSERT INTO app_settings (section, data, updated_at) VALUES (?, ?, ?)
     ON CONFLICT(section) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at
-  `).run(CACHE_SECTION, JSON.stringify({ bytes, computedAt: computedAt.toISOString() }));
+  `).run(CACHE_SECTION, JSON.stringify({ bytes, computedAt: computedAt.toISOString() }), db.now());
 }
 
 const state = { bytes: null, computedAt: null, computing: false };
@@ -159,7 +166,7 @@ async function refreshDiskUsage() {
   state.computing = true;
   const startedAt = Date.now();
   try {
-    const rootFolders = db.prepare("SELECT data FROM settings_items WHERE section = 'root-folders'").all()
+    const rootFolders = (await db.prepare("SELECT data FROM settings_items WHERE section = 'root-folders'").all())
       .map((row) => { try { return JSON.parse(row.data); } catch { return null; } })
       .filter(Boolean);
 
@@ -173,16 +180,34 @@ async function refreshDiskUsage() {
       }
     }
 
-    // A totally failed scan (every root folder unreadable — e.g. a drive
-    // temporarily unmounted) leaves state.bytes null same as before, but
-    // deliberately doesn't overwrite whatever was persisted from the last
-    // *good* scan — a stale-but-real number is more useful than erasing it
-    // over what's hopefully a transient hiccup, and the next successful
-    // scan corrects it either way.
-    if (anyReadable) {
+    // Three distinct outcomes here, not two — conflating the last two used
+    // to leave a stale number in the database forever after every root
+    // folder was deleted:
+    //   1. At least one root folder was readable: a normal successful scan.
+    //   2. Zero root folders are configured at all: there's nothing to
+    //      measure, and that's a real, current, permanent fact — not a
+    //      failure — so it's cleared to null (renders as "—", not "0 B";
+    //      see getCachedDiskUsage) and, critically, that cleared state is
+    //      actually persisted. This used to fall into the same bucket as
+    //      #3 below, so deleting your last root folder left whatever total
+    //      was persisted from before sitting in the database — and
+    //      reappearing on every restart — even though there was nothing
+    //      left to measure.
+    //   3. One or more root folders are configured but every single one is
+    //      unreadable right now (e.g. a drive temporarily unmounted): a
+    //      genuinely failed scan. This is the only case that deliberately
+    //      keeps whatever was persisted from the last *good* scan rather
+    //      than overwriting it — a stale-but-real number is more useful
+    //      than erasing it over what's hopefully a transient hiccup, and
+    //      the next successful scan corrects it either way.
+    if (rootFolders.length === 0) {
+      state.bytes = null;
+      state.computedAt = new Date();
+      await persistDiskUsage(null, state.computedAt);
+    } else if (anyReadable) {
       state.bytes = total;
       state.computedAt = new Date();
-      persistDiskUsage(state.bytes, state.computedAt);
+      await persistDiskUsage(state.bytes, state.computedAt);
     } else {
       state.bytes = null;
       state.computedAt = new Date();
@@ -198,7 +223,9 @@ async function refreshDiskUsage() {
 }
 
 // Instant, non-blocking read of whatever the last completed scan found —
-// what /api/system/status actually returns on every request.
+// what /api/system/status actually returns on every request. Stays a plain
+// synchronous function (reads only in-memory state, no db access) — every
+// caller keeps calling it without await.
 function getCachedDiskUsage() {
   return {
     diskUsageBytes: state.bytes,
@@ -240,10 +267,10 @@ async function runNow() {
 // loadPersistedIntervalHours below), and reschedules immediately so a
 // shortened interval doesn't wait out however much of the old, longer one
 // was already left.
-function setIntervalHours(hours) {
+async function setIntervalHours(hours) {
   const clamped = Math.min(MAX_INTERVAL_HOURS, Math.max(MIN_INTERVAL_HOURS, Math.round(hours)));
   intervalHours = clamped;
-  persistIntervalHours(clamped);
+  await persistIntervalHours(clamped);
   scheduleNext();
   logInfo('DiskUsage', `Recompute interval changed to every ${clamped}h`);
   return clamped;
@@ -251,7 +278,8 @@ function setIntervalHours(hours) {
 
 // Backs GET /api/system-tasks — the one real row on System > Tasks (see
 // README and public/js/pages/system-tasks.js); everything else on that page
-// is still decorative placeholder data.
+// is still decorative placeholder data. Stays synchronous, same reason as
+// getCachedDiskUsage above.
 function getTaskInfo() {
   return {
     id: TASK_ID,
@@ -277,16 +305,16 @@ function getTaskInfo() {
 // `diskUsageComputing` is true rather than blanking it out — see
 // DiskUsageStat in frontend/pages/library-grid/LibraryGridPage.jsx), and
 // arms the recurring timer.
-function startDiskUsageScheduler(defaultIntervalHours) {
-  intervalHours = loadPersistedIntervalHours(defaultIntervalHours);
-  const persisted = loadPersistedDiskUsage();
+async function startDiskUsageScheduler(defaultIntervalHours) {
+  intervalHours = await loadPersistedIntervalHours(defaultIntervalHours);
+  const persisted = await loadPersistedDiskUsage();
   if (persisted) {
     state.bytes = persisted.bytes;
     state.computedAt = persisted.computedAt;
     logInfo('DiskUsage', `Loaded persisted disk usage from last run: ${formatBytes(state.bytes)} as of ${state.computedAt.toISOString()}`);
   }
   logInfo('DiskUsage', `Disk usage will be recomputed every ${intervalHours}h (plus once now at startup)`);
-  refreshDiskUsage();
+  refreshDiskUsage().catch((err) => logWarn('DiskUsage', `Startup scan failed: ${err.stack || err}`));
   scheduleNext();
 }
 

@@ -5,7 +5,7 @@
 // carry a real `downloaded`/`quality` state instead of that being a
 // render-time guess (see episodes.js's backfillDownloadedState).
 // ---------------------------------------------------------------------------
-const { db } = require('../db');
+const db = require('../db');
 const { sendJson } = require('../lib/http');
 const { isBelowCutoff } = require('../lib/quality');
 
@@ -34,7 +34,7 @@ async function handleWantedApi(req, res, urlPath) {
   // Oldest-first, matching real Sonarr's default sort there too (the
   // longest-outstanding gap surfaces first).
   if (req.method === 'GET' && urlPath === '/api/wanted/missing') {
-    const rows = db.prepare(`
+    const rows = await db.prepare(`
       SELECT e.id, e.series_id, e.season_number, e.num, e.title, e.aired,
              s.title AS series_title, s.poster AS series_poster
       FROM episodes e
@@ -53,7 +53,7 @@ async function handleWantedApi(req, res, urlPath) {
   // assigned, a plain string that never matched anything, etc.), has
   // nothing to compare against and is skipped rather than guessed at.
   if (req.method === 'GET' && urlPath === '/api/wanted/cutoff-unmet') {
-    const profileRows = db.prepare("SELECT data FROM settings_items WHERE section = 'profiles'").all();
+    const profileRows = await db.prepare("SELECT data FROM settings_items WHERE section = 'profiles'").all();
     const cutoffByProfileName = new Map();
     for (const row of profileRows) {
       try {
@@ -62,7 +62,7 @@ async function handleWantedApi(req, res, urlPath) {
       } catch { /* malformed row — skip rather than fail the whole request */ }
     }
 
-    const rows = db.prepare(`
+    const rows = await db.prepare(`
       SELECT e.id, e.series_id, e.season_number, e.num, e.title, e.aired, e.quality,
              s.title AS series_title, s.poster AS series_poster, s.quality_profile
       FROM episodes e
@@ -70,9 +70,12 @@ async function handleWantedApi(req, res, urlPath) {
       WHERE e.downloaded = 1 AND s.monitored = 1
     `).all();
 
-    const unmet = rows
-      .map((r) => ({ ...r, cutoff: cutoffByProfileName.get(r.quality_profile) }))
-      .filter((r) => r.cutoff && isBelowCutoff(r.quality, r.cutoff))
+    const withCutoff = rows.map((r) => ({ ...r, cutoff: cutoffByProfileName.get(r.quality_profile) }));
+    const belowCutoffFlags = await Promise.all(
+      withCutoff.map((r) => (r.cutoff ? isBelowCutoff(r.quality, r.cutoff) : false))
+    );
+    const unmet = withCutoff
+      .filter((r, i) => r.cutoff && belowCutoffFlags[i])
       .map((r) => ({ ...episodeRowToWanted(r), quality: r.quality, cutoff: r.cutoff }));
 
     sendJson(res, 200, { episodes: unmet });

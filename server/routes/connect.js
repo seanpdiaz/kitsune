@@ -13,7 +13,7 @@
 // Test action on top, reusing rowToItem so the response shape matches
 // what GET/PATCH already return.
 // ---------------------------------------------------------------------------
-const { db } = require('../db');
+const db = require('../db');
 const { logInfo, logWarn } = require('../logger');
 const { sendJson, readJsonBody } = require('../lib/http');
 const { rowToItem } = require('./settings-items');
@@ -25,7 +25,7 @@ async function handleConnectApi(req, res, urlPath) {
 
   const id = Number(testMatch[1]);
   logInfo('ConnectService', `Test requested for connect id ${id}`);
-  const existing = db.prepare("SELECT * FROM settings_items WHERE id = ? AND section = 'connect'").get(id);
+  const existing = await db.prepare("SELECT * FROM settings_items WHERE id = ? AND section = 'connect'").get(id);
   if (!existing) {
     logWarn('ConnectService', `Test failed: no connect item with id ${id} exists`);
     sendJson(res, 404, { error: 'Connection not found' });
@@ -76,8 +76,8 @@ async function handleConnectApi(req, res, urlPath) {
   });
 
   const updatedData = { ...saved, status: result.ok ? 'ok' : 'fail' };
-  db.prepare('UPDATE settings_items SET data = ? WHERE id = ?').run(JSON.stringify(updatedData), id);
-  const updatedRow = db.prepare('SELECT * FROM settings_items WHERE id = ?').get(id);
+  await db.prepare('UPDATE settings_items SET data = ? WHERE id = ?').run(JSON.stringify(updatedData), id);
+  const updatedRow = await db.prepare('SELECT * FROM settings_items WHERE id = ?').get(id);
 
   if (result.ok) {
     logInfo('ConnectService', `Test succeeded for "${saved.name}" (pushover)`);

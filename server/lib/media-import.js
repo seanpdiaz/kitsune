@@ -30,12 +30,12 @@ const path = require('path');
 const { buildEpisodeFilePath } = require('./episode-paths');
 const { applyPermissions } = require('./permissions');
 
-function importEpisodeFile(series, episode, quality, sourcePath) {
+async function importEpisodeFile(series, episode, quality, sourcePath) {
   // sourcePath passed through as opts so buildEpisodeFilePath can preserve
   // the real file's actual extension (instead of always assuming .mkv) and
   // honor the Rename Episodes toggle (keep the original filename verbatim
   // when it's off) — see episode-paths.js.
-  const destPath = buildEpisodeFilePath(series, episode, quality, { sourcePath });
+  const destPath = await buildEpisodeFilePath(series, episode, quality, { sourcePath });
   // episode-paths.js always lays a real import out as root/seasonFolder/
   // fileName (see buildEpisodeFilePath/seriesFolderNameFor/
   // seasonFolderNameFor) — two directory levels above the file, both
@@ -66,7 +66,7 @@ function importEpisodeFile(series, episode, quality, sourcePath) {
 
   try {
     fs.linkSync(sourcePath, destPath);
-    applyPermissions({ filePath: destPath, dirPaths: importDirPaths });
+    await applyPermissions({ filePath: destPath, dirPaths: importDirPaths });
     return { ok: true, path: destPath, sizeBytes: stat.size, method: 'hardlink' };
   } catch (linkErr) {
     // EXDEV (cross-filesystem) is the expected, common reason this falls
@@ -76,7 +76,7 @@ function importEpisodeFile(series, episode, quality, sourcePath) {
     // genuine copy failure is reported as an actual error.
     try {
       fs.copyFileSync(sourcePath, destPath);
-      applyPermissions({ filePath: destPath, dirPaths: importDirPaths });
+      await applyPermissions({ filePath: destPath, dirPaths: importDirPaths });
       return { ok: true, path: destPath, sizeBytes: stat.size, method: 'copy' };
     } catch (copyErr) {
       return { ok: false, error: `Could not hardlink or copy into "${destPath}" (${copyErr.code || copyErr.message})` };

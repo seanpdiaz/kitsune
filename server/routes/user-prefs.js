@@ -16,26 +16,28 @@
 // app_settings row) simply because this table didn't exist yet when they
 // were built; see frontend/pages/library-grid/LibraryGridPage.jsx.
 // ---------------------------------------------------------------------------
-const { db } = require('../db');
+const db = require('../db');
 const { sendJson, readJsonBody } = require('../lib/http');
 const { getSessionUser } = require('./auth');
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS user_prefs (
-    user_id INTEGER NOT NULL,
-    section TEXT NOT NULL,
-    data TEXT NOT NULL DEFAULT '{}',
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (user_id, section)
-  )
-`);
+db.init(async () => {
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS user_prefs (
+      user_id INTEGER NOT NULL,
+      section TEXT NOT NULL,
+      data TEXT NOT NULL DEFAULT '{}',
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, section)
+    )
+  `);
+});
 
 async function handleUserPrefsApi(req, res, urlPath) {
   const match = urlPath.match(/^\/api\/user-prefs\/([a-z-]+)$/);
   if (!match) return false;
   const [, section] = match;
 
-  const user = getSessionUser(req);
+  const user = await getSessionUser(req);
   if (!user) {
     sendJson(res, 401, { error: 'Not signed in.' });
     return true;
@@ -46,7 +48,7 @@ async function handleUserPrefsApi(req, res, urlPath) {
   // first visit — same "missing means unset, not an error" convention
   // app-settings already uses).
   if (req.method === 'GET') {
-    const row = db.prepare('SELECT data FROM user_prefs WHERE user_id = ? AND section = ?').get(user.id, section);
+    const row = await db.prepare('SELECT data FROM user_prefs WHERE user_id = ? AND section = ?').get(user.id, section);
     sendJson(res, 200, row ? JSON.parse(row.data) : {});
     return true;
   }
@@ -62,12 +64,12 @@ async function handleUserPrefsApi(req, res, urlPath) {
       sendJson(res, 400, { error: 'Invalid JSON body' });
       return true;
     }
-    const row = db.prepare('SELECT data FROM user_prefs WHERE user_id = ? AND section = ?').get(user.id, section);
+    const row = await db.prepare('SELECT data FROM user_prefs WHERE user_id = ? AND section = ?').get(user.id, section);
     const merged = { ...(row ? JSON.parse(row.data) : {}), ...body };
-    db.prepare(`
-      INSERT INTO user_prefs (user_id, section, data, updated_at) VALUES (?, ?, ?, datetime('now'))
+    await db.prepare(`
+      INSERT INTO user_prefs (user_id, section, data, updated_at) VALUES (?, ?, ?, ?)
       ON CONFLICT(user_id, section) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at
-    `).run(user.id, section, JSON.stringify(merged));
+    `).run(user.id, section, JSON.stringify(merged), db.now());
     sendJson(res, 200, merged);
     return true;
   }

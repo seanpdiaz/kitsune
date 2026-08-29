@@ -1,5 +1,5 @@
 const path = require('path');
-const { db } = require('../db');
+const db = require('../db');
 const { applyFormat, sanitizeForPath } = require('./naming-format');
 
 // ---------------------------------------------------------------------------
@@ -45,8 +45,8 @@ const DEFAULT_SETTINGS = {
   chownGroup: '',
 };
 
-function getMediaManagementSettings() {
-  const row = db.prepare("SELECT data FROM app_settings WHERE section = 'media-management'").get();
+async function getMediaManagementSettings() {
+  const row = await db.prepare("SELECT data FROM app_settings WHERE section = 'media-management'").get();
   if (!row) return { ...DEFAULT_SETTINGS };
   try {
     return { ...DEFAULT_SETTINGS, ...JSON.parse(row.data) };
@@ -75,9 +75,9 @@ function seriesYearFromMeta(meta) {
 // them regardless of series type, since absolute numbering doesn't apply to
 // Specials even for an anime-type series (same convention real Sonarr
 // follows).
-function computeAbsoluteEpisodeNumber(seriesId, seasonNumber, num) {
+async function computeAbsoluteEpisodeNumber(seriesId, seasonNumber, num) {
   if (!seasonNumber) return null;
-  const rows = db.prepare(
+  const rows = await db.prepare(
     'SELECT season_number, num FROM episodes WHERE series_id = ? AND season_number > 0 ORDER BY season_number ASC, num ASC'
   ).all(seriesId);
   const idx = rows.findIndex((r) => r.season_number === seasonNumber && r.num === num);
@@ -111,7 +111,7 @@ function seriesFolderNameFor(series, settings) {
 // known — only matters for the Anime format's own
 // [{MediaInfo VideoBitDepth}bit] segment; omitted drops that whole bracket
 // rather than rendering the broken literal "[bit]" (see naming-format.js).
-function episodeFileNameFor(series, episode, quality, settings, opts = {}) {
+async function episodeFileNameFor(series, episode, quality, settings, opts = {}) {
   const seasonNumber = episode.seasonNumber ?? episode.season_number ?? 0;
   const num = episode.num;
   // Accepts either a raw `series` table row (series_type, snake_case — what
@@ -133,7 +133,7 @@ function episodeFileNameFor(series, episode, quality, settings, opts = {}) {
     'Quality Full': quality || null,
     season: seasonNumber,
     episode: num,
-    absolute: computeAbsoluteEpisodeNumber(series.id, seasonNumber, num),
+    absolute: await computeAbsoluteEpisodeNumber(series.id, seasonNumber, num),
     'MediaInfo VideoBitDepth': opts.videoBitDepth ?? null,
   };
   const name = applyFormat(format, ctx);
@@ -154,15 +154,15 @@ function episodeFileNameFor(series, episode, quality, settings, opts = {}) {
 // the format at all (matches real Sonarr: turning renaming off still
 // organizes files into the right folders, it just stops relabeling the
 // filename itself).
-function buildEpisodeFilePath(series, episode, quality, opts = {}) {
-  const settings = getMediaManagementSettings();
+async function buildEpisodeFilePath(series, episode, quality, opts = {}) {
+  const settings = await getMediaManagementSettings();
   const seasonNumber = episode.seasonNumber ?? episode.season_number ?? 0;
   const seasonFolder = seasonFolderNameFor(seasonNumber, settings);
   const ext = opts.sourcePath ? (path.extname(opts.sourcePath) || '.mkv') : '.mkv';
 
   const fileName = (!settings.renameEpisodesToggle && opts.sourcePath)
     ? sanitizeForPath(path.basename(opts.sourcePath))
-    : `${episodeFileNameFor(series, episode, quality, settings, opts)}${ext}`;
+    : `${await episodeFileNameFor(series, episode, quality, settings, opts)}${ext}`;
 
   // series.path — a real, already-known series folder, either matched
   // automatically by folder name or set by hand in Edit Series' Path field

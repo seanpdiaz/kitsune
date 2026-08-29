@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { db } = require('../db');
+const db = require('../db');
 const { logInfo, logWarn } = require('../logger');
 const { sendJson, readJsonBody } = require('../lib/http');
 const { getSessionUser } = require('./auth');
@@ -44,33 +44,34 @@ const { applyPermissions } = require('../lib/permissions');
 // detail page doesn't re-hit TVDB on every visit.
 // ---------------------------------------------------------------------------
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS episodes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    series_id INTEGER NOT NULL,
-    season_number INTEGER NOT NULL DEFAULT 0,
-    season_name TEXT,
-    num INTEGER NOT NULL,
-    title TEXT,
-    title_japanese TEXT,
-    title_romanji TEXT,
-    aired TEXT,
-    score REAL,
-    filler INTEGER NOT NULL DEFAULT 0,
-    recap INTEGER NOT NULL DEFAULT 0,
-    url TEXT,
-    downloaded INTEGER NOT NULL DEFAULT 0,
-    quality TEXT,
-    size_bytes INTEGER,
-    path TEXT,
-    UNIQUE(series_id, season_number, num)
-  )
-`);
+db.init(async () => {
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS episodes (
+      id ${db.PK},
+      series_id INTEGER NOT NULL,
+      season_number INTEGER NOT NULL DEFAULT 0,
+      season_name TEXT,
+      num INTEGER NOT NULL,
+      title TEXT,
+      title_japanese TEXT,
+      title_romanji TEXT,
+      aired TEXT,
+      score REAL,
+      filler INTEGER NOT NULL DEFAULT 0,
+      recap INTEGER NOT NULL DEFAULT 0,
+      url TEXT,
+      downloaded INTEGER NOT NULL DEFAULT 0,
+      quality TEXT,
+      size_bytes INTEGER,
+      path TEXT,
+      UNIQUE(series_id, season_number, num)
+    )
+  `);
 
-// Defensive migration for episodes tables created before the extra fields
-// below existed.
-let episodeColumns = db.prepare('PRAGMA table_info(episodes)').all().map((c) => c.name);
-for (const [col, def] of [
+  // Defensive migration for episodes tables created before the extra fields
+  // below existed.
+  let episodeColumns = await db.tableColumns('episodes');
+  for (const [col, def] of [
   ['title_japanese', 'TEXT'], ['title_romanji', 'TEXT'], ['score', 'REAL'],
   ['filler', 'INTEGER NOT NULL DEFAULT 0'], ['recap', 'INTEGER NOT NULL DEFAULT 0'], ['url', 'TEXT'],
   ['downloaded', 'INTEGER NOT NULL DEFAULT 0'], ['quality', 'TEXT'], ['size_bytes', 'INTEGER'],
@@ -109,13 +110,13 @@ for (const [col, def] of [
   // SeriesPage.jsx's summarizeAudioTracks, which used to just hardcode
   // "Dual" for every downloaded episode regardless of whether it was ever
   // real.
-  ['media_streams', 'TEXT'],
-]) {
-  if (!episodeColumns.includes(col)) {
-    db.exec(`ALTER TABLE episodes ADD COLUMN ${col} ${def}`);
-    logInfo('Database', `Migrated episodes table: added ${col} column`);
+    ['media_streams', 'TEXT'],
+  ]) {
+    if (!episodeColumns.includes(col)) {
+      await db.exec(`ALTER TABLE episodes ADD COLUMN ${col} ${def}`);
+      logInfo('Database', `Migrated episodes table: added ${col} column`);
+    }
   }
-}
 
 // season_number/season_name need a real migration, not just an ALTER TABLE
 // ADD COLUMN: episode numbers restart at 1 for every season (specials vs.
@@ -129,36 +130,38 @@ for (const [col, def] of [
 // rows over as season_number 0 (unknown) — the season a previously-cached
 // episode belonged to can't be recovered after the fact; deleting a
 // series' rows and re-fetching is what backfills real season numbers.
-episodeColumns = db.prepare('PRAGMA table_info(episodes)').all().map((c) => c.name);
-if (!episodeColumns.includes('season_number')) {
-  logInfo('Database', 'Migrating episodes table: adding season tracking (rebuilding for corrected uniqueness constraint)');
-  db.exec(`
-    ALTER TABLE episodes RENAME TO episodes_old;
-    CREATE TABLE episodes (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      series_id INTEGER NOT NULL,
-      season_number INTEGER NOT NULL DEFAULT 0,
-      season_name TEXT,
-      num INTEGER NOT NULL,
-      title TEXT,
-      title_japanese TEXT,
-      title_romanji TEXT,
-      aired TEXT,
-      score REAL,
-      filler INTEGER NOT NULL DEFAULT 0,
-      recap INTEGER NOT NULL DEFAULT 0,
-      url TEXT,
-      downloaded INTEGER NOT NULL DEFAULT 0,
-      quality TEXT,
-      size_bytes INTEGER,
-      path TEXT,
-      UNIQUE(series_id, season_number, num)
-    );
-    INSERT OR IGNORE INTO episodes (series_id, season_number, num, title, title_japanese, title_romanji, aired, score, filler, recap, url, downloaded, quality, size_bytes, path)
-      SELECT series_id, 0, num, title, title_japanese, title_romanji, aired, score, filler, recap, url, downloaded, quality, size_bytes, path FROM episodes_old;
-    DROP TABLE episodes_old;
-  `);
-}
+  episodeColumns = await db.tableColumns('episodes');
+  if (!episodeColumns.includes('season_number')) {
+    logInfo('Database', 'Migrating episodes table: adding season tracking (rebuilding for corrected uniqueness constraint)');
+    await db.exec(`
+      ALTER TABLE episodes RENAME TO episodes_old;
+      CREATE TABLE episodes (
+        id ${db.PK},
+        series_id INTEGER NOT NULL,
+        season_number INTEGER NOT NULL DEFAULT 0,
+        season_name TEXT,
+        num INTEGER NOT NULL,
+        title TEXT,
+        title_japanese TEXT,
+        title_romanji TEXT,
+        aired TEXT,
+        score REAL,
+        filler INTEGER NOT NULL DEFAULT 0,
+        recap INTEGER NOT NULL DEFAULT 0,
+        url TEXT,
+        downloaded INTEGER NOT NULL DEFAULT 0,
+        quality TEXT,
+        size_bytes INTEGER,
+        path TEXT,
+        UNIQUE(series_id, season_number, num)
+      );
+      INSERT INTO episodes (series_id, season_number, num, title, title_japanese, title_romanji, aired, score, filler, recap, url, downloaded, quality, size_bytes, path)
+        SELECT series_id, 0, num, title, title_japanese, title_romanji, aired, score, filler, recap, url, downloaded, quality, size_bytes, path FROM episodes_old
+        ON CONFLICT (series_id, season_number, num) DO NOTHING;
+      DROP TABLE episodes_old;
+    `);
+  }
+});
 
 // Actual fetching happens in resolveTvdbEpisodeSourceId/fetchTvdbEpisodes,
 // defined near the rest of the TVDB client below (they need tvdbFetch/
@@ -184,7 +187,7 @@ async function handleSeriesEpisodesApi(req, res, urlPath) {
   if (!match) return false;
 
   const id = Number(match[1]);
-  const series = db.prepare('SELECT * FROM series WHERE id = ?').get(id);
+  const series = await db.prepare('SELECT * FROM series WHERE id = ?').get(id);
   if (!series) {
     sendJson(res, 404, { error: 'Series not found' });
     return true;
@@ -194,7 +197,7 @@ async function handleSeriesEpisodesApi(req, res, urlPath) {
   // Ordered by season first so a flat consumer still gets specials before
   // season 1 before season 2, etc. — the frontend groups by season_number
   // itself for the actual tabbed view.
-  const cachedRows = loadCachedEpisodes(id);
+  const cachedRows = await loadCachedEpisodes(id);
   if (cachedRows.length > 0) {
     sendJson(res, 200, { episodes: cachedRows, source: 'tvdb', cached: true });
     return true;
@@ -207,7 +210,7 @@ async function handleSeriesEpisodesApi(req, res, urlPath) {
   // the cached branch above means both ever return the exact same shape
   // (id/downloaded/quality/sizeBytes included) regardless of whether this
   // request was the one that triggered the fetch or just arrived after it.
-  const freshRows = loadCachedEpisodes(id);
+  const freshRows = await loadCachedEpisodes(id);
   sendJson(res, 200, { episodes: freshRows, source: result.source, cached: false, ...(result.error ? { error: result.error } : {}) });
   return true;
 }
@@ -236,14 +239,14 @@ async function handleRenameSeason(req, res, match) {
   // scoped to a signed-in user in the first place — see routes/auth.js's
   // own comment on that). Same 401 shape as every other session-gated route
   // (see routes/user-prefs.js) rather than inventing a new error format.
-  const user = getSessionUser(req);
+  const user = await getSessionUser(req);
   if (!user) {
     sendJson(res, 401, { error: 'Not signed in.' });
     return true;
   }
   const seriesId = Number(match[1]);
   const seasonNumber = Number(match[2]);
-  const series = db.prepare('SELECT * FROM series WHERE id = ?').get(seriesId);
+  const series = await db.prepare('SELECT * FROM series WHERE id = ?').get(seriesId);
   if (!series) {
     sendJson(res, 404, { error: 'Series not found' });
     return true;
@@ -252,7 +255,7 @@ async function handleRenameSeason(req, res, match) {
     sendJson(res, 400, { error: 'Specials can\'t be renamed.' });
     return true;
   }
-  const episodeRows = db.prepare('SELECT id FROM episodes WHERE series_id = ? AND season_number = ?').all(seriesId, seasonNumber);
+  const episodeRows = await db.prepare('SELECT id FROM episodes WHERE series_id = ? AND season_number = ?').all(seriesId, seasonNumber);
   if (episodeRows.length === 0) {
     sendJson(res, 404, { error: 'No cached episodes for that season yet.' });
     return true;
@@ -265,7 +268,7 @@ async function handleRenameSeason(req, res, match) {
     return true;
   }
   const name = String(body.name || '').trim() || null;
-  db.prepare('UPDATE episodes SET season_name = ? WHERE series_id = ? AND season_number = ?').run(name, seriesId, seasonNumber);
+  await db.prepare('UPDATE episodes SET season_name = ? WHERE series_id = ? AND season_number = ?').run(name, seriesId, seasonNumber);
   logInfo('EpisodeService', `"${series.title}" season ${seasonNumber} renamed to ${name ? `"${name}"` : '(cleared, back to default)'}`);
   sendJson(res, 200, { seasonNumber, name });
   return true;
@@ -285,13 +288,13 @@ async function handleRenameSeason(req, res, match) {
 async function handleRefreshEpisodes(req, res, match) {
   // Same session gate as the other write paths in this file — see
   // handleRenameSeason's comment for why this was added.
-  const user = getSessionUser(req);
+  const user = await getSessionUser(req);
   if (!user) {
     sendJson(res, 401, { error: 'Not signed in.' });
     return true;
   }
   const id = Number(match[1]);
-  const series = db.prepare('SELECT * FROM series WHERE id = ?').get(id);
+  const series = await db.prepare('SELECT * FROM series WHERE id = ?').get(id);
   if (!series) {
     sendJson(res, 404, { error: 'Series not found' });
     return true;
@@ -301,7 +304,7 @@ async function handleRefreshEpisodes(req, res, match) {
     sendJson(res, 502, { error: result.error });
     return true;
   }
-  const freshRows = loadCachedEpisodes(id);
+  const freshRows = await loadCachedEpisodes(id);
   sendJson(res, 200, { episodes: freshRows, count: result.count });
   return true;
 }
@@ -327,13 +330,13 @@ async function handleDeleteEpisodeFile(req, res, match) {
   // Same session gate as the other write paths in this file — see
   // handleRenameSeason's comment for why this was added. This one deletes a
   // real file off disk, so it's the highest-stakes of the four.
-  const user = getSessionUser(req);
+  const user = await getSessionUser(req);
   if (!user) {
     sendJson(res, 401, { error: 'Not signed in.' });
     return true;
   }
   const id = Number(match[1]);
-  const episode = db.prepare('SELECT * FROM episodes WHERE id = ?').get(id);
+  const episode = await db.prepare('SELECT * FROM episodes WHERE id = ?').get(id);
   if (!episode) {
     sendJson(res, 404, { error: 'Episode not found' });
     return true;
@@ -354,9 +357,9 @@ async function handleDeleteEpisodeFile(req, res, match) {
     // Already gone — fall through and reconcile the DB to match reality.
   }
 
-  db.prepare('UPDATE episodes SET downloaded = 0, quality = NULL, size_bytes = NULL, path = NULL, media_streams = NULL WHERE id = ?').run(id);
-  recomputeSeriesEpisodeStats(episode.series_id);
-  const series = db.prepare('SELECT eps, pct FROM series WHERE id = ?').get(episode.series_id);
+  await db.prepare('UPDATE episodes SET downloaded = 0, quality = NULL, size_bytes = NULL, path = NULL, media_streams = NULL WHERE id = ?').run(id);
+  await recomputeSeriesEpisodeStats(episode.series_id);
+  const series = await db.prepare('SELECT eps, pct FROM series WHERE id = ?').get(episode.series_id);
   logInfo('EpisodeService', `Deleted media file for episode ${id} (S${episode.season_number}E${episode.num}) from "${episode.path}"`);
   sendJson(res, 200, {
     id,
@@ -378,27 +381,27 @@ async function handleDeleteEpisodeFile(req, res, match) {
 // codepath that could quietly drift from the real one.
 async function handleRenamePreview(req, res, match) {
   const seriesId = Number(match[1]);
-  const series = db.prepare('SELECT * FROM series WHERE id = ?').get(seriesId);
+  const series = await db.prepare('SELECT * FROM series WHERE id = ?').get(seriesId);
   if (!series) {
     sendJson(res, 404, { error: 'Series not found' });
     return true;
   }
-  const settings = getMediaManagementSettings();
-  const rows = db.prepare(
+  const settings = await getMediaManagementSettings();
+  const rows = await db.prepare(
     'SELECT id, season_number, num, title, quality, path FROM episodes WHERE series_id = ? AND downloaded = 1 AND path IS NOT NULL ORDER BY season_number ASC, num ASC'
   ).all(seriesId);
 
-  const items = rows.map((r) => {
+  const items = await Promise.all(rows.map(async (r) => {
     const episode = { seasonNumber: r.season_number, num: r.num, title: r.title };
     const ext = path.extname(r.path) || '.mkv';
-    const newName = `${episodeFileNameFor(series, episode, r.quality, settings, { sourcePath: r.path })}${ext}`;
+    const newName = `${await episodeFileNameFor(series, episode, r.quality, settings, { sourcePath: r.path })}${ext}`;
     const newPath = path.join(path.dirname(r.path), newName);
     return {
       episodeId: r.id, seasonNumber: r.season_number, num: r.num, title: r.title,
       oldPath: r.path, oldName: path.basename(r.path), newPath, newName,
       changed: newPath !== r.path,
     };
-  });
+  }));
 
   sendJson(res, 200, { items, renameEpisodesToggle: settings.renameEpisodesToggle });
   return true;
@@ -418,13 +421,13 @@ async function handleRenameFiles(req, res, match) {
   // Same session gate as the other write paths in this file — see
   // handleRenameSeason's comment for why this was added. This one renames
   // real files on disk, same stakes as handleDeleteEpisodeFile.
-  const user = getSessionUser(req);
+  const user = await getSessionUser(req);
   if (!user) {
     sendJson(res, 401, { error: 'Not signed in.' });
     return true;
   }
   const seriesId = Number(match[1]);
-  const series = db.prepare('SELECT * FROM series WHERE id = ?').get(seriesId);
+  const series = await db.prepare('SELECT * FROM series WHERE id = ?').get(seriesId);
   if (!series) {
     sendJson(res, 404, { error: 'Series not found' });
     return true;
@@ -442,17 +445,17 @@ async function handleRenameFiles(req, res, match) {
     return true;
   }
 
-  const settings = getMediaManagementSettings();
+  const settings = await getMediaManagementSettings();
   const results = [];
   for (const episodeId of episodeIds) {
-    const r = db.prepare('SELECT * FROM episodes WHERE id = ? AND series_id = ?').get(episodeId, seriesId);
+    const r = await db.prepare('SELECT * FROM episodes WHERE id = ? AND series_id = ?').get(episodeId, seriesId);
     if (!r || !r.downloaded || !r.path) {
       results.push({ episodeId, ok: false, error: 'No file on disk for this episode.' });
       continue;
     }
     const episode = { seasonNumber: r.season_number, num: r.num, title: r.title };
     const ext = path.extname(r.path) || '.mkv';
-    const newName = `${episodeFileNameFor(series, episode, r.quality, settings, { sourcePath: r.path })}${ext}`;
+    const newName = `${await episodeFileNameFor(series, episode, r.quality, settings, { sourcePath: r.path })}${ext}`;
     const newPath = path.join(path.dirname(r.path), newName);
     if (newPath === r.path) {
       results.push({ episodeId, ok: true, path: r.path, unchanged: true });
@@ -467,8 +470,8 @@ async function handleRenameFiles(req, res, match) {
     // Same directory only (see this function's header comment — a rename
     // never restructures season/series folders), so just the file itself
     // needs Set Permissions re-applied, not its containing folder.
-    applyPermissions({ filePath: newPath });
-    db.prepare('UPDATE episodes SET path = ? WHERE id = ?').run(newPath, episodeId);
+    await applyPermissions({ filePath: newPath });
+    await db.prepare('UPDATE episodes SET path = ? WHERE id = ?').run(newPath, episodeId);
     results.push({ episodeId, ok: true, path: newPath, oldPath: r.path });
   }
 
@@ -478,8 +481,8 @@ async function handleRenameFiles(req, res, match) {
   return true;
 }
 
-function loadCachedEpisodes(seriesId) {
-  const rows = db.prepare(`
+async function loadCachedEpisodes(seriesId) {
+  const rows = await db.prepare(`
     SELECT id, season_number, season_name, num, title, title_japanese, title_romanji, aired, score, filler, recap, url, downloaded, quality, size_bytes, path, overview, media_streams
     FROM episodes WHERE series_id = ? ORDER BY season_number ASC, num ASC
   `).all(seriesId);
@@ -522,7 +525,7 @@ function loadCachedEpisodes(seriesId) {
 // at the first real match; returns null (a completely normal, common
 // outcome for a series with nothing downloaded anywhere yet) if nothing on
 // disk looks like this series at all, or if no root folders are configured.
-function findExistingSeriesFolder(series) {
+async function findExistingSeriesFolder(series) {
   const candidateNames = [series.title];
   try {
     const altTitles = series.alt_titles ? JSON.parse(series.alt_titles) : [];
@@ -530,7 +533,7 @@ function findExistingSeriesFolder(series) {
   } catch { /* malformed JSON — primary title only */ }
   const normalizedCandidates = new Set(candidateNames.map(normalizeFolderName));
 
-  const rootFolderPaths = db.prepare("SELECT data FROM settings_items WHERE section = 'root-folders'").all()
+  const rootFolderPaths = (await db.prepare("SELECT data FROM settings_items WHERE section = 'root-folders'").all())
     .map((row) => JSON.parse(row.data).path);
 
   for (const rootPath of rootFolderPaths) {
@@ -557,8 +560,8 @@ function findExistingSeriesFolder(series) {
 // ever adds matches, silently skipping anything it can't confidently place
 // (no episode number, an ambiguous season, no matching episode row) rather
 // than guessing wrong.
-function scanExistingFilesForSeries(series, episodeRows) {
-  const folderPath = findExistingSeriesFolder(series);
+async function scanExistingFilesForSeries(series, episodeRows) {
+  const folderPath = await findExistingSeriesFolder(series);
   if (!folderPath) return { matchedCount: 0, folderPath: null };
 
   const files = walkVideoFiles(folderPath);
@@ -608,8 +611,8 @@ function scanExistingFilesForSeries(series, episodeRows) {
     // guessQualityTierName's own comment for why a probe beats a text tag.
     const streams = probeMediaStreams(realPath);
     const probedResolutionGroup = streams && streams.video ? resolutionGroupFromHeight(streams.video.height) : null;
-    const quality = guessQualityTierName(file.name, probedResolutionGroup);
-    update.run(quality, file.sizeBytes, realPath, streams ? JSON.stringify(streams) : null, episode.id);
+    const quality = await guessQualityTierName(file.name, probedResolutionGroup);
+    await update.run(quality, file.sizeBytes, realPath, streams ? JSON.stringify(streams) : null, episode.id);
     matchedCount++;
   }
   // Only worth calling out when the assumption was actually doing something
@@ -631,11 +634,12 @@ async function resolveAndCacheEpisodesForSeries(series) {
     const episodes = await fetchTvdbEpisodes(tvdbId);
     if (episodes.length > 0) {
       const insertEp = db.prepare(`
-        INSERT OR IGNORE INTO episodes (series_id, season_number, season_name, num, title, title_japanese, title_romanji, aired, score, filler, recap, url, overview)
+        INSERT INTO episodes (series_id, season_number, season_name, num, title, title_japanese, title_romanji, aired, score, filler, recap, url, overview)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (series_id, season_number, num) DO NOTHING
       `);
       for (const e of episodes) {
-        insertEp.run(series.id, e.seasonNumber, e.seasonName, e.num, e.title, e.titleJapanese, e.titleRomanji, e.aired, e.score, e.filler ? 1 : 0, e.recap ? 1 : 0, e.url, e.overview || null);
+        await insertEp.run(series.id, e.seasonNumber, e.seasonName, e.num, e.title, e.titleJapanese, e.titleRomanji, e.aired, e.score, e.filler ? 1 : 0, e.recap ? 1 : 0, e.url, e.overview || null);
       }
       logInfo('EpisodeService', `Fetched and cached ${episodes.length} episode(s) for "${series.title}" from TheTVDB`);
 
@@ -643,8 +647,8 @@ async function resolveAndCacheEpisodesForSeries(series) {
       // match against becomes available, whether that's the moment a series
       // is first added (see warmEpisodesInBackground) or the first time
       // anyone opens its detail page.
-      const episodeRows = db.prepare('SELECT id, season_number, num FROM episodes WHERE series_id = ?').all(series.id);
-      const scanResult = scanExistingFilesForSeries(series, episodeRows);
+      const episodeRows = await db.prepare('SELECT id, season_number, num FROM episodes WHERE series_id = ?').all(series.id);
+      const scanResult = await scanExistingFilesForSeries(series, episodeRows);
       if (scanResult.matchedCount > 0) {
         logInfo('EpisodeService', `Found ${scanResult.matchedCount} already-downloaded episode(s) for "${series.title}" already on disk at "${scanResult.folderPath}"`);
       }
@@ -656,14 +660,14 @@ async function resolveAndCacheEpisodesForSeries(series) {
       // scan plus the add-time default in routes/series.js are the only two
       // things that ever set it.
       if (scanResult.folderPath && scanResult.folderPath !== series.path) {
-        db.prepare('UPDATE series SET path = ? WHERE id = ?').run(scanResult.folderPath, series.id);
+        await db.prepare('UPDATE series SET path = ? WHERE id = ?').run(scanResult.folderPath, series.id);
       }
 
       // Recomputes eps/pct from whatever scanExistingFilesForSeries actually
       // found on disk (zero real files is a completely normal outcome for a
       // freshly-added series — this just means the stats stay at "0 / N"
       // rather than fabricating any progress).
-      recomputeSeriesEpisodeStats(series.id);
+      await recomputeSeriesEpisodeStats(series.id);
     }
     return { episodes, source: 'tvdb' };
   } catch (err) {
@@ -720,9 +724,9 @@ async function refreshEpisodesForSeries(series) {
       overview = excluded.overview
   `);
   for (const e of episodes) {
-    upsert.run(series.id, e.seasonNumber, e.seasonName, e.num, e.title, e.titleJapanese, e.titleRomanji, e.aired, e.score, e.filler ? 1 : 0, e.recap ? 1 : 0, e.url, e.overview || null);
+    await upsert.run(series.id, e.seasonNumber, e.seasonName, e.num, e.title, e.titleJapanese, e.titleRomanji, e.aired, e.score, e.filler ? 1 : 0, e.recap ? 1 : 0, e.url, e.overview || null);
   }
-  recomputeSeriesEpisodeStats(series.id);
+  await recomputeSeriesEpisodeStats(series.id);
   logInfo('EpisodeService', `Refreshed episode metadata for "${series.title}" from TheTVDB (${episodes.length} episode(s))`);
   return { ok: true, count: episodes.length };
 }

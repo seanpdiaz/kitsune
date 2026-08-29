@@ -9,7 +9,7 @@
 // rather than silently no-op'ing, so a bug that somehow routed an
 // unsupported row here fails loudly.
 // ---------------------------------------------------------------------------
-const { db } = require('../db');
+const db = require('../db');
 const { logInfo, logWarn } = require('../logger');
 const { sendJson } = require('../lib/http');
 const { rowToItem } = require('./settings-items');
@@ -21,7 +21,7 @@ async function handleIndexersApi(req, res, urlPath) {
   if (!(req.method === 'POST' && testMatch)) return false;
 
   const id = Number(testMatch[1]);
-  const existing = db.prepare("SELECT * FROM settings_items WHERE id = ? AND section = 'indexers'").get(id);
+  const existing = await db.prepare("SELECT * FROM settings_items WHERE id = ? AND section = 'indexers'").get(id);
   if (!existing) {
     sendJson(res, 404, { error: 'Indexer not found' });
     return true;
@@ -39,8 +39,8 @@ async function handleIndexersApi(req, res, urlPath) {
     : await testProwlarrReachable({ baseUrl: saved.baseUrl, apiKey: saved.apiKey, allowInsecureSsl: saved.allowInsecureSsl });
 
   const updatedData = { ...saved, status: result.ok ? 'ok' : 'fail' };
-  db.prepare('UPDATE settings_items SET data = ? WHERE id = ?').run(JSON.stringify(updatedData), id);
-  const updatedRow = db.prepare('SELECT * FROM settings_items WHERE id = ?').get(id);
+  await db.prepare('UPDATE settings_items SET data = ? WHERE id = ?').run(JSON.stringify(updatedData), id);
+  const updatedRow = await db.prepare('SELECT * FROM settings_items WHERE id = ?').get(id);
 
   if (result.ok) {
     logInfo('IndexerService', `Test succeeded for "${saved.name}"${result.version ? ` (Prowlarr v${result.version})` : ''}`);

@@ -37,8 +37,8 @@ const { getMediaManagementSettings } = require('./episode-paths');
 
 const OCTAL_MODE_RE = /^[0-7]{3,4}$/;
 
-function getPermissionSettings() {
-  const s = getMediaManagementSettings();
+async function getPermissionSettings() {
+  const s = await getMediaManagementSettings();
   return {
     enabled: !!s.setPermissionsToggle,
     folderMode: s['mm-10'] || '755',
@@ -157,8 +157,8 @@ function chownPath(targetPath, settings) {
 // Chmod + chown. filePath: the file itself, gets File Chmod + chown. Both
 // are optional so a caller that only has one (e.g. a rename that never
 // touches a folder) can omit the other.
-function applyPermissions({ filePath, dirPaths = [] } = {}) {
-  const settings = getPermissionSettings();
+async function applyPermissions({ filePath, dirPaths = [] } = {}) {
+  const settings = await getPermissionSettings();
   if (!settings.enabled) return;
 
   for (const dir of dirPaths) {

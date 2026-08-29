@@ -1,4 +1,4 @@
-const { db } = require('../db');
+const db = require('../db');
 
 // Keeps a series' summary fields (`eps` — the "N / M downloaded" string the
 // Library grid card and the generic episode-list fallback both parse — and
@@ -28,17 +28,17 @@ const { db } = require('../db');
 // can no longer keep an otherwise-complete series' progress bar short of
 // 100% — the Specials tab itself is untouched by this; it still renders
 // every cached special either way (see SeriesPage.jsx's groupEpisodesBySeason).
-function recomputeSeriesEpisodeStats(seriesId) {
-  const series = db.prepare('SELECT ignore_specials FROM series WHERE id = ?').get(seriesId);
+async function recomputeSeriesEpisodeStats(seriesId) {
+  const series = await db.prepare('SELECT ignore_specials FROM series WHERE id = ?').get(seriesId);
   const ignoreSpecials = series && series.ignore_specials ? 1 : 0;
-  const row = db.prepare(`
+  const row = await db.prepare(`
     SELECT COUNT(*) AS total, COALESCE(SUM(downloaded), 0) AS done
     FROM episodes WHERE series_id = ? AND (? = 0 OR season_number > 0)
   `).get(seriesId, ignoreSpecials);
-  if (!row || row.total === 0) return; // no cached (non-special, if ignored) episodes yet — leave eps/pct as whatever they were seeded with
+  if (!row || Number(row.total) === 0) return; // no cached (non-special, if ignored) episodes yet — leave eps/pct as whatever they were seeded with
 
-  const pct = Math.round((row.done / row.total) * 100);
-  db.prepare('UPDATE series SET eps = ?, pct = ? WHERE id = ?')
+  const pct = Math.round((Number(row.done) / Number(row.total)) * 100);
+  await db.prepare('UPDATE series SET eps = ?, pct = ? WHERE id = ?')
     .run(`${row.done} / ${row.total}`, pct, seriesId);
 }
 

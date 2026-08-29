@@ -2,16 +2,18 @@
 // /api/app-settings/:section — the field/toggle-style Settings pages (Media
 // Management, General, UI, Metadata, Quality).
 // ---------------------------------------------------------------------------
-const { db } = require('../db');
+const db = require('../db');
 const { sendJson, readJsonBody } = require('../lib/http');
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS app_settings (
-    section TEXT PRIMARY KEY,
-    data TEXT NOT NULL DEFAULT '{}',
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-  )
-`);
+db.init(async () => {
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      section TEXT PRIMARY KEY,
+      data TEXT NOT NULL DEFAULT '{}',
+      updated_at TEXT NOT NULL
+    )
+  `);
+});
 
 
 // ---------------------------------------------------------------------------
@@ -26,7 +28,7 @@ async function handleAppSettingsApi(req, res, urlPath) {
   // GET /api/app-settings/:section — the saved { key: value } object for this
   // page, or {} if nothing's been saved yet (fresh install / first visit).
   if (req.method === 'GET') {
-    const row = db.prepare('SELECT data FROM app_settings WHERE section = ?').get(section);
+    const row = await db.prepare('SELECT data FROM app_settings WHERE section = ?').get(section);
     sendJson(res, 200, row ? JSON.parse(row.data) : {});
     return true;
   }
@@ -42,12 +44,12 @@ async function handleAppSettingsApi(req, res, urlPath) {
       sendJson(res, 400, { error: 'Invalid JSON body' });
       return true;
     }
-    const row = db.prepare('SELECT data FROM app_settings WHERE section = ?').get(section);
+    const row = await db.prepare('SELECT data FROM app_settings WHERE section = ?').get(section);
     const merged = { ...(row ? JSON.parse(row.data) : {}), ...body };
-    db.prepare(`
-      INSERT INTO app_settings (section, data, updated_at) VALUES (?, ?, datetime('now'))
+    await db.prepare(`
+      INSERT INTO app_settings (section, data, updated_at) VALUES (?, ?, ?)
       ON CONFLICT(section) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at
-    `).run(section, JSON.stringify(merged));
+    `).run(section, JSON.stringify(merged), db.now());
     sendJson(res, 200, merged);
     return true;
   }

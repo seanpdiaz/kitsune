@@ -20,7 +20,7 @@
 // ---------------------------------------------------------------------------
 const os = require('os');
 const path = require('path');
-const { db, DB_PATH } = require('../db');
+const db = require('../db');
 const { sendJson } = require('../lib/http');
 const { computeRootFolderStats } = require('../lib/fs-helpers');
 const { getCachedDiskUsage } = require('../lib/disk-usage');
@@ -42,12 +42,12 @@ async function handleSystemApi(req, res, urlPath) {
   if (req.method !== 'GET' || urlPath !== '/api/system/status') return false;
 
   const uptimeMs = Date.now() - PROCESS_START;
-  const seriesCount = db.prepare('SELECT COUNT(*) AS n FROM series').get().n;
-  const monitoredCount = db.prepare('SELECT COUNT(*) AS n FROM series WHERE monitored = 1').get().n;
-  const episodeCount = db.prepare('SELECT COUNT(*) AS n FROM episodes').get().n;
-  const downloadedEpisodeCount = db.prepare('SELECT COUNT(*) AS n FROM episodes WHERE downloaded = 1').get().n;
+  const seriesCount = (await db.prepare('SELECT COUNT(*) AS n FROM series').get()).n;
+  const monitoredCount = (await db.prepare('SELECT COUNT(*) AS n FROM series WHERE monitored = 1').get()).n;
+  const episodeCount = (await db.prepare('SELECT COUNT(*) AS n FROM episodes').get()).n;
+  const downloadedEpisodeCount = (await db.prepare('SELECT COUNT(*) AS n FROM episodes WHERE downloaded = 1').get()).n;
 
-  const rootFolders = db.prepare("SELECT data FROM settings_items WHERE section = 'root-folders'").all()
+  const rootFolders = (await db.prepare("SELECT data FROM settings_items WHERE section = 'root-folders'").all())
     .map((row) => {
       try { return JSON.parse(row.data); } catch { return null; }
     })
@@ -55,10 +55,10 @@ async function handleSystemApi(req, res, urlPath) {
 
   // Free space per root folder — a single statfs syscall per folder, cheap
   // enough to compute live on every request (unlike Disk usage below).
-  const diskSpace = rootFolders.map((rf) => {
-    const { free } = computeRootFolderStats(rf.path);
+  const diskSpace = await Promise.all(rootFolders.map(async (rf) => {
+    const { free } = await computeRootFolderStats(rf.path);
     return { path: rf.path, free };
-  });
+  }));
 
   // Library dashboard's Disk usage stat card (see public/index.html and
   // frontend/pages/library-grid/LibraryGridPage.jsx) — the real recursive
@@ -77,7 +77,11 @@ async function handleSystemApi(req, res, urlPath) {
     startTime: new Date(PROCESS_START).toISOString(),
     os: `${os.type()} ${os.release()} (${os.arch()})`,
     nodeVersion: process.version,
-    appDataPath: path.dirname(DB_PATH),
+    // Only meaningful when there's a local SQLite file to point at — under
+    // Postgres the data lives on whatever host DB_HOST names, not on this
+    // filesystem, so this falls back to the app's own data/ dir (still used
+    // for SSL certs and backups either way — see server/db.js's DATA_DIR).
+    appDataPath: db.DB_PATH ? path.dirname(db.DB_PATH) : db.DATA_DIR,
     startupPath: path.resolve(__dirname, '..', '..'),
     seriesCount,
     monitoredCount,

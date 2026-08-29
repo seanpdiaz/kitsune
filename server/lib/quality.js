@@ -14,33 +14,34 @@
 // of caching is not a real cost — and caching would just reintroduce the
 // "now two things can disagree" problem this rewrite exists to remove.
 // ---------------------------------------------------------------------------
-const { db } = require('../db');
+const db = require('../db');
 
-function getQualityTiers() {
-  const rows = db.prepare(
+async function getQualityTiers() {
+  const rows = await db.prepare(
     "SELECT * FROM settings_items WHERE section = 'quality-tiers' ORDER BY position ASC, id ASC"
   ).all();
   return rows.map((row) => ({ id: row.id, ...JSON.parse(row.data) }));
 }
 
-function getQualityOrder() {
-  return getQualityTiers().map((t) => t.name);
+async function getQualityOrder() {
+  return (await getQualityTiers()).map((t) => t.name);
 }
 
 // Unranked/unknown qualities sort below everything real — treated as "worse
 // than the lowest known tier" rather than throwing, since a hand-entered
 // Custom Format name, a typo'd quality string, or a tier that's since been
 // deleted from Settings > Quality shouldn't crash a comparison.
-function qualityRank(name) {
-  return getQualityOrder().indexOf(name);
+async function qualityRank(name) {
+  return (await getQualityOrder()).indexOf(name);
 }
 
 // True when `quality` is strictly below `cutoff` on the tier ladder — the
 // same "hasn't met its profile's cutoff yet, eligible for an upgrade search"
 // condition real Sonarr uses to populate Cutoff Unmet.
-function isBelowCutoff(quality, cutoff) {
+async function isBelowCutoff(quality, cutoff) {
   if (!cutoff) return false; // no cutoff defined for this profile — nothing to compare against
-  return qualityRank(quality) < qualityRank(cutoff);
+  const order = await getQualityOrder();
+  return order.indexOf(quality) < order.indexOf(cutoff);
 }
 
 // Looks up a Quality Profile by name (series.quality_profile stores just the
@@ -53,16 +54,16 @@ function isBelowCutoff(quality, cutoff) {
 // uses. Returns null only when no profile with this name exists at all
 // (deleted, renamed, or the series was never assigned one) — callers treat
 // that as "no profile to rank against," not an error.
-function getQualityProfile(name) {
+async function getQualityProfile(name) {
   if (!name) return null;
   // Fetched and matched in JS rather than a SQL json_extract() filter — same
   // "small table, parse in JS" convention every other settings_items reader
   // in this app already uses (see e.g. queue.js's pickQbittorrentClient).
-  const rows = db.prepare("SELECT * FROM settings_items WHERE section = 'profiles'").all();
+  const rows = await db.prepare("SELECT * FROM settings_items WHERE section = 'profiles'").all();
   const row = rows.find((r) => JSON.parse(r.data).name === name);
   if (!row) return null;
   const data = JSON.parse(row.data);
-  const knownTiers = getQualityOrder();
+  const knownTiers = await getQualityOrder();
   const allowedQualities = Array.isArray(data.allowedQualities) && data.allowedQualities.length > 0
     ? data.allowedQualities.filter((n) => knownTiers.includes(n))
     : knownTiers;
@@ -81,8 +82,8 @@ function getQualityProfile(name) {
 // batch release that doesn't correspond to one specific episode).
 const FALLBACK_RUNTIME_MINUTES = 24;
 
-function preferredSizeBytes(tierName, runtimeMinutes) {
-  const tier = getQualityTiers().find((t) => t.name === tierName);
+async function preferredSizeBytes(tierName, runtimeMinutes) {
+  const tier = (await getQualityTiers()).find((t) => t.name === tierName);
   if (!tier || typeof tier.preferredMBPerMin !== 'number') return null;
   const minutes = typeof runtimeMinutes === 'number' && runtimeMinutes > 0 ? runtimeMinutes : FALLBACK_RUNTIME_MINUTES;
   return Math.round(tier.preferredMBPerMin * minutes * 1024 * 1024);
@@ -115,27 +116,37 @@ function preferredSizeBytes(tierName, runtimeMinutes) {
 // or its tier has no preferred size configured) sorts after same-tier
 // releases that do have a usable size comparison, rather than being treated
 // as a perfect (distance-0) match by accident.
-function rankReleaseCandidates(releases, { profile, runtimeMinutes } = {}) {
-  const order = getQualityOrder();
+//
+// Async now (preferredSizeBytes needs the database), which means the actual
+// sizeDistance-per-release work has to happen BEFORE the synchronous
+// Array.sort() call below — a sort comparator can't itself be async — so
+// every release's distance is precomputed with Promise.all first and
+// carried as a throwaway `_sizeDistance` field the comparator just reads.
+async function rankReleaseCandidates(releases, { profile, runtimeMinutes } = {}) {
+  const order = await getQualityOrder();
   const allowed = profile ? new Set(profile.allowedQualities) : null;
 
-  function sizeDistance(release) {
+  async function sizeDistance(release) {
     if (!release.sizeBytes) return Infinity;
-    const target = preferredSizeBytes(release.quality, runtimeMinutes);
+    const target = await preferredSizeBytes(release.quality, runtimeMinutes);
     if (target == null) return Infinity;
     return Math.abs(release.sizeBytes - target);
   }
 
-  const annotated = releases.map((r) => ({ ...r, inProfile: allowed ? allowed.has(r.quality) : true }));
+  const annotated = await Promise.all(releases.map(async (r) => ({
+    ...r,
+    inProfile: allowed ? allowed.has(r.quality) : true,
+    _sizeDistance: await sizeDistance(r),
+  })));
   annotated.sort((a, b) => {
     if (a.inProfile !== b.inProfile) return a.inProfile ? -1 : 1;
     const rankDiff = order.indexOf(b.quality) - order.indexOf(a.quality);
     if (rankDiff !== 0) return rankDiff;
-    const sizeDiff = sizeDistance(a) - sizeDistance(b);
+    const sizeDiff = a._sizeDistance - b._sizeDistance;
     if (sizeDiff !== 0) return sizeDiff;
     return (b.seeders || 0) - (a.seeders || 0);
   });
-  return annotated;
+  return annotated.map(({ _sizeDistance, ...rest }) => rest);
 }
 
 module.exports = {
