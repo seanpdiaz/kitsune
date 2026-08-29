@@ -360,7 +360,7 @@ function EpisodeRow({ ep, onSearch, onGrabBest, grabbingBestId, onCancel, onDeta
       ? <button className="ep-action" type="button" aria-label="Cancel download" data-tooltip="Cancel download" onClick={() => onCancel(ep.queueId)}>{icons.x}</button>
       : <button className="ep-action" aria-label="Cancel download" data-tooltip="Cancel download" disabled style={{ opacity: 0.4 }}>{icons.x}</button>;
   } else {
-    status = <span className="ep-status status-pending">{icons.clock}Not aired</span>;
+    status = <span className="ep-status status-not-aired">{icons.clock}Not aired</span>;
     action = <button className="ep-action" aria-label="Search episode" data-tooltip="Search episode" disabled style={{ opacity: 0.4 }}>{icons.dots}</button>;
   }
 
