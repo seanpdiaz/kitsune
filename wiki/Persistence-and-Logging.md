@@ -64,6 +64,14 @@
   with fake data standing in for whatever was really there. Set `APP_ENV=demo` to get
   the old zero-config "there's already something to click through" behavior back —
   that's for trying the app out or local dev, not a real deployment.
+  - Two `settings_items` sections are the deliberate exception: Quality Profiles
+    and Quality Tiers seed their defaults regardless of `APP_ENV` (see
+    `ALWAYS_SEED_SECTIONS` in `settings-items.js`). They aren't demo library
+    content — real features (`guessQualityTierName` in `lib/media-files.js`,
+    `resolveQualityProfile`/cutoff-unmet checking) need at least one of each
+    configured to do anything at all, so a real production install still gets
+    a usable starting point instead of an empty Quality Profile dropdown and
+    every downloaded episode's Quality column reading blank.
 - Change anything in Settings or the Library, restart the server, and it's still there.
 
 That's the same shape Activity/Wanted (queue, history, blocklist, missing, cutoff unmet)
