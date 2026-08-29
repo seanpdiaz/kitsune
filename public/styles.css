@@ -1135,7 +1135,18 @@ select {
 .ep-status svg { width: 13px; height: 13px; }
 .status-done { color: var(--success); }
 .status-missing { color: var(--warning); }
-.status-pending { color: var(--text-muted); }
+/* Not "status-pending" — that name is also used, unrelated, by the
+   .status-pill badge family below (Connect/Download Clients/Queue/Users/
+   etc.), which gives it a background + padding to make an actual pill. An
+   .ep-status row here has no .status-pill class, so it never meant to pick
+   any of that up, but a bare-class CSS selector doesn't know that: sharing
+   the name meant this episode's "Not aired" badge silently gained that
+   pill's background box while Available/Missing/Downloading (each their
+   own uniquely-named class) stayed plain colored text — the same row
+   suddenly rendering a wider, differently-shaped badge than its neighbors
+   is what threw off the "..." menu button's apparent alignment next to it.
+   Own name, so it only ever matches this. */
+.status-not-aired { color: var(--text-muted); }
 .status-dl { color: var(--accent); }
 
 .ep-action {
