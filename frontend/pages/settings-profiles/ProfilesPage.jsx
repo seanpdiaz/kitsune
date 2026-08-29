@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import SimpleList, { fieldRow } from '../../components/SimpleList.jsx';
+import { icons } from '../../lib/icons.jsx';
 
 // Settings > Profiles — a faithful port of the `initSimpleList({ section:
 // 'profiles', ... })` call at the bottom of
@@ -30,6 +31,33 @@ export default function ProfilesPage({ addBtnContainer }) {
     return () => { cancelled = true; };
   }, []);
 
+  // Which profile (by id, not name — stable across a rename, see
+  // server/routes/series.js's getDefaultQualityProfileName) is used to
+  // pre-select Add New's Quality Profile dropdown and as POST /api/series'
+  // own fallback when nothing's explicitly chosen. Stored under the generic
+  // /api/app-settings/:section endpoint (server/routes/app-settings.js) —
+  // no dedicated route needed, same as every other plain-field settings
+  // page already reads/writes through it.
+  const [defaultProfileId, setDefaultProfileId] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/app-settings/library-defaults')
+      .then((res) => res.json())
+      .then((data) => { if (!cancelled) setDefaultProfileId(data.defaultQualityProfileId ?? null); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  function setAsDefault(item) {
+    setDefaultProfileId(item.id); // optimistic — matches SimpleList's own edit/remove pattern
+    fetch('/api/app-settings/library-defaults', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ defaultQualityProfileId: item.id }),
+    }).catch(() => {});
+  }
+
   // A profile row from before this feature existed (or one that's simply
   // never had its qualities touched) has no `allowedQualities` array at all
   // — defaulted to "every known tier" here, the same permissive default
@@ -42,12 +70,22 @@ export default function ProfilesPage({ addBtnContainer }) {
 
   function renderRow(item) {
     const allowed = allowedFor(item);
+    const isDefault = defaultProfileId === item.id;
     return (
       <>
         <p className="settings-title">{item.name}</p>
         <span className="settings-meta">{item.cutoff}</span>
         <span className="settings-meta">{allowed.length} of {qualityTierNames.length || allowed.length}</span>
         <span className="settings-meta">{item.upgrades ? 'Upgrades allowed' : 'No upgrades'}</span>
+        <button
+          type="button"
+          className={`default-profile-btn${isDefault ? ' active' : ''}`}
+          data-tooltip={isDefault ? 'Default profile' : 'Set as default'}
+          aria-label={isDefault ? `${item.name} is the default quality profile for new series` : `Set ${item.name} as the default quality profile for new series`}
+          onClick={(e) => { e.stopPropagation(); if (!isDefault) setAsDefault(item); }}
+        >
+          {isDefault && icons.check}
+        </button>
       </>
     );
   }
@@ -113,7 +151,7 @@ export default function ProfilesPage({ addBtnContainer }) {
     <SimpleList
       section="profiles"
       types={profileTypes}
-      headerLabels={['Name', 'Cutoff', 'Qualities', 'Upgrades', '', '']}
+      headerLabels={['Name', 'Cutoff', 'Qualities', 'Upgrades', 'Default', '', '']}
       baseClass="profile"
       addBtnLabel="Add profile"
       addBtnContainer={addBtnContainer}

@@ -525,6 +525,10 @@ async function loadCachedEpisodes(seriesId) {
 // at the first real match; returns null (a completely normal, common
 // outcome for a series with nothing downloaded anywhere yet) if nothing on
 // disk looks like this series at all, or if no root folders are configured.
+// Async (fs.promises.readdir, not readdirSync) — see walkVideoFiles' own
+// comment in lib/media-files.js for why: a synchronous scan across every
+// configured root folder blocks the whole app, not just this lookup,
+// however long those folders (often a network mount) take to answer.
 async function findExistingSeriesFolder(series) {
   const candidateNames = [series.title];
   try {
@@ -539,7 +543,7 @@ async function findExistingSeriesFolder(series) {
   for (const rootPath of rootFolderPaths) {
     let entries;
     try {
-      entries = fs.readdirSync(rootPath, { withFileTypes: true });
+      entries = await fs.promises.readdir(rootPath, { withFileTypes: true });
     } catch (err) {
       logWarn('EpisodeService', `Could not scan root folder "${rootPath}" for "${series.title}": ${err.code || err.message}`);
       continue;
@@ -564,7 +568,7 @@ async function scanExistingFilesForSeries(series, episodeRows) {
   const folderPath = await findExistingSeriesFolder(series);
   if (!folderPath) return { matchedCount: 0, folderPath: null };
 
-  const files = walkVideoFiles(folderPath);
+  const files = await walkVideoFiles(folderPath);
   if (files.length === 0) return { matchedCount: 0, folderPath };
 
   // A bare "05"-style filename with no SxxExx tag and no "Season N" ancestor
@@ -609,7 +613,7 @@ async function scanExistingFilesForSeries(series, episodeRows) {
     // function couldn't confirm. A confirmed real resolution overrides
     // whatever (if anything) the filename itself claims — see
     // guessQualityTierName's own comment for why a probe beats a text tag.
-    const streams = probeMediaStreams(realPath);
+    const streams = await probeMediaStreams(realPath);
     const probedResolutionGroup = streams && streams.video ? resolutionGroupFromHeight(streams.video.height) : null;
     const quality = await guessQualityTierName(file.name, probedResolutionGroup);
     await update.run(quality, file.sizeBytes, realPath, streams ? JSON.stringify(streams) : null, episode.id);

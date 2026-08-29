@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node server.js",
     "build": "vite build",
-    "dev:frontend": "vite build --watch"
+    "dev:frontend": "vite build --watch",
+    "deploy": "bash scripts/deploy.sh"
   },
   "license": "UNLICENSED",
   "devDependencies": {

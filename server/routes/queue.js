@@ -899,7 +899,7 @@ async function completeRealDownload(row, torrent, client, files) {
       // row.quality untouched whenever nothing was confirmed, rather than
       // re-deriving a full guess that might disagree with what a real
       // indexer's own parsing already decided at grab time.
-      mediaStreams = probeMediaStreams(localSourcePath);
+      mediaStreams = await probeMediaStreams(localSourcePath);
       const probedResolutionGroup = mediaStreams && mediaStreams.video ? resolutionGroupFromHeight(mediaStreams.video.height) : null;
       if (probedResolutionGroup) {
         quality = (await guessQualityTierName(row.release_title, probedResolutionGroup)) || row.quality;

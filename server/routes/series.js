@@ -114,6 +114,85 @@ async function defaultSeriesPathFor(title, requestedRootFolder) {
   return path.join(rootFolder, sanitizeForPath(title) || 'Unknown Series');
 }
 
+// Settings > Profiles' "Default for new series" toggle (see
+// frontend/pages/settings-profiles/ProfilesPage.jsx) — stored by profile id,
+// not name, under the generic app_settings 'library-defaults' section
+// (server/routes/app-settings.js's PUT /api/app-settings/:section), so
+// renaming a profile that's currently the default doesn't silently detach it
+// the way storing the name itself would. Looked up fresh here rather than
+// cached: nothing in this file already tracks live view of app_settings, and
+// this only runs once per series-add, not on any hot path.
+async function getDefaultQualityProfileName() {
+  const row = await db.prepare("SELECT data FROM app_settings WHERE section = 'library-defaults'").get();
+  if (!row) return null;
+  let defaultId;
+  try {
+    defaultId = JSON.parse(row.data).defaultQualityProfileId;
+  } catch {
+    return null;
+  }
+  if (defaultId == null) return null;
+  const profileRow = await db.prepare("SELECT data FROM settings_items WHERE section = 'profiles' AND id = ?").get(defaultId);
+  // The profile marked default has since been deleted (or the id is stale) —
+  // no real default to fall back to; resolveQualityProfile below falls
+  // through to the first configured profile instead, same as a never-set
+  // default.
+  if (!profileRow) return null;
+  try {
+    return JSON.parse(profileRow.data).name || null;
+  } catch {
+    return null;
+  }
+}
+
+// Same shape as resolveRootFolder above, one level simpler: an explicit
+// `requestedName` (Add New's dropdown, or any other caller) is always
+// trusted as-is — same "the UI only ever offers real Settings > Profiles
+// names" convention this already used before defaults existed — and only a
+// missing/empty one falls back, first to the configured default, then to
+// whichever profile is first in Settings > Profiles' own list (position
+// order), the same "no default set yet" behavior this had before this
+// feature existed.
+async function resolveQualityProfile(requestedName) {
+  if (requestedName) return requestedName;
+  const defaultName = await getDefaultQualityProfileName();
+  if (defaultName) return defaultName;
+  const firstRow = await db.prepare("SELECT data FROM settings_items WHERE section = 'profiles' ORDER BY position ASC, id ASC LIMIT 1").get();
+  if (!firstRow) return null;
+  try {
+    return JSON.parse(firstRow.data).name || null;
+  } catch {
+    return null;
+  }
+}
+
+// Same 'library-defaults' section as the quality-profile default above, own
+// key (see Settings > Media Management's "New Series Defaults" card) — a
+// plain boolean rather than an id, since there's nothing here that can be
+// renamed/deleted out from under it the way a quality profile can. Missing
+// row, missing key, or malformed JSON all mean "no default configured yet",
+// same as a fresh install — new series keep their existing ignore_specials=0
+// schema default until someone turns this on.
+async function getDefaultIgnoreSpecials() {
+  const row = await db.prepare("SELECT data FROM app_settings WHERE section = 'library-defaults'").get();
+  if (!row) return false;
+  try {
+    return !!JSON.parse(row.data).defaultIgnoreSpecials;
+  } catch {
+    return false;
+  }
+}
+
+// POST /api/series has no UI-exposed way to set ignoreSpecials per-add today
+// (unlike qualityProfile/rootFolder) — `requested` only matters for a
+// non-UI caller (a future per-add checkbox, direct API use) that passes it
+// explicitly; every real add today falls straight through to the configured
+// default.
+async function resolveIgnoreSpecials(requested) {
+  if (requested !== undefined && requested !== null) return requested ? 1 : 0;
+  return (await getDefaultIgnoreSpecials()) ? 1 : 0;
+}
+
 db.init(async () => {
   await db.exec(`
     CREATE TABLE IF NOT EXISTS series (
@@ -382,16 +461,24 @@ async function handleSeriesApi(req, res, urlPath) {
     // PATCH /api/series/:id's own qualityProfile handling already uses
     // (getQualityProfile gracefully defaults to "every tier allowed" for a
     // name it doesn't recognize) — Add New's dropdown only ever lists real
-    // Settings > Profiles names, so this doesn't re-validate against that
-    // list a second time, unlike rootFolder above (which controls a real
-    // filesystem path, not just a lookup key).
-    const qualityProfile = body.qualityProfile ? String(body.qualityProfile) : null;
+    // Settings > Profiles names, so an explicit choice here isn't
+    // re-validated against that list a second time, unlike rootFolder above
+    // (which controls a real filesystem path, not just a lookup key). An
+    // omitted/empty one now falls back through resolveQualityProfile to
+    // whichever profile Settings > Profiles has marked as the default for
+    // new series, rather than silently landing on null — see that function's
+    // own comment.
+    const qualityProfile = await resolveQualityProfile(body.qualityProfile ? String(body.qualityProfile) : null);
+    // Same "Settings has a configurable default, an explicit per-add value
+    // (once one exists in the UI) always wins" shape as qualityProfile just
+    // above — see Settings > Media Management's "New Series Defaults" card.
+    const ignoreSpecials = await resolveIgnoreSpecials(body.ignoreSpecials);
 
     const created = await db.prepare(`
-      INSERT INTO series (title, badge, fill, pct, eps, monitored, status, air_status, next_air_days, added_days_ago, poster, meta, overview, external_id, external_source, alt_titles, path, quality_profile, created_at)
-      VALUES (?, NULL, 'accent', 0, '0 / 0', 1, ?, ?, NULL, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO series (title, badge, fill, pct, eps, monitored, status, air_status, next_air_days, added_days_ago, poster, meta, overview, external_id, external_source, alt_titles, path, quality_profile, ignore_specials, created_at)
+      VALUES (?, NULL, 'accent', 0, '0 / 0', 1, ?, ?, NULL, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       RETURNING *
-    `).get(title, status, airStatus, body.poster || null, meta, body.overview || null, externalId, externalSource, altTitlesJson, defaultPath, qualityProfile, db.now());
+    `).get(title, status, airStatus, body.poster || null, meta, body.overview || null, externalId, externalSource, altTitlesJson, defaultPath, qualityProfile, ignoreSpecials, db.now());
     logInfo('SeriesService', `Series added: ${title}${externalSource ? ` (${externalSource}#${externalId})` : ''}`);
     sendJson(res, 201, await rowToSeries(created));
     // Start warming the episode cache immediately instead of waiting for
