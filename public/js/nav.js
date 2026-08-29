@@ -37,7 +37,10 @@ const NAV_SECTIONS = [
     label: 'Wanted',
     href: 'wanted-missing.html',
     icon: '<circle cx="12" cy="12" r="9"/><path d="M12 8v5l3 2"/>',
-    badge: '27',
+    // No static badge here anymore (used to be a hardcoded '27' that never
+    // moved regardless of what was actually missing) — see
+    // refreshWantedBadge() below, which fetches the real count and applies
+    // it to the DOM directly once it's known.
     subs: [
       { href: 'wanted-missing.html', label: 'Missing' },
       { href: 'wanted-cutoff-unmet.html', label: 'Cutoff Unmet' },
@@ -89,8 +92,11 @@ const NAV_SECTIONS = [
   },
 ];
 
-// Filled in by checkAuthAndInit() below before anything renders — every
-// function past that point can assume it's already resolved.
+// Filled in from a cached guess synchronously if one exists (see
+// readCachedUser()/checkAuthAndInit() further down), then confirmed or
+// corrected by checkAuthAndInit()'s real auth check shortly after — every
+// render function assumes one of those two has already happened by the
+// time it's called, not specifically checkAuthAndInit().
 let currentUser = null;
 
 function currentFile() {
@@ -160,6 +166,84 @@ function renderUserChip() {
     </div>`;
 }
 
+// ---------- Mobile chrome: hamburger + top bar + scrim ----------
+// Below the 860px breakpoint (see styles.css's own "Mobile / responsive"
+// section), .sidebar becomes an off-canvas drawer instead of an
+// always-visible column — these three elements are what open/close it.
+// None of them exist in any of the 30 sidebar-bearing public/*.html files;
+// injecting them here once, the same "single source of truth" reasoning
+// NAV_SECTIONS/renderSidebar() above already follow for the sidebar's own
+// markup, means adding or restyling this chrome later never needs a sweep
+// across every page. Safe to call unconditionally on every page that has a
+// #sidebar (login.html has none, and never loads this module at all — see
+// its own comment) and safe to call more than once (guarded below), since
+// the cached-user render path and checkAuthAndInit() can both end up
+// calling into sidebar setup on the same page load.
+const MOBILE_BREAKPOINT_QUERY = '(max-width: 860px)';
+let mobileChromeReady = false;
+
+function isMobileViewport() {
+  return window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches;
+}
+
+function setMobileNavOpen(open) {
+  const sidebar = document.getElementById('sidebar');
+  const scrim = document.getElementById('mobileNavScrim');
+  const toggle = document.getElementById('mobileNavToggle');
+  if (!sidebar) return;
+  sidebar.classList.toggle('mobile-open', open);
+  if (scrim) scrim.classList.toggle('visible', open);
+  document.body.classList.toggle('mobile-nav-open', open);
+  if (toggle) toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+function ensureMobileChrome() {
+  if (mobileChromeReady) return;
+  if (!document.getElementById('sidebar')) return; // login.html etc.
+  mobileChromeReady = true;
+
+  const topbar = document.createElement('div');
+  topbar.className = 'mobile-topbar';
+  topbar.innerHTML = `
+    <button type="button" class="mobile-nav-toggle" id="mobileNavToggle" aria-label="Open menu" aria-expanded="false">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+    </button>
+    <svg class="brand-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3c2 2.5 2 5 2 5s2.5-1 4-1 3 1 3 3-1.5 3-3 3c1 1.5 1 3.5-.5 5C16 19.5 14 19 12 21c-2-2-4-1.5-5.5-3-1.5-1.5-1.5-3.5-.5-5-1.5 0-3-1-3-3s1.5-3 3-3 4 1 4 1 0-2.5 2-5z"/></svg>
+    <span class="mobile-topbar-title">Kitsune</span>`;
+
+  const scrim = document.createElement('div');
+  scrim.className = 'mobile-nav-scrim';
+  scrim.id = 'mobileNavScrim';
+
+  // Both inserted before .layout (the outermost, single wrapper every
+  // sidebar-bearing page has directly under <body> — see any public/*.html
+  // file) rather than appended at the end, so the topbar's position:
+  // sticky (see styles.css) has a predictable spot at the very top of
+  // normal document flow instead of depending on where in <body> a plain
+  // append would happen to land it.
+  const layout = document.querySelector('.layout');
+  if (layout && layout.parentNode) {
+    layout.parentNode.insertBefore(topbar, layout);
+    layout.parentNode.insertBefore(scrim, layout);
+  } else {
+    document.body.prepend(scrim);
+    document.body.prepend(topbar);
+  }
+
+  topbar.querySelector('#mobileNavToggle').addEventListener('click', () => setMobileNavOpen(true));
+  scrim.addEventListener('click', () => setMobileNavOpen(false));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') setMobileNavOpen(false);
+  });
+  // A resize that crosses back above the breakpoint (rotating a tablet,
+  // widening a resizable window) shouldn't leave the drawer's open state
+  // and the scrim/body-scroll-lock it drives stuck on once .sidebar isn't
+  // an overlay anymore.
+  window.addEventListener('resize', () => {
+    if (!isMobileViewport()) setMobileNavOpen(false);
+  });
+}
+
 function renderSidebar() {
   const sidebar = document.getElementById('sidebar');
   if (!sidebar) return;
@@ -180,7 +264,7 @@ function renderSidebar() {
         <svg class="brand-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3c2 2.5 2 5 2 5s2.5-1 4-1 3 1 3 3-1.5 3-3 3c1 1.5 1 3.5-.5 5C16 19.5 14 19 12 21c-2-2-4-1.5-5.5-3-1.5-1.5-1.5-3.5-.5-5-1.5 0-3-1-3-3s1.5-3 3-3 4 1 4 1 0-2.5 2-5z"/></svg>
         <span class="brand-name">Kitsune</span>
       </div>
-      <button type="button" class="collapse-toggle" id="collapseToggle" aria-label="Collapse sidebar" title="Collapse sidebar">
+      <button type="button" class="collapse-toggle" id="collapseToggle" aria-label="Collapse sidebar" data-tooltip="Collapse sidebar" data-tooltip-pos="right">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
       </button>
     </div>`;
@@ -195,8 +279,15 @@ function renderSidebar() {
     const href = section.toggle ? '#' : section.href;
     const badge = section.badge ? `<span class="nav-badge">${section.badge}</span>` : '';
 
+    // data-tooltip/data-tooltip-pos here matter most once the sidebar is
+    // collapsed (see styles.css's [data-tooltip] rules and
+    // applyStoredSidebarCollapse above) — that's when .nav-label is hidden
+    // and this becomes an icon-only control with no other way to tell what
+    // it links to. Harmless when expanded too: hovering a row that already
+    // shows its own label just surfaces the same text a beat later, right
+    // where the cursor already is.
     const item = `
-    <a class="${itemClasses}" href="${href}">
+    <a class="${itemClasses}" href="${href}" data-tooltip="${section.label}" data-tooltip-pos="right">
       <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">${section.icon}</svg>
       <span class="nav-label">${section.label}</span>
       ${badge}
@@ -237,18 +328,176 @@ function renderPageTabs() {
     .join('\n      ');
 }
 
-// ---------- Sidebar collapse + accordion + user menu ----------
+// ---------- Wanted sidebar badge: real live count ----------
+// The Wanted nav item's badge used to be a hardcoded '27' baked into
+// NAV_SECTIONS, so it never changed no matter what was actually missing.
+// The real count isn't known until this GET resolves (and can change under
+// the user — a grab completing, an air date passing — without a full
+// reload), so it's applied straight to the DOM after the initial render
+// instead of being part of NAV_SECTIONS' synchronous render. Uses the exact
+// same "aired, monitored series only, not downloaded" query as GET
+// /api/wanted/missing (server/routes/wanted.js) — the same one Wanted >
+// Missing itself renders from — so the badge always agrees with the page it
+// links to. A zero count hides the badge entirely rather than showing "0".
+async function refreshWantedBadge() {
+  const link = document.querySelector('a.nav-item[href="wanted-missing.html"]');
+  if (!link) return; // Wanted section not present for this render (shouldn't happen, but don't throw)
+  try {
+    const res = await fetch('/api/wanted/missing');
+    const body = await res.json();
+    const count = Array.isArray(body.episodes) ? body.episodes.length : 0;
+    let badge = link.querySelector('.nav-badge');
+    if (count > 0) {
+      if (!badge) {
+        badge = document.createElement('span');
+        badge.className = 'nav-badge';
+        link.appendChild(badge);
+      }
+      badge.textContent = String(count);
+    } else if (badge) {
+      badge.remove();
+    }
+  } catch {
+    // Sidebar still works without it — just no badge until the next page load.
+  }
+}
+
+// ---------- Sidebar collapse: applied synchronously, before the auth gate ----------
+// This used to happen inside initSidebarInteractions() below, which only
+// runs once checkAuthAndInit()'s GET /api/auth/state round trip resolves —
+// a real network request, however fast. Calling it here instead — a plain
+// top-level call below, executed the moment this module runs — closes most
+// of that gap, but NOT all of it: this file (nav.js) is loaded via
+// `<script type="module">` in app.js, and browsers always defer a module
+// script's execution until after the whole document has finished parsing —
+// and they're free to paint before that happens. In practice they do: as
+// soon as styles.css finishes loading and the DOM has been parsed far
+// enough (which includes the empty <aside id="sidebar"> sitting at its
+// default 216px width), the browser can and does paint that frame, well
+// before this module's code — including this very function — ever runs.
+// So the real fix for the *first* paint lives in public/js/sidebar-boot.js,
+// a plain parser-blocking <script> placed in <head> before the stylesheet
+// link on every page, which marks <html> early enough that the browser
+// never gets a chance to paint the expanded width at all (see that file's
+// own comment, and the matching html.sidebar-collapsed-boot rule in
+// styles.css). This function still matters for everything sidebar-boot.js
+// can't do from <head>, before #sidebar exists — applying the real
+// .collapsed class to the actual element (so the toggle button and every
+// other .sidebar.collapsed rule, like hiding nav-item labels, work once
+// renderSidebar() fills the sidebar with content) and cleaning up
+// sidebar-boot.js's temporary marker once that's done.
+function applyStoredSidebarCollapse() {
+  const sidebar = document.getElementById('sidebar');
+  if (sidebar && localStorage.getItem('kitsune-sidebar-collapsed') === '1') {
+    sidebar.classList.add('collapsed');
+  }
+  // Cleanup for sidebar-boot.js's earlier <head>-script marker — a harmless
+  // no-op if the sidebar was never collapsed to begin with, since it was
+  // never added in that case.
+  document.documentElement.classList.remove('sidebar-collapsed-boot');
+}
+applyStoredSidebarCollapse();
+
+// ---------- Sidebar content: rendered synchronously from a cached user ----------
+// One layer deeper than the width fix just above, and the actual reason a
+// clear flash was still visible on every navigation even after that
+// shipped: renderSidebar() (further down) builds the sidebar's ENTIRE
+// content — every nav item, the brand mark, the user chip — and it has
+// always run only after checkAuthAndInit()'s real GET /api/auth/state
+// resolves, because visibleSections()/renderUserChip() need currentUser for
+// admin-only filtering and the user chip itself. That meant #sidebar sat
+// completely empty (correctly narrow if collapsed, thanks to
+// applyStoredSidebarCollapse() above, but with zero nav items inside it) on
+// every single full-page navigation until that fetch came back — then
+// everything popped in at once. Even a fast local request is enough time
+// for that to read as "the whole sidebar flashed and reloaded."
+//
+// The fix: cache the last real, successful auth result in sessionStorage
+// (tab-scoped, cleared when the browser closes — right for "last known
+// auth state," unlike localStorage, which would keep it around
+// indefinitely across completely separate sessions) every time
+// checkAuthAndInit() below resolves one for real, and on the NEXT
+// navigation, read that cache synchronously — before any network round
+// trip — and render the sidebar from it immediately. checkAuthAndInit()'s
+// own real fetch still runs every time and is still what actually decides
+// whether to redirect to login.html; it only re-renders the sidebar if the
+// real result disagrees with this cached guess (a role change, a session
+// that expired between page loads) — an uncommon case. The common one, the
+// same signed-in user clicking between pages in one sitting, needs no
+// re-render at all, so there's nothing left to visibly pop in.
+//
+// This only ever affects what the sidebar shows, never what's actually
+// allowed: every admin-only page/action still checks the real session
+// server-side (requireAdmin() etc. in server/routes/*.js) on every request,
+// regardless of what a stale cached role briefly rendered here — so the
+// worst case of a wrong guess is a nav item that 403s if clicked, corrected
+// within one real round trip, not an actual permission gap.
+const CACHED_USER_KEY = 'kitsune-cached-user';
+
+function readCachedUser() {
+  try {
+    const raw = sessionStorage.getItem(CACHED_USER_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null; // sessionStorage can throw in some locked-down contexts
+  }
+}
+
+function writeCachedUser(user) {
+  try {
+    sessionStorage.setItem(CACHED_USER_KEY, JSON.stringify(user));
+  } catch {
+    // Falls back to always waiting on the real fetch, same as before this
+    // cache existed — nothing else depends on the write having succeeded.
+  }
+}
+
+const cachedUser = readCachedUser();
+if (cachedUser) {
+  currentUser = cachedUser;
+  ensureMobileChrome();
+  renderSidebar();
+  renderPageTabs();
+  initSidebarInteractions();
+}
+
+// ---------- Sidebar collapse toggle + accordion + user menu ----------
 // Wired up once, right after the sidebar's real markup exists — was two
 // separate top-level blocks running at import time before the auth gate
 // below made rendering itself conditional (see checkAuthAndInit).
+let userMenuOutsideClickBound = false;
+function bindUserMenuOutsideClick() {
+  if (userMenuOutsideClickBound) return;
+  userMenuOutsideClickBound = true;
+  document.addEventListener('click', (e) => {
+    const userChip = document.getElementById('userChip');
+    const userMenu = document.getElementById('userMenu');
+    if (userMenu && userChip && !userMenu.contains(e.target) && !userChip.contains(e.target)) {
+      userMenu.classList.remove('open');
+    }
+  });
+}
+
 function initSidebarInteractions() {
   const sidebar = document.getElementById('sidebar');
   const collapseToggle = document.getElementById('collapseToggle');
   if (collapseToggle) {
-    if (localStorage.getItem('kitsune-sidebar-collapsed') === '1') {
-      sidebar.classList.add('collapsed');
-    }
+    // The collapsed/expanded class itself is already applied by
+    // applyStoredSidebarCollapse() above — this only wires up the click
+    // handler, since the toggle button doesn't exist until renderSidebar()
+    // has run. Below the mobile breakpoint .sidebar is an off-canvas
+    // drawer, not a collapsible column (see styles.css's "Mobile /
+    // responsive" section) — .collapsed there is neutralized back to a
+    // full-width look, so toggling it would do nothing visible anyway.
+    // This button is still the one hamburger inside the sidebar itself, so
+    // rather than hide it on mobile and make the drawer only closable via
+    // the scrim/topbar toggle/Escape, it does the more useful thing at
+    // that width: close the drawer, same as tapping the scrim.
     collapseToggle.addEventListener('click', () => {
+      if (isMobileViewport()) {
+        setMobileNavOpen(false);
+        return;
+      }
       sidebar.classList.toggle('collapsed');
       localStorage.setItem('kitsune-sidebar-collapsed', sidebar.classList.contains('collapsed') ? '1' : '0');
     });
@@ -279,9 +528,20 @@ function initSidebarInteractions() {
       e.stopPropagation();
       userMenu.classList.toggle('open');
     });
-    document.addEventListener('click', (e) => {
-      if (!userMenu.contains(e.target) && !userChip.contains(e.target)) userMenu.classList.remove('open');
-    });
+    // A plain document.addEventListener('click', ...) here, closing over
+    // this specific userChip/userMenu pair, used to be safe on the
+    // assumption initSidebarInteractions() only ever ran once per page. Now
+    // that a cached-user render can call it once immediately and
+    // checkAuthAndInit() can call it again afterward (see below) if the
+    // real check disagrees with that cache, binding a fresh document-level
+    // listener every call would stack — each old one left closing over a
+    // now-detached userMenu/userChip from the previous render, doing
+    // nothing useful but never going away either. bindUserMenuOutsideClick
+    // guards against binding more than once, ever, and its handler looks up
+    // the current #userChip/#userMenu at click time instead of closing over
+    // whichever pair existed when it was bound, so one listener stays
+    // correct across any number of re-renders.
+    bindUserMenuOutsideClick();
   }
   const logoutBtn = document.getElementById('logoutBtn');
   if (logoutBtn) {
@@ -306,6 +566,9 @@ function initSidebarInteractions() {
 // to login.html (carrying `next` so it can send you back here after); else
 // render the real sidebar/page-tabs with the signed-in user available to
 // them (renderUserChip, the Settings > Users filter in visibleSections).
+// This is still the ONLY thing that actually decides whether to redirect —
+// the cached-user render above is purely a display optimization to avoid a
+// visible flash, never a substitute for this real check.
 async function checkAuthAndInit() {
   let state;
   try {
@@ -318,15 +581,42 @@ async function checkAuthAndInit() {
   }
 
   if (state.needsSetup || !state.user) {
+    // A stale cached user would just re-show a sidebar for someone who
+    // isn't actually signed in before immediately redirecting away from it
+    // — clear it so the next page doesn't repeat that.
+    try { sessionStorage.removeItem(CACHED_USER_KEY); } catch { /* nothing to clean up if this itself throws */ }
     const next = encodeURIComponent(currentFile());
     window.location.href = `login.html?next=${next}`;
     return;
   }
 
-  if (state.user !== 'unknown') currentUser = state.user;
-  renderSidebar();
-  renderPageTabs();
-  initSidebarInteractions();
+  if (state.user !== 'unknown') {
+    // Only re-render if the cached guess above (see readCachedUser) was
+    // missing or turned out wrong — the common case already has a correct
+    // sidebar on screen from that synchronous render, and unconditionally
+    // re-rendering here every time would just reintroduce the exact flash
+    // this cache exists to avoid.
+    const sameAsCache = cachedUser
+      && cachedUser.id === state.user.id
+      && cachedUser.role === state.user.role
+      && cachedUser.username === state.user.username;
+    currentUser = state.user;
+    writeCachedUser(state.user);
+    if (!sameAsCache) {
+      ensureMobileChrome();
+      renderSidebar();
+      renderPageTabs();
+      initSidebarInteractions();
+    }
+  } else if (!cachedUser) {
+    // 'unknown' (network error) and nothing cached to fall back on — still
+    // attempt a render rather than leave the sidebar permanently blank.
+    ensureMobileChrome();
+    renderSidebar();
+    renderPageTabs();
+    initSidebarInteractions();
+  }
+  refreshWantedBadge(); // fire-and-forget — doesn't block the rest of the sidebar rendering
 }
 
 checkAuthAndInit();

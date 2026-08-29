@@ -138,7 +138,7 @@ async function handleImportFilesApi(req, res, urlPath) {
     return true;
   }
 
-  const files = walkVideoFiles(folderPath);
+  const files = await walkVideoFiles(folderPath);
   if (files.length === 0) {
     sendJson(res, 200, { matched: [], unmatched: [], seriesEps: series.eps, seriesPath: folderPath, message: 'No video files found in that folder.' });
     return true;
@@ -159,6 +159,26 @@ async function handleImportFilesApi(req, res, urlPath) {
   }
 
   const episodeByKey = new Map(episodeRows.map((e) => [`${e.season_number}:${e.num}`, e]));
+  // Absolute-numbering fallback — real, confirmed bug: some anime releases
+  // (Heaven's Lost Property is a real, live example) number episodes
+  // cumulatively across the whole series instead of resetting per season, so
+  // a real "Season 02" folder's files are actually named "014" through "025"
+  // (continuing straight on from Season 01's "001"-"013"), not "001"-"012".
+  // guessSeasonEpisode has no way to know this — it just reads "014" off the
+  // filename — so the direct season+relative-number lookup above (season 2,
+  // episode 14) always misses, since this series' season 2 only has episodes
+  // numbered 1-12. computeAbsoluteEpisodeNumber (episode-paths.js) already
+  // defines what "absolute" means in this app — this is that exact same
+  // 1-based "every season > 0 episode, ordered by season then episode
+  // number" scheme, built once here as season+relative-number's fallback
+  // rather than its replacement, so it only ever gets consulted after the
+  // direct lookup has already failed.
+  const absoluteEpisodeIndex = new Map();
+  episodeRows
+    .filter((e) => e.season_number > 0)
+    .slice()
+    .sort((a, b) => (a.season_number - b.season_number) || (a.num - b.num))
+    .forEach((e, i) => absoluteEpisodeIndex.set(i + 1, e));
   const updateStmt = db.prepare('UPDATE episodes SET downloaded = 1, quality = ?, size_bytes = ?, path = ?, media_streams = ? WHERE id = ?');
 
   const matched = [];
@@ -186,7 +206,23 @@ async function handleImportFilesApi(req, res, urlPath) {
     const season = guess.season ?? 1;
     const assumedSeason = guess.season == null;
 
-    const episode = episodeByKey.get(`${season}:${guess.episode}`);
+    let episode = episodeByKey.get(`${season}:${guess.episode}`);
+    let viaAbsoluteNumber = false;
+    if (!episode) {
+      // See absoluteEpisodeIndex's own comment above. Only trusted when it
+      // doesn't contradict a real season signal — a real "Season N"
+      // folder/SxxExx tag (guess.season set) has to agree with which season
+      // the absolute number actually falls in, so a coincidental number
+      // collision landing in a different season than the file is really
+      // sitting in doesn't silently mismatch it. No real season signal at
+      // all (assumedSeason) has nothing to contradict, so any absolute match
+      // is accepted as-is.
+      const absoluteMatch = absoluteEpisodeIndex.get(guess.episode);
+      if (absoluteMatch && (guess.season == null || absoluteMatch.season_number === guess.season)) {
+        episode = absoluteMatch;
+        viaAbsoluteNumber = true;
+      }
+    }
     if (!episode) {
       unmatched.push({ fileName: file.name, reason: `No season ${season}, episode ${guess.episode} in this series' episode list.` });
       continue;
@@ -205,7 +241,7 @@ async function handleImportFilesApi(req, res, urlPath) {
     // route couldn't confirm. A confirmed real resolution overrides
     // whatever (if anything) the filename itself claims — see
     // guessQualityTierName's own comment for why a probe beats a text tag.
-    const streams = probeMediaStreams(filePath);
+    const streams = await probeMediaStreams(filePath);
     const probedResolutionGroup = streams && streams.video ? resolutionGroupFromHeight(streams.video.height) : null;
     const quality = await guessQualityTierName(file.name, probedResolutionGroup);
     await updateStmt.run(quality, file.sizeBytes, filePath, streams ? JSON.stringify(streams) : null, episode.id);
@@ -213,7 +249,7 @@ async function handleImportFilesApi(req, res, urlPath) {
     matched.push({
       fileName: file.name, episodeId: episode.id, season, episode: guess.episode,
       quality, resolutionConfirmed: !!probedResolutionGroup, sizeBytes: file.sizeBytes, path: filePath,
-      alreadyWasDownloaded: !!episode.downloaded, assumedSeason, mediaStreams: streams,
+      alreadyWasDownloaded: !!episode.downloaded, assumedSeason, viaAbsoluteNumber, mediaStreams: streams,
     });
   }
 
@@ -245,6 +281,15 @@ async function handleImportFilesApi(req, res, urlPath) {
   const distinctRealSeasons = [...new Set(episodeRows.filter((e) => e.season_number !== 0).map((e) => e.season_number))];
   if (assumedCount > 0 && distinctRealSeasons.length > 1) {
     logInfo('LibraryImport', `"${series.title}": ${assumedCount} file(s) in "${folderPath}" had no season subfolder/tag — assumed season 1. This series has ${distinctRealSeasons.length} real seasons; move anything that's actually a later season into its own "Season N" subfolder (or rename with an SxxExx tag) and re-import if any of these matched wrong.`);
+  }
+  // Same "only log when it actually did something" rule as assumedCount
+  // above — worth surfacing since it means this series' real files use
+  // cumulative (absolute) numbering rather than resetting per season (e.g.
+  // Heaven's Lost Property's real Season 02 folder: "014"-"025", not
+  // "01"-"12" — see absoluteEpisodeIndex's own comment).
+  const viaAbsoluteCount = matched.filter((m) => m.viaAbsoluteNumber).length;
+  if (viaAbsoluteCount > 0) {
+    logInfo('LibraryImport', `"${series.title}": ${viaAbsoluteCount} file(s) in "${folderPath}" matched by absolute (cumulative) episode number rather than per-season numbering.`);
   }
 
   sendJson(res, 200, { matched, unmatched, reset, seriesEps: updated.eps, seriesPct: updated.pct, seriesPath: folderPath });

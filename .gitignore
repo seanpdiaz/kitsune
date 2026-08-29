@@ -1,5 +1,5 @@
-.env*
 node_modules/
-data/*.db
+.env*
+data/
+public/dist/
 .DS_Store
-data/*

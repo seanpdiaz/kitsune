@@ -31,7 +31,7 @@ function RemoveQueueItemModal({ item, onCancel, onConfirm, removing }) {
       <div className="modal-box">
         <div className="modal-header">
           <h2>Remove from Queue</h2>
-          <button className="modal-close" type="button" aria-label="Close" onClick={onCancel}>{icons.x}</button>
+          <button className="modal-close" type="button" aria-label="Close" data-tooltip="Close" onClick={onCancel}>{icons.x}</button>
         </div>
         <div className="modal-body">
           <p>
@@ -126,11 +126,12 @@ export default function QueueList() {
           disabled={pauseDisabled}
           style={pauseDisabled ? { opacity: 0.35 } : undefined}
           aria-label={`${q.status === 'paused' ? 'Resume' : 'Pause'} ${q.seriesTitle}`}
+          data-tooltip={q.status === 'paused' ? 'Resume download' : 'Pause download'}
           onClick={() => handleTogglePause(q)}
         >
           {q.status === 'paused' ? icons.play : icons.pause}
         </button>
-        <button className="ep-action" type="button" aria-label={`Remove ${q.seriesTitle} from queue`} onClick={() => setRemoveTarget(q)}>
+        <button className="ep-action" type="button" aria-label={`Remove ${q.seriesTitle} from queue`} data-tooltip="Remove from queue" onClick={() => setRemoveTarget(q)}>
           {icons.x}
         </button>
       </div>

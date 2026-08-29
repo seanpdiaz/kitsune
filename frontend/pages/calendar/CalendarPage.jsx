@@ -107,11 +107,11 @@ export default function CalendarPage({ toolbarContainer }) {
     <>
       {toolbarContainer && createPortal(
         <>
-          <button type="button" className="calendar-nav-btn" aria-label="Previous month" onClick={goPrev}>
+          <button type="button" className="calendar-nav-btn" aria-label="Previous month" data-tooltip="Previous month" onClick={goPrev}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="M15 18l-6-6 6-6" /></svg>
           </button>
           <span className="calendar-month-label">{episodesByDate === null && !loadFailed ? 'Loading…' : monthLabel}</span>
-          <button type="button" className="calendar-nav-btn" aria-label="Next month" onClick={goNext}>
+          <button type="button" className="calendar-nav-btn" aria-label="Next month" data-tooltip="Next month" onClick={goNext}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="M9 18l6-6-6-6" /></svg>
           </button>
           <button type="button" onClick={goToday}>Today</button>

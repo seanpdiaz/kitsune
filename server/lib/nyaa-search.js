@@ -210,11 +210,30 @@ function nearestInGroup(tiers, resolutionGroup) {
 // a structured format, so this looks for the episode number in the handful
 // of shapes fansub/scene releases actually use rather than claiming to
 // handle every possible one.
+//
+// Real, confirmed bug: the original `\bE0*${n}\b` pattern (meant to catch
+// "E12"/"e012") never actually matches the single most common scene-release
+// shape, "S01E12" — regex \b is a transition between a \w char and a
+// non-\w one, and letters/digits are both \w, so a title like
+// "Show.Name.S01E07.1080p.WEB.h264-GROUP" has no word boundary anywhere
+// between "S01" and "E07" for \bE07\b to anchor on. None of the other three
+// patterns catch it either (they all require a literal "-" before the
+// number, which "S01E07" doesn't have). The practical effect, confirmed
+// against a real live Prowlarr search: of 108 raw results for one show, only
+// 1 survived this filter for a specific episode — not because 107 were
+// irrelevant, but because standard "SxxExx"-tagged releases (exactly what a
+// general/non-anime-specific tracker proxied through Prowlarr is most likely
+// to use) were silently dropped regardless of their actual quality, leaving
+// whichever oddly-formatted release happened to match as the only visible
+// "result" even when better-quality standard-named ones existed. Matched
+// directly against the literal "SxxExx" shape below instead of relying on a
+// \b that can't exist there.
 function titleMatchesEpisode(title, episodeNum) {
   const n = Number(episodeNum);
   if (!Number.isFinite(n)) return false;
   const patterns = [
-    new RegExp(`\\bE0*${n}\\b`, 'i'),          // "E12", "e012"
+    new RegExp(`\\bE0*${n}\\b`, 'i'),          // "E12", "e012" (standalone, e.g. "Show - E12")
+    new RegExp(`S\\d{1,2}E0*${n}(?!\\d)`, 'i'), // "S01E12", "S1E07" — the standard scene-release shape
     new RegExp(`-\\s*0*${n}\\s*\\(`),           // "- 12 (1080p)" fansub style
     new RegExp(`-\\s*0*${n}\\b(?!\\d)`),        // "- 12" generally
     new RegExp(`\\b${String(n).padStart(2, '0')}\\b(?!\\d)`), // zero-padded standalone

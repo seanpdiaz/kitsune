@@ -70,7 +70,7 @@ export default function RootFolders() {
               <span className="settings-title">{f.path}</span>
               <span className="settings-meta">{f.free}</span>
               <span className="settings-meta">{f.unmapped} unmapped</span>
-              <button className="ep-action" type="button" aria-label={`Remove ${f.path}`} onClick={() => handleRemove(f)}>{icons.x}</button>
+              <button className="ep-action" type="button" aria-label={`Remove ${f.path}`} data-tooltip="Remove" onClick={() => handleRemove(f)}>{icons.x}</button>
             </div>
           ))
         )}
@@ -86,7 +86,7 @@ export default function RootFolders() {
         <div className="modal-box wide">
           <div className="modal-header">
             <h2>File Browser</h2>
-            <button className="modal-close" type="button" id="fileBrowserModalClose" aria-label="Close">{icons.x}</button>
+            <button className="modal-close" type="button" id="fileBrowserModalClose" aria-label="Close" data-tooltip="Close">{icons.x}</button>
           </div>
           <div className="modal-body">
             <input type="text" className="field-input" id="fileBrowserPathInput" placeholder="Start typing or select a path below" style={{ width: '100%', marginBottom: '12px' }} />

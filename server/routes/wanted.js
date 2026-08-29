@@ -32,7 +32,13 @@ async function handleWantedApi(req, res, urlPath) {
   // Aired episodes, in a monitored series, that aren't downloaded yet —
   // same "aired but missing" definition real Sonarr's Wanted > Missing uses.
   // Oldest-first, matching real Sonarr's default sort there too (the
-  // longest-outstanding gap surfaces first).
+  // longest-outstanding gap surfaces first). Specials (season 0) are
+  // excluded for any series with Ignore Specials on — mirrors the same
+  // `season_number > 0` exclusion series-stats.js's recomputeSeriesEpisodeStats
+  // already applies to a series' eps/pct display; this query is otherwise
+  // completely independent of that one and previously ignored
+  // series.ignore_specials entirely, so a Special could still show up here
+  // even with the toggle on.
   if (req.method === 'GET' && urlPath === '/api/wanted/missing') {
     const rows = await db.prepare(`
       SELECT e.id, e.series_id, e.season_number, e.num, e.title, e.aired,
@@ -40,6 +46,7 @@ async function handleWantedApi(req, res, urlPath) {
       FROM episodes e
       JOIN series s ON s.id = e.series_id
       WHERE e.downloaded = 0 AND e.aired IS NOT NULL AND e.aired <= ? AND s.monitored = 1
+        AND (s.ignore_specials = 0 OR e.season_number > 0)
       ORDER BY e.aired ASC
     `).all(todayIso());
     sendJson(res, 200, { episodes: rows.map(episodeRowToWanted) });
@@ -62,12 +69,16 @@ async function handleWantedApi(req, res, urlPath) {
       } catch { /* malformed row — skip rather than fail the whole request */ }
     }
 
+    // Same Ignore Specials exclusion as /api/wanted/missing above — a
+    // downloaded Special in a series with the toggle on shouldn't surface
+    // as needing an upgrade either.
     const rows = await db.prepare(`
       SELECT e.id, e.series_id, e.season_number, e.num, e.title, e.aired, e.quality,
              s.title AS series_title, s.poster AS series_poster, s.quality_profile
       FROM episodes e
       JOIN series s ON s.id = e.series_id
       WHERE e.downloaded = 1 AND s.monitored = 1
+        AND (s.ignore_specials = 0 OR e.season_number > 0)
     `).all();
 
     const withCutoff = rows.map((r) => ({ ...r, cutoff: cutoffByProfileName.get(r.quality_profile) }));

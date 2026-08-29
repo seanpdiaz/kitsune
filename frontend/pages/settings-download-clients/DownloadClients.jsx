@@ -217,7 +217,7 @@ function TorrentsModal({ client, onClose }) {
       <div className="modal-box wide">
         <div className="modal-header">
           <h2>{client.name} — Torrents</h2>
-          <button className="modal-close" type="button" aria-label="Close" onClick={onClose}>{icons.x}</button>
+          <button className="modal-close" type="button" aria-label="Close" data-tooltip="Close" onClick={onClose}>{icons.x}</button>
         </div>
         <div className="modal-body">
           <form className="torrent-add-row" onSubmit={handleAdd}>
@@ -261,13 +261,14 @@ function TorrentsModal({ client, onClose }) {
                     <button
                       className="ep-action" type="button" disabled={busy}
                       aria-label={paused ? `Resume ${t.name}` : `Pause ${t.name}`}
+                      data-tooltip={paused ? 'Resume torrent' : 'Pause torrent'}
                       onClick={() => handleToggle(t)}
                     >
                       {paused ? icons.play : icons.pause}
                     </button>
                     <button
                       className="ep-action" type="button" disabled={busy}
-                      aria-label={`Remove ${t.name}`} onClick={() => handleDelete(t)}
+                      aria-label={`Remove ${t.name}`} data-tooltip="Remove torrent" onClick={() => handleDelete(t)}
                     >
                       {icons.x}
                     </button>
@@ -349,7 +350,7 @@ function EditModal({ item, onChange, onClose, onTest, testing, testResult }) {
       <div className="modal-box wide">
         <div className="modal-header">
           <h2>{typeLabel}</h2>
-          <button className="modal-close" type="button" aria-label="Close" onClick={onClose}>{icons.x}</button>
+          <button className="modal-close" type="button" aria-label="Close" data-tooltip="Close" onClick={onClose}>{icons.x}</button>
         </div>
         <div className="modal-body">
           <FieldRow label="Name">
@@ -570,15 +571,15 @@ export default function DownloadClients({ addBtnContainer }) {
                 An empty placeholder keeps the grid column count identical
                 for both types rather than reflowing the row. */}
             {item.type === 'qbittorrent'
-              ? <button className="ep-action" type="button" aria-label={`Manage torrents on ${item.name}`} onClick={() => setTorrentsClientId(item.id)}>{icons.viewTable}</button>
+              ? <button className="ep-action" type="button" aria-label={`Manage torrents on ${item.name}`} data-tooltip="View torrents" onClick={() => setTorrentsClientId(item.id)}>{icons.viewTable}</button>
               : <span></span>}
             {/* Its own trailing column now, matching every other list-style
                 Settings page (Indexers/Import Lists/Connect via
                 ConnectionManager.jsx, Users) — Edit then Remove, both 32px —
                 instead of sitting inline next to the name like a second
                 label. */}
-            <button className="ep-action" type="button" aria-label={`Edit ${item.name}`} onClick={() => setEditingId(item.id)}>{icons.edit}</button>
-            <button className="ep-action" type="button" aria-label={`Remove ${item.name}`} onClick={() => handleRemove(item)}>{icons.x}</button>
+            <button className="ep-action" type="button" aria-label={`Edit ${item.name}`} data-tooltip="Edit client" onClick={() => setEditingId(item.id)}>{icons.edit}</button>
+            <button className="ep-action" type="button" aria-label={`Remove ${item.name}`} data-tooltip="Remove client" onClick={() => handleRemove(item)}>{icons.x}</button>
           </div>
         ))
       )}
