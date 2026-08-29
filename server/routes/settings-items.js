@@ -151,6 +151,10 @@ const LIST_SECTION_SEEDS = {
   ],
 };
 
+// See the seed loop below (in db.init) for why these two are exempt from
+// the SEED_DEMO_DATA gate everything else in LIST_SECTION_SEEDS respects.
+const ALWAYS_SEED_SECTIONS = new Set(['profiles', 'quality-tiers']);
+
 db.init(async () => {
   await db.exec(`
     CREATE TABLE IF NOT EXISTS settings_items (
@@ -166,7 +170,22 @@ db.init(async () => {
   const insertItem = db.prepare('INSERT INTO settings_items (section, data, position, created_at) VALUES (?, ?, ?, ?)');
   for (const [section, items] of Object.entries(LIST_SECTION_SEEDS)) {
     if (Number((await countBySection.get(section)).n) === 0) {
-      if (db.SEED_DEMO_DATA) {
+      // "profiles" and "quality-tiers" aren't demo library content the way
+      // indexers/download-clients/import-lists/connect/custom-formats/
+      // root-folders are (fake services, fake filesystem paths — things a
+      // real deployment obviously shouldn't have auto-populated). They're
+      // reference configuration real features actually depend on to work
+      // at all: guessQualityTierName (lib/media-files.js) can't guess a
+      // quality from a filename with zero tiers configured, and Add New's
+      // Quality Profile dropdown/resolveQualityProfile (routes/series.js)
+      // have nothing to offer or fall back to with zero profiles — either
+      // one being empty silently breaks a feature rather than just meaning
+      // "nothing here yet," the way an empty series/tags/root-folders table
+      // legitimately can. So these two seed as a starting point regardless
+      // of APP_ENV, same as a fresh real Sonarr install already ships with
+      // its own built-in quality definitions — while everything else in
+      // this object stays demo-only, gated by SEED_DEMO_DATA below.
+      if (ALWAYS_SEED_SECTIONS.has(section) || db.SEED_DEMO_DATA) {
         for (let i = 0; i < items.length; i++) await insertItem.run(section, JSON.stringify(items[i]), i, db.now());
         logInfo('Database', `Seeded ${items.length} default "${section}" items into ${db.describe()}`);
       } else {
