@@ -1,5 +1,17 @@
 const db = require('../db');
 
+// Same "today, as an ISO date string" helper routes/wanted.js's own
+// /api/wanted/missing already uses for the identical purpose (that
+// endpoint's `aired <= today` cutoff, and this file's own) — kept as its
+// own small copy here rather than a shared import, since it's a single
+// three-line function neither file has any other reason to depend on the
+// other for.
+function todayIso() {
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
 // Keeps a series' summary fields (`eps` — the "N / M downloaded" string the
 // Library grid card and the generic episode-list fallback both parse — and
 // `pct`, its progress ring) in sync with the real per-episode `downloaded`
@@ -38,6 +50,18 @@ const db = require('../db');
 // placeholder episode row and no air date yet permanently held an otherwise
 // fully-downloaded series' progress bar below 100%, for a season that, per
 // TVDB, doesn't really exist yet.
+//
+// Same reasoning extends to an episode with a real, known-future air date:
+// it's not a missing/placeholder row, but it also hasn't aired yet, so
+// there's nothing to have downloaded and it shouldn't read as "missing"
+// either. Without this cutoff, a currently-airing series with next week's
+// episode already confirmed on TVDB would count that episode against
+// itself the moment the date is known, days before it actually airs —
+// inflating both this series' own progress bar and the Library page's
+// aggregate "Missing episodes" stat card (see LibraryGridPage.jsx's
+// missingEpisodesCount, which sums this same eps field across series)
+// ahead of what routes/wanted.js's /api/wanted/missing would actually list,
+// since that endpoint already applies this identical `aired <= today` cutoff.
 async function recomputeSeriesEpisodeStats(seriesId) {
   const series = await db.prepare('SELECT ignore_specials FROM series WHERE id = ?').get(seriesId);
   const ignoreSpecials = series && series.ignore_specials ? 1 : 0;
@@ -46,9 +70,9 @@ async function recomputeSeriesEpisodeStats(seriesId) {
     FROM episodes
     WHERE series_id = ?
       AND (? = 0 OR season_number > 0)
-      AND (downloaded = 1 OR aired IS NOT NULL)
-  `).get(seriesId, ignoreSpecials);
-  if (!row || Number(row.total) === 0) return; // no cached (non-special, if ignored; aired-or-downloaded) episodes yet — leave eps/pct as whatever they were seeded with
+      AND (downloaded = 1 OR (aired IS NOT NULL AND aired <= ?))
+  `).get(seriesId, ignoreSpecials, todayIso());
+  if (!row || Number(row.total) === 0) return; // no cached (non-special, if ignored; aired-and-not-in-the-future, or downloaded) episodes yet — leave eps/pct as whatever they were seeded with
 
   const pct = Math.round((Number(row.done) / Number(row.total)) * 100);
   await db.prepare('UPDATE series SET eps = ?, pct = ? WHERE id = ?')
