@@ -1,4 +1,4 @@
-const { db } = require('../db');
+const db = require('../db');
 const { sendJson } = require('../lib/http');
 
 // ---------------------------------------------------------------------------
@@ -38,7 +38,7 @@ async function handleCalendarApi(req, res, urlPath) {
   // `aired` is stored as TVDB's own "YYYY-MM-DD" text — comparing it as a
   // string works fine for a range filter since ISO dates sort correctly
   // lexicographically, same trick the Logs page's timestamp column relies on.
-  const rows = db.prepare(`
+  const rows = await db.prepare(`
     SELECT e.series_id, e.season_number, e.season_name, e.num, e.title, e.aired,
            s.title AS series_title, s.poster AS series_poster
     FROM episodes e
@@ -62,10 +62,10 @@ async function handleCalendarApi(req, res, urlPath) {
   // at all (as opposed to having episodes that just don't fall in this date
   // range) — the frontend uses this to explain an empty-looking calendar
   // rather than leaving it looking broken or complete.
-  const uncachedSeriesCount = db.prepare(`
+  const uncachedSeriesCount = (await db.prepare(`
     SELECT COUNT(*) AS n FROM series s
     WHERE NOT EXISTS (SELECT 1 FROM episodes e WHERE e.series_id = s.id)
-  `).get().n;
+  `).get()).n;
 
   sendJson(res, 200, { start, end, episodes, uncachedSeriesCount });
   return true;

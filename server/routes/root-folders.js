@@ -4,7 +4,7 @@
 // ---------------------------------------------------------------------------
 const fs = require('fs');
 const path = require('path');
-const { db } = require('../db');
+const db = require('../db');
 const { logInfo } = require('../logger');
 const { sendJson, readJsonBody } = require('../lib/http');
 const { normalizeFolderName, guessTitleFromFolderName, computeRootFolderStats, formatBytes } = require('../lib/fs-helpers');
@@ -45,18 +45,17 @@ async function handleRootFoldersApi(req, res, urlPath) {
       return true;
     }
 
-    const alreadyAdded = db.prepare("SELECT data FROM settings_items WHERE section = 'root-folders'").all()
+    const alreadyAdded = (await db.prepare("SELECT data FROM settings_items WHERE section = 'root-folders'").all())
       .some((row) => JSON.parse(row.data).path === resolved);
     if (alreadyAdded) {
       sendJson(res, 409, { error: 'That folder is already a root folder' });
       return true;
     }
 
-    const { free, unmapped } = computeRootFolderStats(resolved);
-    const maxPos = db.prepare("SELECT COALESCE(MAX(position), -1) AS m FROM settings_items WHERE section = 'root-folders'").get().m;
-    const { lastInsertRowid } = db.prepare('INSERT INTO settings_items (section, data, position) VALUES (?, ?, ?)')
-      .run('root-folders', JSON.stringify({ path: resolved, free, unmapped }), maxPos + 1);
-    const created = db.prepare('SELECT * FROM settings_items WHERE id = ?').get(lastInsertRowid);
+    const { free, unmapped } = await computeRootFolderStats(resolved);
+    const maxPos = (await db.prepare("SELECT COALESCE(MAX(position), -1) AS m FROM settings_items WHERE section = 'root-folders'").get()).m;
+    const created = await db.prepare('INSERT INTO settings_items (section, data, position, created_at) VALUES (?, ?, ?, ?) RETURNING *')
+      .get('root-folders', JSON.stringify({ path: resolved, free, unmapped }), Number(maxPos) + 1, db.now());
     logInfo('SettingsService', `Root folder added: ${resolved} (${free} free, ${unmapped} unmapped)`);
     sendJson(res, 201, rowToItem(created));
     // Fire-and-forget: the Disk usage dashboard stat card is otherwise only
@@ -66,7 +65,7 @@ async function handleRootFoldersApi(req, res, urlPath) {
     // hours. Not awaited — the response above already went out, and a
     // rescan can take a while on a big folder; the dashboard just shows
     // "Calculating…" again until this one lands, same as the startup scan.
-    refreshDiskUsage();
+    refreshDiskUsage().catch(() => {});
     return true;
   }
 
@@ -82,7 +81,7 @@ async function handleRootFoldersApi(req, res, urlPath) {
   const subMatch = req.method === 'GET' && urlPath.match(/^\/api\/root-folders\/(\d+)\/subfolders$/);
   if (subMatch) {
     const id = Number(subMatch[1]);
-    const row = db.prepare("SELECT * FROM settings_items WHERE id = ? AND section = 'root-folders'").get(id);
+    const row = await db.prepare("SELECT * FROM settings_items WHERE id = ? AND section = 'root-folders'").get(id);
     if (!row) {
       sendJson(res, 404, { error: 'Root folder not found' });
       return true;
@@ -102,7 +101,7 @@ async function handleRootFoldersApi(req, res, urlPath) {
     // /api/series/:id/import-files with for an already-matched folder,
     // without a second round-trip just to look it up.
     const seriesByNormalized = new Map(
-      db.prepare('SELECT id, title FROM series').all().map((r) => [normalizeFolderName(r.title), r])
+      (await db.prepare('SELECT id, title FROM series').all()).map((r) => [normalizeFolderName(r.title), r])
     );
 
     const subfolders = entries
@@ -137,7 +136,7 @@ async function handleRootFoldersApi(req, res, urlPath) {
   if (filesMatch) {
     const id = Number(filesMatch[1]);
     const folderName = decodeURIComponent(filesMatch[2]);
-    const row = db.prepare("SELECT * FROM settings_items WHERE id = ? AND section = 'root-folders'").get(id);
+    const row = await db.prepare("SELECT * FROM settings_items WHERE id = ? AND section = 'root-folders'").get(id);
     if (!row) {
       sendJson(res, 404, { error: 'Root folder not found' });
       return true;
@@ -155,8 +154,8 @@ async function handleRootFoldersApi(req, res, urlPath) {
       return true;
     }
 
-    const files = walkVideoFiles(subfolderPath)
-      .map((f) => {
+    const files = (await Promise.all(walkVideoFiles(subfolderPath)
+      .map(async (f) => {
         const guess = guessSeasonEpisode(f.name, f.seasonHint);
         return {
           name: f.name,
@@ -164,7 +163,7 @@ async function handleRootFoldersApi(req, res, urlPath) {
           sizeBytes: f.sizeBytes,
           sizeFormatted: formatBytes(f.sizeBytes),
           ext: f.ext,
-          guessedQuality: guessQualityTierName(f.name),
+          guessedQuality: await guessQualityTierName(f.name),
           // No "Season N" folder/SxxExx tag means this preview should show
           // whatever the actual import (handleImportFilesApi in
           // import-files.js) will really use — season 1, same default —
@@ -177,7 +176,7 @@ async function handleRootFoldersApi(req, res, urlPath) {
           guessedEpisode: guess.episode,
           guessConfident: guess.confident,
         };
-      })
+      })))
       .sort((a, b) => a.relativePath.localeCompare(b.relativePath));
 
     sendJson(res, 200, { path: subfolderPath, files });

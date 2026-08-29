@@ -10,7 +10,7 @@
 // credentials, etc.), is a hard error — see submitRealGrab/insertSingleGrab
 // below — rather than silently faking a download that never started.
 // ---------------------------------------------------------------------------
-const { db } = require('../db');
+const db = require('../db');
 const { logInfo, logWarn, logDebug } = require('../logger');
 const { sendJson, readJsonBody } = require('../lib/http');
 const {
@@ -30,38 +30,40 @@ const { probeMediaStreams } = require('../lib/ffprobe');
 const { computeInfoHash } = require('../lib/bencode');
 const { describeFetchError } = require('../lib/prowlarr-search');
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS queue (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    series_id INTEGER NOT NULL,
-    episode_id INTEGER NOT NULL,
-    release_title TEXT NOT NULL,
-    quality TEXT,
-    size_bytes INTEGER,
-    indexer TEXT,
-    protocol TEXT,
-    status TEXT NOT NULL DEFAULT 'downloading',
-    progress_pct INTEGER NOT NULL DEFAULT 0,
-    added_at TEXT NOT NULL DEFAULT (datetime('now'))
-  )
-`);
+db.init(async () => {
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS queue (
+      id ${db.PK},
+      series_id INTEGER NOT NULL,
+      episode_id INTEGER NOT NULL,
+      release_title TEXT NOT NULL,
+      quality TEXT,
+      size_bytes INTEGER,
+      indexer TEXT,
+      protocol TEXT,
+      status TEXT NOT NULL DEFAULT 'downloading',
+      progress_pct INTEGER NOT NULL DEFAULT 0,
+      added_at TEXT
+    )
+  `);
 
-// Real-grab tracking fields — see this module's header. `source` is always
-// 'real' now (every INSERT below sets it explicitly); the column itself is
-// kept around rather than migrated away so an existing dev database with
-// old simulated rows in its history doesn't need a destructive migration.
-const queueColumns = db.prepare('PRAGMA table_info(queue)').all().map((c) => c.name);
-for (const [col, def] of [
-  ['source', "TEXT NOT NULL DEFAULT 'real'"],
-  ['magnet_url', 'TEXT'],
-  ['torrent_hash', 'TEXT'],
-  ['download_client_id', 'INTEGER'],
-]) {
-  if (!queueColumns.includes(col)) {
-    db.exec(`ALTER TABLE queue ADD COLUMN ${col} ${def}`);
-    logInfo('Database', `Migrated queue table: added ${col} column`);
+  // Real-grab tracking fields — see this module's header. `source` is always
+  // 'real' now (every INSERT below sets it explicitly); the column itself is
+  // kept around rather than migrated away so an existing dev database with
+  // old simulated rows in its history doesn't need a destructive migration.
+  const queueColumns = await db.tableColumns('queue');
+  for (const [col, def] of [
+    ['source', "TEXT NOT NULL DEFAULT 'real'"],
+    ['magnet_url', 'TEXT'],
+    ['torrent_hash', 'TEXT'],
+    ['download_client_id', 'INTEGER'],
+  ]) {
+    if (!queueColumns.includes(col)) {
+      await db.exec(`ALTER TABLE queue ADD COLUMN ${col} ${def}`);
+      logInfo('Database', `Migrated queue table: added ${col} column`);
+    }
   }
-}
+});
 
 function rowToQueueEntry(row) {
   return {
@@ -95,8 +97,8 @@ const QUEUE_SELECT = `
 // enabled clients" semantics Settings > Download Clients' own field
 // description already promises. A client missing a host/port isn't usable
 // even if enabled (mirrors download-clients.js's own test-route guard).
-function pickQbittorrentClient() {
-  const rows = db.prepare("SELECT * FROM settings_items WHERE section = 'download-clients'").all();
+async function pickQbittorrentClient() {
+  const rows = await db.prepare("SELECT * FROM settings_items WHERE section = 'download-clients'").all();
   const candidates = rows
     .map((r) => ({ id: r.id, ...JSON.parse(r.data) }))
     .filter((c) => c.type === 'qbittorrent' && c.enabled && c.host && c.port)
@@ -104,8 +106,8 @@ function pickQbittorrentClient() {
   return candidates[0] || null;
 }
 
-function getDownloadClient(id) {
-  const row = db.prepare("SELECT * FROM settings_items WHERE id = ? AND section = 'download-clients'").get(id);
+async function getDownloadClient(id) {
+  const row = await db.prepare("SELECT * FROM settings_items WHERE id = ? AND section = 'download-clients'").get(id);
   return row ? { id: row.id, ...JSON.parse(row.data) } : null;
 }
 
@@ -205,7 +207,7 @@ async function submitRealGrab(release) {
     return { ok: false, torrentHash: null, downloadClientId: null, error: 'This release has no magnet or download link to submit.' };
   }
 
-  const client = pickQbittorrentClient();
+  const client = await pickQbittorrentClient();
   if (!client) {
     return { ok: false, torrentHash: null, downloadClientId: null, error: 'No enabled qBittorrent client is configured — add one in Settings > Download Clients before grabbing.' };
   }
@@ -269,15 +271,16 @@ async function insertSingleGrab(series, episode, release) {
     return { status: 502, body: { error: submitted.error } };
   }
 
-  const { lastInsertRowid } = db.prepare(`
-    INSERT INTO queue (series_id, episode_id, release_title, quality, size_bytes, indexer, protocol, status, progress_pct, source, magnet_url, torrent_hash, download_client_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'downloading', 0, 'real', ?, ?, ?)
-  `).run(
+  const insertedRow = await db.prepare(`
+    INSERT INTO queue (series_id, episode_id, release_title, quality, size_bytes, indexer, protocol, status, progress_pct, source, magnet_url, torrent_hash, download_client_id, added_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'downloading', 0, 'real', ?, ?, ?, ?)
+    RETURNING id
+  `).get(
     series.id, episode.id, release.title, release.quality, release.sizeBytes, release.indexer, release.protocol,
-    release.magnetUrl || null, submitted.torrentHash, submitted.downloadClientId,
+    release.magnetUrl || null, submitted.torrentHash, submitted.downloadClientId, db.now(),
   );
 
-  insertHistoryRow({
+  await insertHistoryRow({
     seriesId: series.id, episodeId: episode.id, eventType: 'grabbed',
     releaseTitle: release.title, quality: release.quality, indexer: release.indexer, sizeBytes: release.sizeBytes,
   });
@@ -285,7 +288,7 @@ async function insertSingleGrab(series, episode, release) {
   logInfo('Queue', `Grabbed "${release.title}" for ${series.title} (${episodeLabel}) — submitted to a real qBittorrent client`);
   notifyConnections('grab', `${series.title} ${episodeLabel} — ${release.title} (${release.quality})`);
 
-  const created = db.prepare(`${QUEUE_SELECT} WHERE q.id = ?`).get(lastInsertRowid);
+  const created = await db.prepare(`${QUEUE_SELECT} WHERE q.id = ?`).get(insertedRow.id);
   return { status: 201, body: rowToQueueEntry(created) };
 }
 
@@ -307,24 +310,24 @@ async function insertSingleGrab(series, episode, release) {
 // wrong, there's just nothing to do) rather than searching and grabbing an
 // unwanted "upgrade" the profile itself says isn't needed.
 async function handleAutoEpisodeGrab(res, episodeId) {
-  const episode = db.prepare('SELECT * FROM episodes WHERE id = ?').get(episodeId);
+  const episode = await db.prepare('SELECT * FROM episodes WHERE id = ?').get(episodeId);
   if (!episode) {
     sendJson(res, 404, { error: 'Episode not found' });
     return true;
   }
-  const series = db.prepare('SELECT * FROM series WHERE id = ?').get(episode.series_id);
+  const series = await db.prepare('SELECT * FROM series WHERE id = ?').get(episode.series_id);
   if (!series) {
     sendJson(res, 404, { error: 'Series not found' });
     return true;
   }
-  const alreadyQueued = db.prepare('SELECT id FROM queue WHERE episode_id = ?').get(episodeId);
+  const alreadyQueued = await db.prepare('SELECT id FROM queue WHERE episode_id = ?').get(episodeId);
   if (alreadyQueued) {
     sendJson(res, 409, { error: 'This episode is already in the queue' });
     return true;
   }
 
-  const profile = getQualityProfile(series.quality_profile);
-  if (episode.downloaded && profile && profile.cutoff && !isBelowCutoff(episode.quality, profile.cutoff)) {
+  const profile = await getQualityProfile(series.quality_profile);
+  if (episode.downloaded && profile && profile.cutoff && !(await isBelowCutoff(episode.quality, profile.cutoff))) {
     sendJson(res, 200, { skipped: true, reason: `Already meets "${profile.name}"'s cutoff (${profile.cutoff}) — nothing to grab.` });
     return true;
   }
@@ -343,7 +346,7 @@ async function handleAutoEpisodeGrab(res, episodeId) {
 
 async function handleQueueApi(req, res, urlPath) {
   if (req.method === 'GET' && urlPath === '/api/queue') {
-    const rows = db.prepare(`${QUEUE_SELECT} ORDER BY q.id ASC`).all();
+    const rows = await db.prepare(`${QUEUE_SELECT} ORDER BY q.id ASC`).all();
     sendJson(res, 200, { queue: rows.map(rowToQueueEntry) });
     return true;
   }
@@ -401,18 +404,18 @@ async function handleQueueApi(req, res, urlPath) {
       return true;
     }
 
-    const episode = db.prepare('SELECT * FROM episodes WHERE id = ?').get(episodeId);
+    const episode = await db.prepare('SELECT * FROM episodes WHERE id = ?').get(episodeId);
     if (!episode) {
       sendJson(res, 404, { error: 'Episode not found' });
       return true;
     }
-    const series = db.prepare('SELECT * FROM series WHERE id = ?').get(episode.series_id);
+    const series = await db.prepare('SELECT * FROM series WHERE id = ?').get(episode.series_id);
     if (!series) {
       sendJson(res, 404, { error: 'Series not found' });
       return true;
     }
 
-    const alreadyQueued = db.prepare('SELECT id FROM queue WHERE episode_id = ?').get(episodeId);
+    const alreadyQueued = await db.prepare('SELECT id FROM queue WHERE episode_id = ?').get(episodeId);
     if (alreadyQueued) {
       sendJson(res, 409, { error: 'This episode is already in the queue' });
       return true;
@@ -436,7 +439,7 @@ async function handleQueueApi(req, res, urlPath) {
   const patchMatch = req.method === 'PATCH' && urlPath.match(/^\/api\/queue\/(\d+)$/);
   if (patchMatch) {
     const id = Number(patchMatch[1]);
-    const row = db.prepare('SELECT * FROM queue WHERE id = ?').get(id);
+    const row = await db.prepare('SELECT * FROM queue WHERE id = ?').get(id);
     if (!row) {
       sendJson(res, 404, { error: 'Queue item not found' });
       return true;
@@ -460,7 +463,7 @@ async function handleQueueApi(req, res, urlPath) {
     // clicked) and the next realTick() reconciles it against whatever
     // qBittorrent's actual state turns out to be.
     if (row.source === 'real' && row.torrent_hash && row.download_client_id) {
-      const client = getDownloadClient(row.download_client_id);
+      const client = await getDownloadClient(row.download_client_id);
       if (client) {
         const result = nextStatus === 'paused'
           ? await qbittorrent.pauseTorrents(client, row.torrent_hash)
@@ -469,8 +472,8 @@ async function handleQueueApi(req, res, urlPath) {
       }
     }
 
-    db.prepare('UPDATE queue SET status = ? WHERE id = ?').run(nextStatus, id);
-    const updated = db.prepare(`${QUEUE_SELECT} WHERE q.id = ?`).get(id);
+    await db.prepare('UPDATE queue SET status = ? WHERE id = ?').run(nextStatus, id);
+    const updated = await db.prepare(`${QUEUE_SELECT} WHERE q.id = ?`).get(id);
     sendJson(res, 200, rowToQueueEntry(updated));
     return true;
   }
@@ -490,17 +493,17 @@ async function handleQueueApi(req, res, urlPath) {
   const delMatch = req.method === 'DELETE' && urlPath.match(/^\/api\/queue\/(\d+)$/);
   if (delMatch) {
     const id = Number(delMatch[1]);
-    const row = db.prepare('SELECT * FROM queue WHERE id = ?').get(id);
+    const row = await db.prepare('SELECT * FROM queue WHERE id = ?').get(id);
     if (!row) {
       sendJson(res, 404, { error: 'Queue item not found' });
       return true;
     }
     if (row.source === 'real' && row.torrent_hash && row.download_client_id) {
-      const siblingCount = db.prepare(
+      const siblingCount = (await db.prepare(
         'SELECT COUNT(*) AS c FROM queue WHERE torrent_hash = ? AND download_client_id = ? AND id != ?'
-      ).get(row.torrent_hash, row.download_client_id, id).c;
+      ).get(row.torrent_hash, row.download_client_id, id)).c;
       if (siblingCount === 0) {
-        const client = getDownloadClient(row.download_client_id);
+        const client = await getDownloadClient(row.download_client_id);
         if (client) {
           const result = await qbittorrent.deleteTorrents(client, row.torrent_hash, false);
           if (!result.ok) logWarn('Queue', `Could not remove "${row.release_title}" from qBittorrent: ${result.error}`);
@@ -509,7 +512,7 @@ async function handleQueueApi(req, res, urlPath) {
         logInfo('Queue', `"${row.release_title}" torrent still referenced by ${siblingCount} other queue row(s) — leaving it in qBittorrent, just removing this row`);
       }
     }
-    db.prepare('DELETE FROM queue WHERE id = ?').run(id);
+    await db.prepare('DELETE FROM queue WHERE id = ?').run(id);
     logInfo('Queue', `Removed from queue: ${row.release_title}`);
     sendJson(res, 200, { ok: true });
     return true;
@@ -544,17 +547,18 @@ async function insertBatchGrab(series, release, targetEpisodes, { seasonNumber, 
   }
 
   const insertStmt = db.prepare(`
-    INSERT INTO queue (series_id, episode_id, release_title, quality, size_bytes, indexer, protocol, status, progress_pct, source, magnet_url, torrent_hash, download_client_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'downloading', 0, 'real', ?, ?, ?)
+    INSERT INTO queue (series_id, episode_id, release_title, quality, size_bytes, indexer, protocol, status, progress_pct, source, magnet_url, torrent_hash, download_client_id, added_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'downloading', 0, 'real', ?, ?, ?, ?)
+    RETURNING id
   `);
   const insertedIds = [];
   for (const ep of targetEpisodes) {
-    const { lastInsertRowid } = insertStmt.run(
+    const insertedRow = await insertStmt.get(
       series.id, ep.id, release.title, release.quality, release.sizeBytes, release.indexer, release.protocol,
-      release.magnetUrl || null, submitted.torrentHash, submitted.downloadClientId,
+      release.magnetUrl || null, submitted.torrentHash, submitted.downloadClientId, db.now(),
     );
-    insertedIds.push(lastInsertRowid);
-    insertHistoryRow({
+    insertedIds.push(insertedRow.id);
+    await insertHistoryRow({
       seriesId: series.id, episodeId: ep.id, eventType: 'grabbed',
       releaseTitle: release.title, quality: release.quality, indexer: release.indexer, sizeBytes: release.sizeBytes,
     });
@@ -564,7 +568,7 @@ async function insertBatchGrab(series, release, targetEpisodes, { seasonNumber, 
   logInfo('Queue', `Batch-grabbed "${release.title}" for ${series.title} (${scopeLabel}, ${targetEpisodes.length} episode${targetEpisodes.length === 1 ? '' : 's'}) — submitted to a real qBittorrent client`);
   notifyConnections('grab', `${series.title} — ${release.title} (${release.quality}, ${targetEpisodes.length} episode${targetEpisodes.length === 1 ? '' : 's'})`);
 
-  const createdRows = insertedIds.map((id) => db.prepare(`${QUEUE_SELECT} WHERE q.id = ?`).get(id));
+  const createdRows = await Promise.all(insertedIds.map((id) => db.prepare(`${QUEUE_SELECT} WHERE q.id = ?`).get(id)));
   return {
     status: 201,
     body: {
@@ -589,7 +593,7 @@ async function handleBatchGrab(res, body) {
     return true;
   }
 
-  const series = db.prepare('SELECT * FROM series WHERE id = ?').get(seriesId);
+  const series = await db.prepare('SELECT * FROM series WHERE id = ?').get(seriesId);
   if (!series) {
     sendJson(res, 404, { error: 'Series not found' });
     return true;
@@ -603,8 +607,9 @@ async function handleBatchGrab(res, body) {
   }
 
   const alreadyQueuedStmt = db.prepare('SELECT id FROM queue WHERE episode_id = ?');
-  const targetEpisodes = targetEpisodesForScope(seriesId, seasonNumber)
-    .filter((ep) => !alreadyQueuedStmt.get(ep.id));
+  const candidateEpisodes = await targetEpisodesForScope(seriesId, seasonNumber);
+  const alreadyQueuedFlags = await Promise.all(candidateEpisodes.map((ep) => alreadyQueuedStmt.get(ep.id)));
+  const targetEpisodes = candidateEpisodes.filter((ep, i) => !alreadyQueuedFlags[i]);
   if (targetEpisodes.length === 0) {
     sendJson(res, 400, { error: 'Nothing to grab — every episode in this range is already downloaded or already in the queue.' });
     return true;
@@ -632,13 +637,13 @@ async function handleBatchGrab(res, body) {
 // so there's no existing cutoff-driven upgrade behavior to preserve here.
 // ---------------------------------------------------------------------------
 async function handleAutoBatchGrab(res, { seriesId, seasonNumber, hasSeasonNumber }) {
-  const series = db.prepare('SELECT * FROM series WHERE id = ?').get(seriesId);
+  const series = await db.prepare('SELECT * FROM series WHERE id = ?').get(seriesId);
   if (!series) {
     sendJson(res, 404, { error: 'Series not found' });
     return true;
   }
   if (hasSeasonNumber) {
-    const seasonExists = db.prepare('SELECT 1 FROM episodes WHERE series_id = ? AND season_number = ? LIMIT 1').get(seriesId, seasonNumber);
+    const seasonExists = await db.prepare('SELECT 1 FROM episodes WHERE series_id = ? AND season_number = ? LIMIT 1').get(seriesId, seasonNumber);
     if (!seasonExists) {
       sendJson(res, 404, { error: 'Season not found' });
       return true;
@@ -646,15 +651,16 @@ async function handleAutoBatchGrab(res, { seriesId, seasonNumber, hasSeasonNumbe
   }
 
   const alreadyQueuedStmt = db.prepare('SELECT id FROM queue WHERE episode_id = ?');
-  const targetEpisodes = targetEpisodesForScope(seriesId, seasonNumber)
-    .filter((ep) => !alreadyQueuedStmt.get(ep.id));
+  const candidateEpisodes = await targetEpisodesForScope(seriesId, seasonNumber);
+  const alreadyQueuedFlags = await Promise.all(candidateEpisodes.map((ep) => alreadyQueuedStmt.get(ep.id)));
+  const targetEpisodes = candidateEpisodes.filter((ep, i) => !alreadyQueuedFlags[i]);
   if (targetEpisodes.length === 0) {
     sendJson(res, 200, { skipped: true, reason: 'Nothing to grab — every episode in this range is already downloaded or already in the queue.' });
     return true;
   }
 
   const seasonNameRow = hasSeasonNumber
-    ? db.prepare('SELECT season_name FROM episodes WHERE series_id = ? AND season_number = ? AND season_name IS NOT NULL LIMIT 1').get(seriesId, seasonNumber)
+    ? await db.prepare('SELECT season_name FROM episodes WHERE series_id = ? AND season_number = ? AND season_name IS NOT NULL LIMIT 1').get(seriesId, seasonNumber)
     : null;
   const extraQueryTerm = seasonNameRow && seasonNameRow.season_name ? seasonNameRow.season_name : null;
 
@@ -682,7 +688,7 @@ async function handleAutoBatchGrab(res, { seriesId, seasonNumber, hasSeasonNumbe
 const REAL_TICK_MS = 4000;
 
 async function realTick() {
-  const realRows = db.prepare("SELECT * FROM queue WHERE source = 'real' AND status IN ('downloading', 'paused')").all();
+  const realRows = await db.prepare("SELECT * FROM queue WHERE source = 'real' AND status IN ('downloading', 'paused')").all();
   if (realRows.length === 0) return;
 
   const byClient = new Map();
@@ -692,7 +698,7 @@ async function realTick() {
   }
 
   for (const [clientId, rows] of byClient) {
-    const client = getDownloadClient(clientId);
+    const client = await getDownloadClient(clientId);
     if (!client) continue; // the client row was deleted from Settings mid-download — leave as last-known state
 
     const result = await qbittorrent.getTorrents(client, { category: client.category });
@@ -737,7 +743,7 @@ async function realTick() {
     // the same honest "can't tell which file" fallback completion already
     // uses in that case.
     async function rowProgressPct(row, torrent) {
-      const episode = db.prepare('SELECT season_number, num FROM episodes WHERE id = ?').get(row.episode_id);
+      const episode = await db.prepare('SELECT season_number, num FROM episodes WHERE id = ?').get(row.episode_id);
       if (episode) {
         const files = await filesForHash(row.torrent_hash);
         const file = pickFileForEpisode(files, episode);
@@ -752,14 +758,14 @@ async function realTick() {
 
       if ((t.progress || 0) >= 1) {
         const files = await filesForHash(row.torrent_hash);
-        completeRealDownload(row, t, client, files);
+        await completeRealDownload(row, t, client, files);
       } else if (t.state === 'error' || t.state === 'missingFiles') {
-        failRealDownload(row, t);
+        await failRealDownload(row, t);
       } else {
         const nextStatus = (t.state === 'pausedDL' || t.state === 'pausedUP') ? 'paused' : 'downloading';
         const nextPct = await rowProgressPct(row, t);
         if (nextPct !== row.progress_pct || nextStatus !== row.status) {
-          db.prepare('UPDATE queue SET progress_pct = ?, status = ? WHERE id = ?').run(nextPct, nextStatus, row.id);
+          await db.prepare('UPDATE queue SET progress_pct = ?, status = ? WHERE id = ?').run(nextPct, nextStatus, row.id);
         }
       }
     }
@@ -814,8 +820,8 @@ function pickFileForEpisode(files, episode) {
   return null;
 }
 
-function completeRealDownload(row, torrent, client, files) {
-  db.prepare('DELETE FROM queue WHERE id = ?').run(row.id);
+async function completeRealDownload(row, torrent, client, files) {
+  await db.prepare('DELETE FROM queue WHERE id = ?').run(row.id);
 
   // Full row (not just title/path) — episodeFileNameFor/seriesFolderNameFor
   // (see episode-paths.js, called below via importEpisodeFile) need
@@ -824,8 +830,8 @@ function completeRealDownload(row, torrent, client, files) {
   // import always fell back to the Standard format regardless of what
   // Series Type was actually set, since series.seriesType (camelCase, what
   // that code checks) was never even in the row to begin with.
-  const series = db.prepare('SELECT * FROM series WHERE id = ?').get(row.series_id);
-  const episode = db.prepare('SELECT season_number, num, title FROM episodes WHERE id = ?').get(row.episode_id);
+  const series = await db.prepare('SELECT * FROM series WHERE id = ?').get(row.series_id);
+  const episode = await db.prepare('SELECT season_number, num, title FROM episodes WHERE id = ?').get(row.episode_id);
   const episodeLabel = episode ? `S${String(episode.season_number).padStart(2, '0')}E${String(episode.num).padStart(2, '0')}` : '';
   const seriesTitle = series ? series.title : 'Unknown series';
 
@@ -896,9 +902,9 @@ function completeRealDownload(row, torrent, client, files) {
       mediaStreams = probeMediaStreams(localSourcePath);
       const probedResolutionGroup = mediaStreams && mediaStreams.video ? resolutionGroupFromHeight(mediaStreams.video.height) : null;
       if (probedResolutionGroup) {
-        quality = guessQualityTierName(row.release_title, probedResolutionGroup) || row.quality;
+        quality = (await guessQualityTierName(row.release_title, probedResolutionGroup)) || row.quality;
       }
-      const imported = importEpisodeFile(series, episode, quality, localSourcePath);
+      const imported = await importEpisodeFile(series, episode, quality, localSourcePath);
       if (imported.ok) {
         filePath = imported.path;
         sizeBytes = imported.sizeBytes;
@@ -916,13 +922,13 @@ function completeRealDownload(row, torrent, client, files) {
   // (no Remote Path Mapping configured across two separate machines, say)
   // behaves exactly as it always did rather than breaking.
   if (!filePath) {
-    filePath = series && episode ? buildEpisodeFilePath(series, episode, quality) : null;
+    filePath = series && episode ? await buildEpisodeFilePath(series, episode, quality) : null;
   }
 
-  db.prepare('UPDATE episodes SET downloaded = 1, quality = ?, size_bytes = ?, path = ?, media_streams = ? WHERE id = ?')
+  await db.prepare('UPDATE episodes SET downloaded = 1, quality = ?, size_bytes = ?, path = ?, media_streams = ? WHERE id = ?')
     .run(quality, sizeBytes, filePath, mediaStreams ? JSON.stringify(mediaStreams) : null, row.episode_id);
-  recomputeSeriesEpisodeStats(row.series_id);
-  insertHistoryRow({
+  await recomputeSeriesEpisodeStats(row.series_id);
+  await insertHistoryRow({
     seriesId: row.series_id, episodeId: row.episode_id, eventType: 'imported',
     releaseTitle: row.release_title, quality, indexer: row.indexer, sizeBytes,
     message: importNote,
@@ -931,21 +937,21 @@ function completeRealDownload(row, torrent, client, files) {
   notifyConnections('import', `${seriesTitle} ${episodeLabel} — ${row.release_title} (${quality})`);
 }
 
-function failRealDownload(row, torrent) {
-  db.prepare('DELETE FROM queue WHERE id = ?').run(row.id);
+async function failRealDownload(row, torrent) {
+  await db.prepare('DELETE FROM queue WHERE id = ?').run(row.id);
 
-  const series = db.prepare('SELECT title FROM series WHERE id = ?').get(row.series_id);
-  const episode = db.prepare('SELECT season_number, num FROM episodes WHERE id = ?').get(row.episode_id);
+  const series = await db.prepare('SELECT title FROM series WHERE id = ?').get(row.series_id);
+  const episode = await db.prepare('SELECT season_number, num FROM episodes WHERE id = ?').get(row.episode_id);
   const episodeLabel = episode ? `S${String(episode.season_number).padStart(2, '0')}E${String(episode.num).padStart(2, '0')}` : '';
   const seriesTitle = series ? series.title : 'Unknown series';
   const reason = torrent.state === 'missingFiles' ? 'qBittorrent reported missing files' : 'qBittorrent reported an error';
 
-  insertHistoryRow({
+  await insertHistoryRow({
     seriesId: row.series_id, episodeId: row.episode_id, eventType: 'failed',
     releaseTitle: row.release_title, quality: row.quality, indexer: row.indexer, sizeBytes: row.size_bytes,
     message: `Download failed — ${reason}`,
   });
-  insertBlocklistRow({
+  await insertBlocklistRow({
     seriesId: row.series_id, episodeId: row.episode_id, releaseTitle: row.release_title,
     reason: 'Failed download', indexer: row.indexer,
   });

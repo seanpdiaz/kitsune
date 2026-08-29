@@ -2,9 +2,16 @@
 
 ## Persistence
 
-- Backing store: SQLite via Node's built-in `node:sqlite` module (stable since Node
-  22.5 — no npm package needed, so the project stays dependency-free).
-- File lives at `data/kitsune.db`, created automatically on first run.
+- Backing store: pick with `DB_CLIENT` in `.env` (see `.env.example`) — `sqlite`
+  (the default when unset) uses Node's built-in `node:sqlite` module, no npm
+  package or setup needed, a single file under `data/`; `postgres` points the
+  whole app at a real Postgres server instead, using `DB_HOST`/`DB_PORT`/
+  `DB_NAME`/`DB_USER`/`DB_PASSWORD`/`DB_SSL`. Every table, route, and query
+  works identically either way — switching this one variable is the entire
+  migration from a zero-config local install to a real deployed database.
+- File lives at `data/kitsune.db` under `DB_CLIENT=sqlite`, created automatically
+  on first run. Under `DB_CLIENT=postgres` there's no local file at all — the
+  data lives on whatever Postgres server the `DB_*` vars point to.
 - Four tables cover all of it:
   - `series` — the Library. One row per series (title, poster, episode count, monitored,
     status, etc), plus the fields the Edit Series modal manages — `monitor_new_seasons`,
@@ -45,21 +52,97 @@
     like `general-3`); `initSettingsForm()` in `app.js` loads the saved object, fills in
     the matching controls, and PATCHes changes back (debounced) as you edit. API:
     `GET/PUT /api/app-settings/:section`.
-- All four tables seed themselves with the mockup's original placeholder data on first
-  run (per-section for `settings_items`, so adding a new list section later doesn't
-  require reseeding everything; `series` seeds the original 21-title library), so
-  nothing looks empty on a fresh install.
+- `series`, `tags`, and `settings_items` (per-section, so adding a new list section
+  later doesn't require reseeding everything already in use) each seed the mockup's
+  original placeholder data into themselves the first time they're found completely
+  empty — but only when `APP_ENV=demo` (see `.env.example`). `APP_ENV` defaults to
+  `production`, under which an empty table just stays empty instead of silently
+  repopulating with demo anime/indexers/tags nobody added — the difference matters
+  because "the table happens to be empty" isn't only true on a genuinely fresh
+  install; it's also true after restoring a backup, recovering from corruption (see
+  the incident below), or a deliberate reset, and none of those should come back
+  with fake data standing in for whatever was really there. Set `APP_ENV=demo` to get
+  the old zero-config "there's already something to click through" behavior back —
+  that's for trying the app out or local dev, not a real deployment.
 - Change anything in Settings or the Library, restart the server, and it's still there.
-
-The plan discussed alongside this: ship SQLite as the default so the app works out of
-the box with zero setup, then swap the storage layer for a real Postgres/MySQL
-container later without touching the frontend — `app.js` only knows about the
-`/api/*` endpoints, not how they're stored. When that migration happens, only the DB
-calls inside `server.js` need to change.
 
 That's the same shape Activity/Wanted (queue, history, blocklist, missing, cutoff unmet)
 now use too: a table, a small REST surface, `fetch()` calls instead of an in-file array —
-see [Grab / Download Pipeline](Grab-Download-Pipeline).
+see [Grab / Download Pipeline](Grab-Download-Pipeline). None of this reaches the
+frontend either way — `app.js` only ever knows about the `/api/*` endpoints, never how
+they're stored, which is what made the dual-database work below a backend-only change.
+
+### Dual-database support: SQLite + Postgres
+
+The original plan here was "ship SQLite as the default so the app works out of the box
+with zero setup, then swap the storage layer for a real Postgres container later." That
+swap is now built — as a runtime choice (`DB_CLIENT=sqlite|postgres`), not a one-way
+migration, so a zero-config local install and a real deployed Postgres install are both
+first-class, from the same codebase, with every route behaving identically either way.
+
+- **`server/db.js`** is the only module any route or lib file imports (`require('../db')`
+  or `require('./db')`) — it's a thin facade that reads `DB_CLIENT` once at startup and
+  dispatches every call to either `server/db-sqlite.js` or `server/db-postgres.js`. No
+  route file, anywhere in the codebase, imports `node:sqlite` or `pg` directly.
+- Both drivers implement the same shape: `db.prepare(sql).get(...)/.all(...)/.run(...)`
+  (all `async`, unlike `node:sqlite`'s originally-synchronous API — see below),
+  `db.exec(sql)`, `db.now()` (an explicit current-timestamp value, since the two
+  databases don't share a `datetime('now')`/`NOW()` syntax), `db.PK` (the
+  dialect-specific auto-increment column fragment for `CREATE TABLE`), and
+  `db.tableColumns(table)` (replaces raw `PRAGMA table_info` calls, which Postgres has
+  no equivalent for). `db.DB_CLIENT`, `db.DB_PATH` (`null` under Postgres — there's no
+  single file), and `db.describe()` (a human-readable "what am I persisting to" string,
+  used in the startup log line) let call sites branch on which backend is live when they
+  genuinely need to (`server/routes/backups.js` is the one real example — see below).
+- `server/db.js` also does the one piece of real SQL translation the two drivers can't
+  share: `?`-style placeholders (SQLite's syntax, used everywhere in every route file)
+  get rewritten to Postgres's `$1, $2, ...` before a query reaches `pg`, so route code
+  never needs two versions of a query string.
+- **Table setup and migrations run through a `db.init(fn)` registry** instead of at
+  module `require()` time — `server.js` awaits `db.ready()` (which runs every registered
+  `fn`, then resolves) before `server.listen()`, so every table exists before the first
+  request can arrive, same guarantee as before, just async now. A handful of SQL
+  differences meant genuine portable rewrites rather than a find-replace: `COLLATE
+  NOCASE` → `LOWER(...)` comparisons, `INSERT OR IGNORE` → `INSERT ... ON CONFLICT (...)
+  DO NOTHING`, `lastInsertRowid` → `INSERT ... RETURNING *` followed by `.get()`, and
+  `datetime('now')` as a SQL-level column default → removed from every `CREATE TABLE`,
+  with `db.now()` passed as an explicit parameter at insert time instead (a `DEFAULT`
+  clause needs different syntax per dialect; passing the value explicitly sidesteps that
+  entirely).
+- **`node:sqlite` is synchronous; `pg` is async-only** — so making Postgres a real option
+  meant converting essentially every database call site across the whole `server/`
+  directory (~240 of them, every route file and several lib files) to `async`/`await`,
+  while keeping every endpoint's request/response contract byte-for-byte identical — the
+  frontend was explicitly out of scope for this change and never needed to. The one
+  recurring wrinkle: a few places built a result by `.filter()`ing or `.sort()`ing rows
+  against an async lookup (e.g. cutoff-unmet filtering in `wanted.js`, batch-grab
+  candidate filtering in `queue.js`, release ranking in `quality.js`) — `Array.prototype`
+  callbacks can't be `async` themselves, so those precompute the async values first with
+  `Promise.all(...)`, then run the synchronous `.filter()`/`.sort()` against the
+  precomputed array.
+- **Postgres returns `BIGINT`/`NUMERIC` columns as JavaScript strings by default** (`pg`'s
+  own documented behavior, to avoid silently losing precision on huge numbers) — which
+  would otherwise silently break every `COUNT(*) AS n`-style query compared with `=== 0`
+  or used arithmetically (seed-data gating in `series.js`/`tags.js`, user/admin counts in
+  `auth.js`, dashboard counts in `system.js`, and others). Fixed once, at the driver
+  level, in `server/db-postgres.js` via `pg.types.setTypeParser(20, ...)` (int8/bigint →
+  `parseInt`) and `setTypeParser(1700, ...)` (numeric/decimal → `parseFloat`), rather than
+  patching every call site individually.
+- **Backups** (`server/routes/backups.js`, "Backup Now" on System > Backup) branch on
+  `DB_CLIENT`: under SQLite it still just gzips the live `db.DB_PATH` file directly; under
+  Postgres there's no single file to gzip, so it shells out to the real `pg_dump` CLI
+  (`--format=plain`, using the same `DB_HOST`/`DB_PORT`/`DB_USER`/`DB_PASSWORD`/`DB_SSL`
+  vars the app itself connects with) and gzips its output instead — a genuinely
+  restorable `psql < dump.sql`-shaped file either way, not an opaque binary. This is the
+  one feature with an extra real prerequisite: `pg_dump` has to actually be installed and
+  on `PATH` (a version compatible with the target server) wherever the app runs under
+  `DB_CLIENT=postgres`.
+- Both paths were verified end-to-end in this pass: a fresh `DB_CLIENT=sqlite` run
+  (table creation, migrations, all default seeding, full CRUD across series/tags/queue,
+  auth setup) and a fresh `DB_CLIENT=postgres` run against a real local Postgres 16
+  server (same migrations and seeding, the same CRUD sweep, and a real `pg_dump`-backed
+  backup downloaded and confirmed to be a valid, restorable SQL dump) — both came back
+  with zero errors across the whole session.
 
 ### Real incident: database corruption, and WAL mode
 

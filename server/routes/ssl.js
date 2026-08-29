@@ -19,7 +19,7 @@
 // ---------------------------------------------------------------------------
 const fs = require('fs');
 const path = require('path');
-const { db } = require('../db');
+const db = require('../db');
 const { logInfo, logWarn } = require('../logger');
 const { sendJson, readJsonBody } = require('../lib/http');
 
@@ -40,17 +40,17 @@ const KIND_CONFIG = {
   key: { filePath: KEY_PATH, marker: 'PRIVATE KEY-----', label: 'private key' },
 };
 
-function readSslMeta() {
-  const row = db.prepare("SELECT data FROM app_settings WHERE section = 'ssl'").get();
+async function readSslMeta() {
+  const row = await db.prepare("SELECT data FROM app_settings WHERE section = 'ssl'").get();
   return row ? JSON.parse(row.data) : {};
 }
 
-function writeSslMeta(patch) {
-  const merged = { ...readSslMeta(), ...patch };
-  db.prepare(`
-    INSERT INTO app_settings (section, data, updated_at) VALUES ('ssl', ?, datetime('now'))
+async function writeSslMeta(patch) {
+  const merged = { ...(await readSslMeta()), ...patch };
+  await db.prepare(`
+    INSERT INTO app_settings (section, data, updated_at) VALUES ('ssl', ?, ?)
     ON CONFLICT(section) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at
-  `).run(JSON.stringify(merged));
+  `).run(JSON.stringify(merged), db.now());
   return merged;
 }
 
@@ -58,10 +58,10 @@ function writeSslMeta(patch) {
 // somehow isn't on disk (deleted by hand, a fresh copy of just the DB file,
 // etc.) this reports "not uploaded" rather than trusting stale metadata
 // that would make Download/Remove act on a file that isn't there.
-function statusFor(kind) {
+async function statusFor(kind) {
   const { filePath } = KIND_CONFIG[kind];
   if (!fs.existsSync(filePath)) return null;
-  const meta = readSslMeta();
+  const meta = await readSslMeta();
   const stat = fs.statSync(filePath);
   return {
     filename: meta[`${kind}OriginalName`] || `${kind}.pem`,
@@ -73,7 +73,7 @@ function statusFor(kind) {
 async function handleSslApi(req, res, urlPath) {
   // GET /api/ssl/status
   if (req.method === 'GET' && urlPath === '/api/ssl/status') {
-    sendJson(res, 200, { cert: statusFor('cert'), key: statusFor('key') });
+    sendJson(res, 200, { cert: await statusFor('cert'), key: await statusFor('key') });
     return true;
   }
 
@@ -116,9 +116,9 @@ async function handleSslApi(req, res, urlPath) {
     }
     fs.writeFileSync(config.filePath, content);
     const uploadedAt = new Date().toISOString();
-    writeSslMeta({ [`${kind}OriginalName`]: filename, [`${kind}UploadedAt`]: uploadedAt });
+    await writeSslMeta({ [`${kind}OriginalName`]: filename, [`${kind}UploadedAt`]: uploadedAt });
     logInfo('Ssl', `Uploaded ${config.label}: "${filename}" (${content.length} bytes)`);
-    sendJson(res, 200, statusFor(kind));
+    sendJson(res, 200, await statusFor(kind));
     return true;
   }
 
@@ -134,7 +134,7 @@ async function handleSslApi(req, res, urlPath) {
         logWarn('Ssl', `Could not remove ${config.label}: ${err.message}`);
       }
     }
-    writeSslMeta({ [`${kind}OriginalName`]: null, [`${kind}UploadedAt`]: null });
+    await writeSslMeta({ [`${kind}OriginalName`]: null, [`${kind}UploadedAt`]: null });
     logInfo('Ssl', `Removed uploaded ${config.label}`);
     sendJson(res, 200, { ok: true });
     return true;

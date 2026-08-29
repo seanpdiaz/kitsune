@@ -35,7 +35,7 @@
 // `releaseIndex` reads the grabbed release back out of that cache instead of
 // re-searching.
 // ---------------------------------------------------------------------------
-const { db } = require('../db');
+const db = require('../db');
 const { sendJson } = require('../lib/http');
 const { logWarn } = require('../logger');
 const { getQualityProfile, rankReleaseCandidates } = require('../lib/quality');
@@ -76,8 +76,8 @@ function buildReleaseCacheKey({ scope, episodeId, seriesId, seasonNumber }) {
 // { baseUrl, apiKey }. A Prowlarr row missing either field is treated as not
 // really configured yet (same as leaving it disabled) rather than sending a
 // request that can only fail.
-function enabledRealIndexers() {
-  const rows = db.prepare("SELECT data FROM settings_items WHERE section = 'indexers'").all();
+async function enabledRealIndexers() {
+  const rows = await db.prepare("SELECT data FROM settings_items WHERE section = 'indexers'").all();
   const indexers = [];
   for (const row of rows) {
     const data = JSON.parse(row.data);
@@ -120,8 +120,8 @@ const MERGED_CANDIDATE_LIMIT = 8;
 // has to happen at every sort/slice point, not just here). Nothing is ever
 // excluded for being outside the profile — see quality.js's
 // rankReleaseCandidates for the full reasoning.
-function sortAndLimitReleases(releases, profile) {
-  return rankReleaseCandidates(releases, { profile }).slice(0, MERGED_CANDIDATE_LIMIT);
+async function sortAndLimitReleases(releases, profile) {
+  return (await rankReleaseCandidates(releases, { profile })).slice(0, MERGED_CANDIDATE_LIMIT);
 }
 
 // Runs every enabled real indexer's search (in parallel) for either a single
@@ -152,7 +152,7 @@ async function searchRealIndexers(indexers, { series, episode, extraQueryTerm, p
     // muddled combined message.
     return { ok: false, error: failed[0]?.error || 'All enabled real indexers failed.' };
   }
-  const merged = sortAndLimitReleases(dedupeReleases(succeeded.flatMap((o) => o.releases)), profile);
+  const merged = await sortAndLimitReleases(dedupeReleases(succeeded.flatMap((o) => o.releases)), profile);
   return {
     ok: true,
     releases: merged,
@@ -174,17 +174,21 @@ function seasonLabel(seasonNumber, seasonName) {
 // not already downloaded. Whether a real batch release's own title claims a
 // specific range isn't trusted (see nyaa-search.js's isBatchRelease
 // comment); this is what actually decides which episodes a grab covers.
-function targetEpisodesForScope(seriesId, seasonNumber) {
+async function targetEpisodesForScope(seriesId, seasonNumber) {
+  // date('now') was SQLite-specific; today's date as a plain "YYYY-MM-DD"
+  // parameter compares the same way against the TEXT `aired` column on
+  // both dialects.
+  const today = db.now().slice(0, 10);
   if (seasonNumber != null) {
     return db.prepare(`
-      SELECT * FROM episodes WHERE series_id = ? AND season_number = ? AND downloaded = 0 AND aired IS NOT NULL AND aired <= date('now')
+      SELECT * FROM episodes WHERE series_id = ? AND season_number = ? AND downloaded = 0 AND aired IS NOT NULL AND aired <= ?
       ORDER BY num ASC
-    `).all(seriesId, seasonNumber);
+    `).all(seriesId, seasonNumber, today);
   }
   return db.prepare(`
-    SELECT * FROM episodes WHERE series_id = ? AND downloaded = 0 AND aired IS NOT NULL AND aired <= date('now')
+    SELECT * FROM episodes WHERE series_id = ? AND downloaded = 0 AND aired IS NOT NULL AND aired <= ?
     ORDER BY season_number ASC, num ASC
-  `).all(seriesId);
+  `).all(seriesId, today);
 }
 
 // The real search work behind both scopes, factored out of the route
@@ -197,8 +201,8 @@ function targetEpisodesForScope(seriesId, seasonNumber) {
 // non-empty) *is* "the best match" for a caller that wants one pick instead
 // of the whole list.
 async function searchForEpisode(series, episodeArg) {
-  const profile = getQualityProfile(series.quality_profile);
-  const indexers = enabledRealIndexers();
+  const profile = await getQualityProfile(series.quality_profile);
+  const indexers = await enabledRealIndexers();
   let releases = [];
   let notice = null;
   if (indexers.length === 0) {
@@ -217,8 +221,8 @@ async function searchForEpisode(series, episodeArg) {
 }
 
 async function searchForBatchScope(series, seasonNumber, { extraQueryTerm, episodeCount } = {}) {
-  const profile = getQualityProfile(series.quality_profile);
-  const indexers = enabledRealIndexers();
+  const profile = await getQualityProfile(series.quality_profile);
+  const indexers = await enabledRealIndexers();
   let releases = [];
   let notice = null;
   if (indexers.length === 0) {
@@ -250,23 +254,23 @@ async function handleReleasesApi(req, res, urlPath) {
       sendJson(res, 400, { error: 'seriesId (and seasonNumber, for a season search) are required' });
       return true;
     }
-    const series = db.prepare('SELECT * FROM series WHERE id = ?').get(seriesId);
+    const series = await db.prepare('SELECT * FROM series WHERE id = ?').get(seriesId);
     if (!series) {
       sendJson(res, 404, { error: 'Series not found' });
       return true;
     }
     if (scopeParam === 'season') {
-      const seasonExists = db.prepare('SELECT 1 FROM episodes WHERE series_id = ? AND season_number = ? LIMIT 1').get(seriesId, seasonNumber);
+      const seasonExists = await db.prepare('SELECT 1 FROM episodes WHERE series_id = ? AND season_number = ? LIMIT 1').get(seriesId, seasonNumber);
       if (!seasonExists) {
         sendJson(res, 404, { error: 'Season not found' });
         return true;
       }
     }
 
-    const targetEpisodes = targetEpisodesForScope(seriesId, seasonNumber);
+    const targetEpisodes = await targetEpisodesForScope(seriesId, seasonNumber);
     const episodeCount = targetEpisodes.length;
     const seasonNameRow = scopeParam === 'season'
-      ? db.prepare('SELECT season_name FROM episodes WHERE series_id = ? AND season_number = ? AND season_name IS NOT NULL LIMIT 1').get(seriesId, seasonNumber)
+      ? await db.prepare('SELECT season_name FROM episodes WHERE series_id = ? AND season_number = ? AND season_name IS NOT NULL LIMIT 1').get(seriesId, seasonNumber)
       : null;
     const targetLabel = scopeParam === 'season' ? seasonLabel(seasonNumber, seasonNameRow && seasonNameRow.season_name) : series.title;
     const extraQueryTerm = seasonNameRow && seasonNameRow.season_name ? seasonNameRow.season_name : null;
@@ -286,12 +290,12 @@ async function handleReleasesApi(req, res, urlPath) {
     return true;
   }
 
-  const episode = db.prepare('SELECT * FROM episodes WHERE id = ?').get(episodeId);
+  const episode = await db.prepare('SELECT * FROM episodes WHERE id = ?').get(episodeId);
   if (!episode) {
     sendJson(res, 404, { error: 'Episode not found' });
     return true;
   }
-  const series = db.prepare('SELECT * FROM series WHERE id = ?').get(episode.series_id);
+  const series = await db.prepare('SELECT * FROM series WHERE id = ?').get(episode.series_id);
   if (!series) {
     sendJson(res, 404, { error: 'Series not found' });
     return true;

@@ -322,10 +322,10 @@ async function searchWithFallback(config, series, matchFn, { extraQueryTerm } = 
 // now share the one real ranking implementation, server/lib/quality.js's
 // rankReleaseCandidates, rather than keeping two separate copies of the same
 // sort in sync by hand).
-function toReleaseCandidates(matches, extra, profile) {
-  const releases = matches.map((r) => ({
+async function toReleaseCandidates(matches, extra, profile) {
+  const releases = await Promise.all(matches.map(async (r) => ({
     title: r.title,
-    quality: classifyQualityFromTitle(r.title),
+    quality: await classifyQualityFromTitle(r.title),
     sizeBytes: r.sizeBytes,
     indexer: r.indexerName, // the underlying tracker Prowlarr actually pulled this from (e.g. "Nyaa"), not just "Prowlarr" — same spirit as Nyaa.si's own real indexer name, more useful than a single generic label when Prowlarr has several trackers configured
     protocol: 'torrent',
@@ -335,8 +335,8 @@ function toReleaseCandidates(matches, extra, profile) {
     infoUrl: r.infoUrl,
     source: 'real',
     ...extra,
-  }));
-  return rankReleaseCandidates(releases, { profile }).slice(0, CANDIDATE_LIMIT);
+  })));
+  return (await rankReleaseCandidates(releases, { profile })).slice(0, CANDIDATE_LIMIT);
 }
 
 // Mirrors nyaa-search.js's searchReleasesForEpisode exactly (same signature,
@@ -367,7 +367,7 @@ async function searchReleasesForEpisode(config, series, episode, profile) {
     logWarn('IndexerService', `Prowlarr search failed for "${series.title}" ${epCode}: ${err.message}`);
     return { ok: false, error: err.message };
   }
-  const releases = toReleaseCandidates(matches, undefined, profile);
+  const releases = await toReleaseCandidates(matches, undefined, profile);
   logInfo('IndexerService', `Prowlarr search for "${series.title}" ${epCode} finished: ${matches.length} raw match(es), ${releases.length} shown after quality sort/limit.`);
   return { ok: true, releases };
 }
@@ -381,7 +381,7 @@ async function searchBatchReleases(config, series, { extraQueryTerm, profile } =
     logWarn('IndexerService', `Prowlarr batch search failed for "${series.title}": ${err.message}`);
     return { ok: false, error: err.message };
   }
-  const releases = toReleaseCandidates(matches, { isBatch: true }, profile);
+  const releases = await toReleaseCandidates(matches, { isBatch: true }, profile);
   logInfo('IndexerService', `Prowlarr batch search for "${series.title}" finished: ${matches.length} raw match(es), ${releases.length} shown after quality sort/limit.`);
   return { ok: true, releases };
 }

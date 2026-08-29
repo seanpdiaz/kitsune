@@ -164,8 +164,8 @@ function buildMagnet(infoHash, title) {
 // overwhelmingly are WEB-sourced, so that's the assumed default when no
 // source token is present, rather than guessing something less common.
 // ---------------------------------------------------------------------------
-function classifyQualityFromTitle(title) {
-  const tiers = getQualityTiers();
+async function classifyQualityFromTitle(title) {
+  const tiers = await getQualityTiers();
   if (tiers.length === 0) return 'Unknown';
 
   let resolution = null;
@@ -423,10 +423,10 @@ async function searchWithFallback(series, matchFn, { extraQueryTerm } = {}) {
 // before) — profile-aware ranking has to happen before this slice, or a
 // genuinely great in-profile match ranked outside the old tier-only top N
 // could get cut before it ever had a chance to be promoted.
-function toReleaseCandidates(matches, extra, profile) {
-  const releases = matches.map((r) => ({
+async function toReleaseCandidates(matches, extra, profile) {
+  const releases = await Promise.all(matches.map(async (r) => ({
     title: r.title,
-    quality: classifyQualityFromTitle(r.title),
+    quality: await classifyQualityFromTitle(r.title),
     sizeBytes: r.sizeBytes,
     indexer: 'Nyaa.si',
     protocol: 'torrent',
@@ -436,8 +436,8 @@ function toReleaseCandidates(matches, extra, profile) {
     infoUrl: r.infoUrl,
     source: 'real',
     ...extra,
-  }));
-  return rankReleaseCandidates(releases, { profile }).slice(0, CANDIDATE_LIMIT);
+  })));
+  return (await rankReleaseCandidates(releases, { profile })).slice(0, CANDIDATE_LIMIT);
 }
 
 // High-level entry point used by routes/releases.js for a single episode's
@@ -467,7 +467,7 @@ async function searchReleasesForEpisode(series, episode, profile) {
     logWarn('IndexerService', `Nyaa.si search failed for "${series.title}" ${epCode}: ${err.message}`);
     return { ok: false, error: err.message };
   }
-  const releases = toReleaseCandidates(matches, undefined, profile);
+  const releases = await toReleaseCandidates(matches, undefined, profile);
   logInfo('IndexerService', `Nyaa.si search for "${series.title}" ${epCode} finished: ${matches.length} raw match(es), ${releases.length} shown after quality sort/limit.`);
   return { ok: true, releases };
 }
@@ -524,7 +524,7 @@ async function searchBatchReleases(series, { extraQueryTerm, profile } = {}) {
     logWarn('IndexerService', `Nyaa.si batch search failed for "${series.title}": ${err.message}`);
     return { ok: false, error: err.message };
   }
-  const releases = toReleaseCandidates(matches, { isBatch: true }, profile);
+  const releases = await toReleaseCandidates(matches, { isBatch: true }, profile);
   logInfo('IndexerService', `Nyaa.si batch search for "${series.title}" finished: ${matches.length} raw match(es), ${releases.length} shown after quality sort/limit.`);
   return { ok: true, releases };
 }

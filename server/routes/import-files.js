@@ -25,7 +25,7 @@
 // than the main season) isn't a case this reconciliation handles correctly,
 // since the second import wouldn't know about files the first one matched.
 // ---------------------------------------------------------------------------
-const { db } = require('../db');
+const db = require('../db');
 const { logInfo, logWarn } = require('../logger');
 const { sendJson, readJsonBody } = require('../lib/http');
 const fs = require('fs');
@@ -40,7 +40,7 @@ async function handleImportFilesApi(req, res, urlPath) {
   if (!match) return false;
 
   const seriesId = Number(match[1]);
-  const series = db.prepare('SELECT * FROM series WHERE id = ?').get(seriesId);
+  const series = await db.prepare('SELECT * FROM series WHERE id = ?').get(seriesId);
   if (!series) {
     sendJson(res, 404, { error: 'Series not found' });
     return true;
@@ -74,7 +74,7 @@ async function handleImportFilesApi(req, res, urlPath) {
       sendJson(res, 400, { error: 'rootFolderId and folderName are required' });
       return true;
     }
-    const rootRow = db.prepare("SELECT * FROM settings_items WHERE id = ? AND section = 'root-folders'").get(rootFolderId);
+    const rootRow = await db.prepare("SELECT * FROM settings_items WHERE id = ? AND section = 'root-folders'").get(rootFolderId);
     if (!rootRow) {
       sendJson(res, 404, { error: 'Root folder not found' });
       return true;
@@ -102,14 +102,14 @@ async function handleImportFilesApi(req, res, urlPath) {
       // scanExistingFilesForSeries uses before giving up, and remember it
       // here the same way that scan would have — so this only ever needs
       // resolving once per series, not every time Rescan is clicked.
-      folderPath = findExistingSeriesFolder(series);
+      folderPath = await findExistingSeriesFolder(series);
       if (folderPath) {
-        db.prepare('UPDATE series SET path = ? WHERE id = ?').run(folderPath, seriesId);
+        await db.prepare('UPDATE series SET path = ? WHERE id = ?').run(folderPath, seriesId);
         logInfo('LibraryImport', `Rescan found and set a path for "${series.title}": "${folderPath}" (none was set)`);
       }
     }
     if (!folderPath) {
-      const hasRootFolders = db.prepare("SELECT COUNT(*) AS n FROM settings_items WHERE section = 'root-folders'").get().n > 0;
+      const hasRootFolders = (await db.prepare("SELECT COUNT(*) AS n FROM settings_items WHERE section = 'root-folders'").get()).n > 0;
       sendJson(res, 400, {
         error: hasRootFolders
           // Title/alt-title matching can only ever find a folder whose name
@@ -144,7 +144,7 @@ async function handleImportFilesApi(req, res, urlPath) {
     return true;
   }
 
-  const episodeRows = db.prepare('SELECT id, season_number, num, downloaded FROM episodes WHERE series_id = ?').all(seriesId);
+  const episodeRows = await db.prepare('SELECT id, season_number, num, downloaded FROM episodes WHERE series_id = ?').all(seriesId);
   if (episodeRows.length === 0) {
     // Nothing to match against yet — this series' episode list hasn't been
     // fetched/cached (see episodes.js). Rather than silently matching
@@ -207,8 +207,8 @@ async function handleImportFilesApi(req, res, urlPath) {
     // guessQualityTierName's own comment for why a probe beats a text tag.
     const streams = probeMediaStreams(filePath);
     const probedResolutionGroup = streams && streams.video ? resolutionGroupFromHeight(streams.video.height) : null;
-    const quality = guessQualityTierName(file.name, probedResolutionGroup);
-    updateStmt.run(quality, file.sizeBytes, filePath, streams ? JSON.stringify(streams) : null, episode.id);
+    const quality = await guessQualityTierName(file.name, probedResolutionGroup);
+    await updateStmt.run(quality, file.sizeBytes, filePath, streams ? JSON.stringify(streams) : null, episode.id);
     matchedEpisodeIds.add(episode.id);
     matched.push({
       fileName: file.name, episodeId: episode.id, season, episode: guess.episode,
@@ -226,13 +226,13 @@ async function handleImportFilesApi(req, res, urlPath) {
   const reset = [];
   for (const ep of episodeRows) {
     if (ep.downloaded && !matchedEpisodeIds.has(ep.id)) {
-      resetStmt.run(ep.id);
+      await resetStmt.run(ep.id);
       reset.push({ episodeId: ep.id, season: ep.season_number, episode: ep.num });
     }
   }
 
-  recomputeSeriesEpisodeStats(seriesId);
-  const updated = db.prepare('SELECT eps, pct FROM series WHERE id = ?').get(seriesId);
+  await recomputeSeriesEpisodeStats(seriesId);
+  const updated = await db.prepare('SELECT eps, pct FROM series WHERE id = ?').get(seriesId);
 
   logInfo('LibraryImport', `Imported files for "${series.title}": ${matched.length} matched, ${unmatched.length} unmatched, ${reset.length} reset to not-downloaded (from "${folderPath}")`);
   if (unmatched.length > 0) {

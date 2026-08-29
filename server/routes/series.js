@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { db, DB_PATH } = require('../db');
+const db = require('../db');
 const { logInfo, logWarn } = require('../logger');
 const { sendJson, readJsonBody } = require('../lib/http');
 const { normalizeFolderName } = require('../lib/fs-helpers');
@@ -72,8 +72,8 @@ function deriveAirStatus(rawStatus, source) {
 // yet, and leaving it null (rather than a fabricated guess) is what lets
 // the Edit modal show an honest "no root folder configured" state instead
 // of a path that doesn't exist anywhere.
-function firstConfiguredRootFolder() {
-  const row = db.prepare("SELECT data FROM settings_items WHERE section = 'root-folders' ORDER BY position ASC LIMIT 1").get();
+async function firstConfiguredRootFolder() {
+  const row = await db.prepare("SELECT data FROM settings_items WHERE section = 'root-folders' ORDER BY position ASC LIMIT 1").get();
   if (!row) return null;
   try {
     return JSON.parse(row.data).path || null;
@@ -98,8 +98,8 @@ function firstConfiguredRootFolder() {
 // did before, with a warning logged only for the "didn't match" case — a
 // plain omission is the normal, expected shape for every other existing
 // caller of this endpoint.
-function resolveRootFolder(requestedPath) {
-  const configured = db.prepare("SELECT data FROM settings_items WHERE section = 'root-folders' ORDER BY position ASC").all()
+async function resolveRootFolder(requestedPath) {
+  const configured = (await db.prepare("SELECT data FROM settings_items WHERE section = 'root-folders' ORDER BY position ASC").all())
     .map((row) => { try { return JSON.parse(row.data).path; } catch { return null; } })
     .filter(Boolean);
   if (requestedPath) {
@@ -108,50 +108,51 @@ function resolveRootFolder(requestedPath) {
   }
   return configured[0] || null;
 }
-function defaultSeriesPathFor(title, requestedRootFolder) {
-  const rootFolder = resolveRootFolder(requestedRootFolder);
+async function defaultSeriesPathFor(title, requestedRootFolder) {
+  const rootFolder = await resolveRootFolder(requestedRootFolder);
   if (!rootFolder) return null;
   return path.join(rootFolder, sanitizeForPath(title) || 'Unknown Series');
 }
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS series (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title TEXT NOT NULL,
-    badge TEXT,
-    fill TEXT NOT NULL DEFAULT 'accent',
-    pct INTEGER NOT NULL DEFAULT 0,
-    eps TEXT NOT NULL DEFAULT '0 / 0',
-    monitored INTEGER NOT NULL DEFAULT 1,
-    status TEXT NOT NULL DEFAULT 'continuing',
-    air_status TEXT,
-    next_air_days INTEGER,
-    added_days_ago INTEGER NOT NULL DEFAULT 0,
-    poster TEXT,
-    meta TEXT,
-    overview TEXT,
-    monitor_new_seasons TEXT NOT NULL DEFAULT 'all',
-    season_folder INTEGER NOT NULL DEFAULT 1,
-    quality_profile TEXT,
-    series_type TEXT NOT NULL DEFAULT 'anime',
-    path TEXT,
-    ignore_specials INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-  )
-`);
+db.init(async () => {
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS series (
+      id ${db.PK},
+      title TEXT NOT NULL,
+      badge TEXT,
+      fill TEXT NOT NULL DEFAULT 'accent',
+      pct INTEGER NOT NULL DEFAULT 0,
+      eps TEXT NOT NULL DEFAULT '0 / 0',
+      monitored INTEGER NOT NULL DEFAULT 1,
+      status TEXT NOT NULL DEFAULT 'continuing',
+      air_status TEXT,
+      next_air_days INTEGER,
+      added_days_ago INTEGER NOT NULL DEFAULT 0,
+      poster TEXT,
+      meta TEXT,
+      overview TEXT,
+      monitor_new_seasons TEXT NOT NULL DEFAULT 'all',
+      season_folder INTEGER NOT NULL DEFAULT 1,
+      quality_profile TEXT,
+      series_type TEXT NOT NULL DEFAULT 'anime',
+      path TEXT,
+      ignore_specials INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT
+    )
+  `);
 
-// Many-to-many series <-> tags, backing the Edit Series modal's Tags field.
-// No foreign keys (consistent with the rest of this schema — nothing else
-// here enforces them either), but series/tag deletion below both clean up
-// their side of this table so it can't accumulate orphaned rows pointing at
-// an id that no longer exists.
-db.exec(`
-  CREATE TABLE IF NOT EXISTS series_tags (
-    series_id INTEGER NOT NULL,
-    tag_id INTEGER NOT NULL,
-    PRIMARY KEY (series_id, tag_id)
-  )
-`);
+  // Many-to-many series <-> tags, backing the Edit Series modal's Tags field.
+  // No foreign keys (consistent with the rest of this schema — nothing else
+  // here enforces them either), but series/tag deletion below both clean up
+  // their side of this table so it can't accumulate orphaned rows pointing at
+  // an id that no longer exists.
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS series_tags (
+      series_id INTEGER NOT NULL,
+      tag_id INTEGER NOT NULL,
+      PRIMARY KEY (series_id, tag_id)
+    )
+  `);
 
 // One-time seed of the mockup's original 21 series (the same data that used
 // to live in app.js's seriesData array) so the Library isn't empty on a
@@ -181,93 +182,98 @@ const SERIES_SEED = [
   { title: 'Kiss x Sis', badge: null, fill: 'success', pct: 100, eps: '12 / 12', monitored: true, status: 'ended', nextAirDays: null, addedDaysAgo: 3, poster: 'https://cdn.myanimelist.net/images/anime/1660/121553.jpg', meta: "2010 · Comedy, Romance, Ecchi · TV · 24 min eps", overview: "A boy tries to focus on high school entrance exams while his two step-sisters compete, loudly, for his affection." },
 ];
 
-// Defensive migration for DBs created before external_id/external_source
-// existed (added alongside real per-episode data — see the Episode
-// persistence section below). Lets us know which series came from a search
-// result, and what id to look episodes up by, without touching anything
-// already in the table.
-const seriesColumns = db.prepare('PRAGMA table_info(series)').all().map((c) => c.name);
-if (!seriesColumns.includes('external_id')) {
-  db.exec(`ALTER TABLE series ADD COLUMN external_id TEXT`);
-  logInfo('Database', 'Migrated series table: added external_id column');
-}
-if (!seriesColumns.includes('external_source')) {
-  db.exec(`ALTER TABLE series ADD COLUMN external_source TEXT`);
-  logInfo('Database', 'Migrated series table: added external_source column');
-}
-if (!seriesColumns.includes('air_status')) {
-  // The real, source-specific airing status text (TVDB's "Ended"/
-  // "Continuing"/"Upcoming", MAL's "Finished Airing"/"Currently Airing"/
-  // "Not Yet Aired") — separate from the `status` column above, which stays
-  // a plain continuing/ended binary the rest of the app (filter tabs,
-  // badges) already depends on. See deriveAirStatus below for where this
-  // gets populated and the Next airing stat card on series.html for where
-  // it's shown for a series with no next episode date.
-  db.exec(`ALTER TABLE series ADD COLUMN air_status TEXT`);
-  logInfo('Database', 'Migrated series table: added air_status column');
-}
-if (!seriesColumns.includes('tvdb_episode_id')) {
-  // The TVDB series id used for episode lookups (see Episode persistence
-  // below) — separate from external_id/external_source, which record where
-  // the series itself was originally added from. A MAL-added series has no
-  // TVDB id at all until it's resolved once by title search; this caches
-  // that result so it's only ever looked up once.
-  db.exec(`ALTER TABLE series ADD COLUMN tvdb_episode_id TEXT`);
-  logInfo('Database', 'Migrated series table: added tvdb_episode_id column');
-}
-
-// Fields the Edit Series modal reads/writes — added together since they
-// all landed with that one feature.
-for (const [col, def] of [
-  ['monitor_new_seasons', "TEXT NOT NULL DEFAULT 'all'"],
-  ['season_folder', 'INTEGER NOT NULL DEFAULT 1'],
-  ['quality_profile', 'TEXT'],
-  ['series_type', "TEXT NOT NULL DEFAULT 'anime'"],
-  ['path', 'TEXT'],
-  // JSON array of alternate titles from the search result that added this
-  // series (native/romanized title, Japanese title, MAL's own synonyms
-  // list) — see resolveTvdbEpisodeSourceId in server/lib/tvdb.js for why:
-  // a MAL-added series' official English title (what's stored in `title`)
-  // frequently isn't what TVDB itself indexes the show under, so the very
-  // first title-only TVDB search this app tried could come back with zero
-  // results even for a real, well-known show. These give that resolution a
-  // second (and third, etc.) attempt instead of just giving up after one.
-  ['alt_titles', 'TEXT'],
-  // Ignore Specials — excludes season 0 from the eps/pct progress stats
-  // recomputeSeriesEpisodeStats (server/lib/series-stats.js) maintains, so a
-  // series with every real season complete but a special that was never
-  // released/grabbed doesn't sit at, say, "24 / 25" forever. Doesn't affect
-  // what's cached or shown anywhere else — the Specials tab on the series
-  // detail page still lists every special exactly as before; this only
-  // changes whether they're counted.
-  ['ignore_specials', 'INTEGER NOT NULL DEFAULT 0'],
-]) {
-  if (!seriesColumns.includes(col)) {
-    db.exec(`ALTER TABLE series ADD COLUMN ${col} ${def}`);
-    logInfo('Database', `Migrated series table: added ${col} column`);
+  // Defensive migration for DBs created before external_id/external_source
+  // existed (added alongside real per-episode data — see the Episode
+  // persistence section below). Lets us know which series came from a search
+  // result, and what id to look episodes up by, without touching anything
+  // already in the table.
+  const seriesColumns = await db.tableColumns('series');
+  if (!seriesColumns.includes('external_id')) {
+    await db.exec(`ALTER TABLE series ADD COLUMN external_id TEXT`);
+    logInfo('Database', 'Migrated series table: added external_id column');
   }
-}
-
-const seriesCount = db.prepare('SELECT COUNT(*) AS n FROM series').get().n;
-if (seriesCount === 0) {
-  const insertSeries = db.prepare(`
-    INSERT INTO series (title, badge, fill, pct, eps, monitored, status, next_air_days, added_days_ago, poster, meta, overview)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  for (const s of SERIES_SEED) {
-    insertSeries.run(
-      s.title, s.badge ?? null, s.fill, s.pct, s.eps, s.monitored ? 1 : 0, s.status,
-      s.nextAirDays ?? null, s.addedDaysAgo, s.poster ?? null, s.meta ?? null, s.overview ?? null
-    );
+  if (!seriesColumns.includes('external_source')) {
+    await db.exec(`ALTER TABLE series ADD COLUMN external_source TEXT`);
+    logInfo('Database', 'Migrated series table: added external_source column');
   }
-  logInfo('Database', `Seeded ${SERIES_SEED.length} default series into ${DB_PATH}`);
+  if (!seriesColumns.includes('air_status')) {
+    // The real, source-specific airing status text (TVDB's "Ended"/
+    // "Continuing"/"Upcoming", MAL's "Finished Airing"/"Currently Airing"/
+    // "Not Yet Aired") — separate from the `status` column above, which stays
+    // a plain continuing/ended binary the rest of the app (filter tabs,
+    // badges) already depends on. See deriveAirStatus below for where this
+    // gets populated and the Next airing stat card on series.html for where
+    // it's shown for a series with no next episode date.
+    await db.exec(`ALTER TABLE series ADD COLUMN air_status TEXT`);
+    logInfo('Database', 'Migrated series table: added air_status column');
+  }
+  if (!seriesColumns.includes('tvdb_episode_id')) {
+    // The TVDB series id used for episode lookups (see Episode persistence
+    // below) — separate from external_id/external_source, which record where
+    // the series itself was originally added from. A MAL-added series has no
+    // TVDB id at all until it's resolved once by title search; this caches
+    // that result so it's only ever looked up once.
+    await db.exec(`ALTER TABLE series ADD COLUMN tvdb_episode_id TEXT`);
+    logInfo('Database', 'Migrated series table: added tvdb_episode_id column');
+  }
+
+  // Fields the Edit Series modal reads/writes — added together since they
+  // all landed with that one feature.
+  for (const [col, def] of [
+    ['monitor_new_seasons', "TEXT NOT NULL DEFAULT 'all'"],
+    ['season_folder', 'INTEGER NOT NULL DEFAULT 1'],
+    ['quality_profile', 'TEXT'],
+    ['series_type', "TEXT NOT NULL DEFAULT 'anime'"],
+    ['path', 'TEXT'],
+    // JSON array of alternate titles from the search result that added this
+    // series (native/romanized title, Japanese title, MAL's own synonyms
+    // list) — see resolveTvdbEpisodeSourceId in server/lib/tvdb.js for why:
+    // a MAL-added series' official English title (what's stored in `title`)
+    // frequently isn't what TVDB itself indexes the show under, so the very
+    // first title-only TVDB search this app tried could come back with zero
+    // results even for a real, well-known show. These give that resolution a
+    // second (and third, etc.) attempt instead of just giving up after one.
+    ['alt_titles', 'TEXT'],
+    // Ignore Specials — excludes season 0 from the eps/pct progress stats
+    // recomputeSeriesEpisodeStats (server/lib/series-stats.js) maintains, so a
+    // series with every real season complete but a special that was never
+    // released/grabbed doesn't sit at, say, "24 / 25" forever. Doesn't affect
+    // what's cached or shown anywhere else — the Specials tab on the series
+    // detail page still lists every special exactly as before; this only
+    // changes whether they're counted.
+    ['ignore_specials', 'INTEGER NOT NULL DEFAULT 0'],
+  ]) {
+    if (!seriesColumns.includes(col)) {
+      await db.exec(`ALTER TABLE series ADD COLUMN ${col} ${def}`);
+      logInfo('Database', `Migrated series table: added ${col} column`);
+    }
+  }
+
+  const seriesCount = (await db.prepare('SELECT COUNT(*) AS n FROM series').get()).n;
+  if (Number(seriesCount) === 0) {
+    if (db.SEED_DEMO_DATA) {
+      const insertSeries = db.prepare(`
+        INSERT INTO series (title, badge, fill, pct, eps, monitored, status, next_air_days, added_days_ago, poster, meta, overview, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const s of SERIES_SEED) {
+        await insertSeries.run(
+          s.title, s.badge ?? null, s.fill, s.pct, s.eps, s.monitored ? 1 : 0, s.status,
+          s.nextAirDays ?? null, s.addedDaysAgo, s.poster ?? null, s.meta ?? null, s.overview ?? null, db.now()
+        );
+      }
+      logInfo('Database', `Seeded ${SERIES_SEED.length} default series into ${db.describe()}`);
+    } else {
+      logInfo('Database', `series table is empty — skipping demo seed (APP_ENV=${db.APP_ENV})`);
+    }
+  }
+});
+
+async function tagIdsForSeries(seriesId) {
+  return (await db.prepare('SELECT tag_id FROM series_tags WHERE series_id = ? ORDER BY tag_id ASC').all(seriesId)).map((r) => r.tag_id);
 }
 
-function tagIdsForSeries(seriesId) {
-  return db.prepare('SELECT tag_id FROM series_tags WHERE series_id = ? ORDER BY tag_id ASC').all(seriesId).map((r) => r.tag_id);
-}
-
-function rowToSeries(row) {
+async function rowToSeries(row) {
   return {
     id: row.id,
     title: row.title,
@@ -292,7 +298,7 @@ function rowToSeries(row) {
     seriesType: row.series_type,
     path: row.path,
     ignoreSpecials: !!row.ignore_specials,
-    tagIds: tagIdsForSeries(row.id),
+    tagIds: await tagIdsForSeries(row.id),
   };
 }
 
@@ -300,8 +306,8 @@ function rowToSeries(row) {
 async function handleSeriesApi(req, res, urlPath) {
   // GET /api/series — everything the Library grid / series detail page need.
   if (req.method === 'GET' && urlPath === '/api/series') {
-    const rows = db.prepare('SELECT * FROM series ORDER BY id ASC').all();
-    sendJson(res, 200, rows.map(rowToSeries));
+    const rows = await db.prepare('SELECT * FROM series ORDER BY id ASC').all();
+    sendJson(res, 200, await Promise.all(rows.map(rowToSeries)));
     return true;
   }
 
@@ -350,7 +356,7 @@ async function handleSeriesApi(req, res, urlPath) {
     // casing/punctuation" is the same comparison problem folder matching
     // already solves.
     if (externalId && externalSource) {
-      const byExternal = db.prepare('SELECT id, title FROM series WHERE external_id = ? AND external_source = ?')
+      const byExternal = await db.prepare('SELECT id, title FROM series WHERE external_id = ? AND external_source = ?')
         .get(externalId, externalSource);
       if (byExternal) {
         sendJson(res, 409, { error: `"${byExternal.title}" is already in the Library`, existingId: byExternal.id });
@@ -358,7 +364,7 @@ async function handleSeriesApi(req, res, urlPath) {
       }
     }
     const normalizedTitle = normalizeFolderName(title);
-    const byTitle = db.prepare('SELECT id, title FROM series').all()
+    const byTitle = (await db.prepare('SELECT id, title FROM series').all())
       .find((r) => normalizeFolderName(r.title) === normalizedTitle);
     if (byTitle) {
       sendJson(res, 409, { error: `"${byTitle.title}" is already in the Library`, existingId: byTitle.id });
@@ -371,7 +377,7 @@ async function handleSeriesApi(req, res, urlPath) {
     // once something else happens to update it later (nothing currently
     // does; status/air_status are set once, here, and never revisited).
     const { airStatus, status } = deriveAirStatus(body.status, externalSource);
-    const defaultPath = defaultSeriesPathFor(title, body.rootFolder ? String(body.rootFolder) : null);
+    const defaultPath = await defaultSeriesPathFor(title, body.rootFolder ? String(body.rootFolder) : null);
     // Same "trust the UI already only offers real choices" convention
     // PATCH /api/series/:id's own qualityProfile handling already uses
     // (getQualityProfile gracefully defaults to "every tier allowed" for a
@@ -381,13 +387,13 @@ async function handleSeriesApi(req, res, urlPath) {
     // filesystem path, not just a lookup key).
     const qualityProfile = body.qualityProfile ? String(body.qualityProfile) : null;
 
-    const { lastInsertRowid } = db.prepare(`
-      INSERT INTO series (title, badge, fill, pct, eps, monitored, status, air_status, next_air_days, added_days_ago, poster, meta, overview, external_id, external_source, alt_titles, path, quality_profile)
-      VALUES (?, NULL, 'accent', 0, '0 / 0', 1, ?, ?, NULL, 0, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(title, status, airStatus, body.poster || null, meta, body.overview || null, externalId, externalSource, altTitlesJson, defaultPath, qualityProfile);
-    const created = db.prepare('SELECT * FROM series WHERE id = ?').get(lastInsertRowid);
+    const created = await db.prepare(`
+      INSERT INTO series (title, badge, fill, pct, eps, monitored, status, air_status, next_air_days, added_days_ago, poster, meta, overview, external_id, external_source, alt_titles, path, quality_profile, created_at)
+      VALUES (?, NULL, 'accent', 0, '0 / 0', 1, ?, ?, NULL, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      RETURNING *
+    `).get(title, status, airStatus, body.poster || null, meta, body.overview || null, externalId, externalSource, altTitlesJson, defaultPath, qualityProfile, db.now());
     logInfo('SeriesService', `Series added: ${title}${externalSource ? ` (${externalSource}#${externalId})` : ''}`);
-    sendJson(res, 201, rowToSeries(created));
+    sendJson(res, 201, await rowToSeries(created));
     // Start warming the episode cache immediately instead of waiting for
     // someone to open the series detail page — see warmEpisodesInBackground
     // below (defined near the rest of the episode-fetching code, since it
@@ -408,7 +414,7 @@ async function handleSeriesApi(req, res, urlPath) {
   const patchMatch = req.method === 'PATCH' && urlPath.match(/^\/api\/series\/(\d+)$/);
   if (patchMatch) {
     const id = Number(patchMatch[1]);
-    const existing = db.prepare('SELECT * FROM series WHERE id = ?').get(id);
+    const existing = await db.prepare('SELECT * FROM series WHERE id = ?').get(id);
     if (!existing) {
       sendJson(res, 404, { error: 'Series not found' });
       return true;
@@ -433,17 +439,17 @@ async function handleSeriesApi(req, res, urlPath) {
       // different series entirely) would otherwise silently produce two
       // Library rows that read as the same show.
       const normalizedTitle = normalizeFolderName(title);
-      const clash = db.prepare('SELECT id, title FROM series WHERE id != ?').all(id)
+      const clash = (await db.prepare('SELECT id, title FROM series WHERE id != ?').all(id))
         .find((r) => normalizeFolderName(r.title) === normalizedTitle);
       if (clash) {
         sendJson(res, 409, { error: `"${clash.title}" already exists in the Library` });
         return true;
       }
-      db.prepare('UPDATE series SET title = ? WHERE id = ?').run(title, id);
+      await db.prepare('UPDATE series SET title = ? WHERE id = ?').run(title, id);
       if (title !== existing.title) logInfo('SeriesService', `Renamed "${existing.title}" to "${title}"`);
     }
     if (body.monitored !== undefined) {
-      db.prepare('UPDATE series SET monitored = ? WHERE id = ?').run(body.monitored ? 1 : 0, id);
+      await db.prepare('UPDATE series SET monitored = ? WHERE id = ?').run(body.monitored ? 1 : 0, id);
       logInfo('SeriesService', `${existing.title}: monitored set to ${!!body.monitored}`);
     }
     if (body.monitorNewSeasons !== undefined) {
@@ -452,13 +458,13 @@ async function handleSeriesApi(req, res, urlPath) {
         sendJson(res, 400, { error: `monitorNewSeasons must be one of: ${MONITOR_NEW_SEASONS_OPTIONS.join(', ')}` });
         return true;
       }
-      db.prepare('UPDATE series SET monitor_new_seasons = ? WHERE id = ?').run(value, id);
+      await db.prepare('UPDATE series SET monitor_new_seasons = ? WHERE id = ?').run(value, id);
     }
     if (body.seasonFolder !== undefined) {
-      db.prepare('UPDATE series SET season_folder = ? WHERE id = ?').run(body.seasonFolder ? 1 : 0, id);
+      await db.prepare('UPDATE series SET season_folder = ? WHERE id = ?').run(body.seasonFolder ? 1 : 0, id);
     }
     if (body.qualityProfile !== undefined) {
-      db.prepare('UPDATE series SET quality_profile = ? WHERE id = ?').run(body.qualityProfile || null, id);
+      await db.prepare('UPDATE series SET quality_profile = ? WHERE id = ?').run(body.qualityProfile || null, id);
     }
     if (body.seriesType !== undefined) {
       const value = String(body.seriesType);
@@ -466,17 +472,17 @@ async function handleSeriesApi(req, res, urlPath) {
         sendJson(res, 400, { error: `seriesType must be one of: ${SERIES_TYPE_OPTIONS.join(', ')}` });
         return true;
       }
-      db.prepare('UPDATE series SET series_type = ? WHERE id = ?').run(value, id);
+      await db.prepare('UPDATE series SET series_type = ? WHERE id = ?').run(value, id);
     }
     if (body.ignoreSpecials !== undefined) {
-      db.prepare('UPDATE series SET ignore_specials = ? WHERE id = ?').run(body.ignoreSpecials ? 1 : 0, id);
+      await db.prepare('UPDATE series SET ignore_specials = ? WHERE id = ?').run(body.ignoreSpecials ? 1 : 0, id);
       // Recomputed right here rather than waiting for the next real
       // import/delete to happen to touch eps/pct — flipping this toggle
       // should visibly change the progress bar the moment you hit Save
       // (handleEditSaved in SeriesPage.jsx merges this response straight
       // into the page's series state), not just the next time something
       // else recomputes stats.
-      recomputeSeriesEpisodeStats(id);
+      await recomputeSeriesEpisodeStats(id);
       logInfo('SeriesService', `${existing.title}: ignore specials set to ${!!body.ignoreSpecials}`);
     }
     // path CAN be set here, as a manual override — added after a real gap
@@ -501,7 +507,7 @@ async function handleSeriesApi(req, res, urlPath) {
         sendJson(res, 400, { error: `"${newPath}" doesn't exist on disk.` });
         return true;
       }
-      db.prepare('UPDATE series SET path = ? WHERE id = ?').run(newPath, id);
+      await db.prepare('UPDATE series SET path = ? WHERE id = ?').run(newPath, id);
       if (newPath !== existing.path) logInfo('SeriesService', `${existing.title}: path manually set to "${newPath}"`);
     }
     if (body.tagIds !== undefined) {
@@ -513,15 +519,14 @@ async function handleSeriesApi(req, res, urlPath) {
       // handle "here's the new list of tags" from the modal's tag picker,
       // and this table only ever has a handful of rows per series. (No
       // db.transaction() here — node:sqlite's DatabaseSync doesn't have
-      // better-sqlite3's transaction() helper; these two statements run
-      // synchronously back to back, which is enough for a single-process,
-      // single-connection app like this one.)
-      db.prepare('DELETE FROM series_tags WHERE series_id = ?').run(id);
-      const insertTag = db.prepare('INSERT OR IGNORE INTO series_tags (series_id, tag_id) VALUES (?, ?)');
-      for (const tagId of body.tagIds) insertTag.run(id, Number(tagId));
+      // better-sqlite3's transaction() helper; these statements run
+      // sequentially, which is enough for a single-process app like this one.)
+      await db.prepare('DELETE FROM series_tags WHERE series_id = ?').run(id);
+      const insertTag = db.prepare('INSERT INTO series_tags (series_id, tag_id) VALUES (?, ?) ON CONFLICT (series_id, tag_id) DO NOTHING');
+      for (const tagId of body.tagIds) await insertTag.run(id, Number(tagId));
     }
-    const updated = db.prepare('SELECT * FROM series WHERE id = ?').get(id);
-    sendJson(res, 200, rowToSeries(updated));
+    const updated = await db.prepare('SELECT * FROM series WHERE id = ?').get(id);
+    sendJson(res, 200, await rowToSeries(updated));
     return true;
   }
 
@@ -532,7 +537,7 @@ async function handleSeriesApi(req, res, urlPath) {
   const deleteMatch = req.method === 'DELETE' && urlPath.match(/^\/api\/series\/(\d+)$/);
   if (deleteMatch) {
     const id = Number(deleteMatch[1]);
-    const existing = db.prepare('SELECT * FROM series WHERE id = ?').get(id);
+    const existing = await db.prepare('SELECT * FROM series WHERE id = ?').get(id);
     if (!existing) {
       sendJson(res, 404, { error: 'Series not found' });
       return true;
@@ -544,9 +549,9 @@ async function handleSeriesApi(req, res, urlPath) {
     // way to ever clean it up short of hand-editing the database. Deleted
     // explicitly here, before the series row itself, for the same reason
     // series_tags already was.
-    db.prepare('DELETE FROM episodes WHERE series_id = ?').run(id);
-    db.prepare('DELETE FROM series_tags WHERE series_id = ?').run(id);
-    db.prepare('DELETE FROM series WHERE id = ?').run(id);
+    await db.prepare('DELETE FROM episodes WHERE series_id = ?').run(id);
+    await db.prepare('DELETE FROM series_tags WHERE series_id = ?').run(id);
+    await db.prepare('DELETE FROM series WHERE id = ?').run(id);
     logInfo('SeriesService', `Series deleted: ${existing.title}`);
     sendJson(res, 200, { ok: true });
     return true;

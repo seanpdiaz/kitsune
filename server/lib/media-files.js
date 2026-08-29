@@ -156,8 +156,8 @@ function guessSourceLabel(name) {
 // completion) passes one in now; source (WEBDL/Bluray/HDTV/...) still only
 // ever comes from the name — there's no signal for *that* in the video
 // bytes themselves, so it stays a best-effort guess either way.
-function guessQualityTierName(filename, probedResolutionGroup = null) {
-  const tiers = getQualityTiers();
+async function guessQualityTierName(filename, probedResolutionGroup = null) {
+  const tiers = await getQualityTiers();
   if (tiers.length === 0) return null;
 
   const resGroup = probedResolutionGroup || guessResolutionGroup(filename);

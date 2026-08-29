@@ -12,7 +12,7 @@
 // reusing rowToItem so the response shape matches what GET/PATCH already
 // return.
 // ---------------------------------------------------------------------------
-const { db } = require('../db');
+const db = require('../db');
 const { logInfo, logWarn } = require('../logger');
 const { sendJson, readJsonBody } = require('../lib/http');
 const { rowToItem } = require('./settings-items');
@@ -27,7 +27,7 @@ async function handleDownloadClientsApi(req, res, urlPath) {
 
   const id = Number(testMatch[1]);
   logInfo('DownloadClientService', `Test requested for download client id ${id}`);
-  const existing = db.prepare("SELECT * FROM settings_items WHERE id = ? AND section = 'download-clients'").get(id);
+  const existing = await db.prepare("SELECT * FROM settings_items WHERE id = ? AND section = 'download-clients'").get(id);
   if (!existing) {
     // Same HTTP status (404) as "no /api route matched at all" (see
     // server.js's final `if (!handled)` fallback) — logged explicitly here
@@ -79,8 +79,8 @@ async function handleDownloadClientsApi(req, res, urlPath) {
     status: result.ok ? 'ok' : 'fail',
     version: result.ok ? result.version : saved.version,
   };
-  db.prepare('UPDATE settings_items SET data = ? WHERE id = ?').run(JSON.stringify(updatedData), id);
-  const updatedRow = db.prepare('SELECT * FROM settings_items WHERE id = ?').get(id);
+  await db.prepare('UPDATE settings_items SET data = ? WHERE id = ?').run(JSON.stringify(updatedData), id);
+  const updatedRow = await db.prepare('SELECT * FROM settings_items WHERE id = ?').get(id);
 
   if (result.ok) {
     logInfo('DownloadClientService', `Test succeeded for "${saved.name}" (${config.type} v${result.version})`);
@@ -107,8 +107,8 @@ async function handleDownloadClientsApi(req, res, urlPath) {
 // pause-by-hash) that it isn't a drop-in extension of this same route —
 // left for later if it's ever wanted, not silently faked here.
 // ---------------------------------------------------------------------------
-function loadClient(id) {
-  const row = db.prepare("SELECT * FROM settings_items WHERE id = ? AND section = 'download-clients'").get(id);
+async function loadClient(id) {
+  const row = await db.prepare("SELECT * FROM settings_items WHERE id = ? AND section = 'download-clients'").get(id);
   return row ? JSON.parse(row.data) : null;
 }
 
@@ -120,7 +120,7 @@ async function handleTorrentsApi(req, res, urlPath) {
   if (!listOrAddMatch && !actionMatch && !deleteMatch) return false;
 
   const id = Number((listOrAddMatch || actionMatch || deleteMatch)[1]);
-  const saved = loadClient(id);
+  const saved = await loadClient(id);
   if (!saved) {
     sendJson(res, 404, { error: 'Download client not found' });
     return true;

@@ -23,7 +23,7 @@ const MIME = {
   '.svg': 'image/svg+xml',
 };
 
-const { DB_PATH } = require('./server/db');
+const db = require('./server/db');
 const { logDebug, logInfo, logWarn, logError } = require('./server/logger');
 const { sendJson } = require('./server/lib/http');
 
@@ -167,8 +167,26 @@ const server = http.createServer(async (req, res) => {
   });
 });
 
-server.listen(PORT, () => {
-  logInfo('Server', `Kitsune mockup running at http://localhost:${PORT}`);
-  logInfo('Server', `Data persisted to ${DB_PATH}`);
-  startDiskUsageScheduler(DISK_USAGE_REFRESH_HOURS);
-});
+// Every route/lib module registered its table-creation and migration work
+// with db.init(...) instead of running it inline at require() time (see
+// server/db.js's header) — this is what actually runs it, and needs to
+// finish before the first request can arrive, same guarantee as before.
+(async () => {
+  try {
+    await db.ready();
+  } catch (err) {
+    logError('Server', `Database initialization failed: ${err && err.stack ? err.stack : err}`);
+    console.error('Fatal: database initialization failed:', err);
+    process.exit(1);
+  }
+
+  server.listen(PORT, () => {
+    logInfo('Server', `Kitsune mockup running at http://localhost:${PORT}`);
+    logInfo('Server', `Using ${db.DB_CLIENT} — data persisted to ${db.describe()}`);
+    // Not awaited — the server starts accepting requests right away; see
+    // startDiskUsageScheduler's own header comment.
+    startDiskUsageScheduler(DISK_USAGE_REFRESH_HOURS).catch((err) => {
+      logError('Server', `Disk usage scheduler failed to start: ${err && err.stack ? err.stack : err}`);
+    });
+  });
+})();

@@ -3,7 +3,7 @@
 // Download Clients, Import Lists, Connect, Profiles, Custom Formats, Root
 // Folders). rowToItem is also reused by routes/root-folders.js.
 // ---------------------------------------------------------------------------
-const { db, DB_PATH } = require('../db');
+const db = require('../db');
 const { logInfo } = require('../logger');
 const { sendJson, readJsonBody } = require('../lib/http');
 const { refreshDiskUsage } = require('../lib/disk-usage');
@@ -27,16 +27,6 @@ const { refreshDiskUsage } = require('../lib/disk-usage');
 // Same rationale as Tags: plain REST/JSON now, swappable for a real SQL
 // container later without the frontend knowing the difference.
 // ---------------------------------------------------------------------------
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS settings_items (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    section TEXT NOT NULL,
-    data TEXT NOT NULL,
-    position INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-  )
-`);
 
 // mockup's original placeholder data survives the move from in-memory arrays
 // to the database, instead of every list appearing empty on first run.
@@ -161,32 +151,48 @@ const LIST_SECTION_SEEDS = {
   ],
 };
 
-const countBySection = db.prepare('SELECT COUNT(*) AS n FROM settings_items WHERE section = ?');
-const insertItem = db.prepare('INSERT INTO settings_items (section, data, position) VALUES (?, ?, ?)');
-for (const [section, items] of Object.entries(LIST_SECTION_SEEDS)) {
-  if (countBySection.get(section).n === 0) {
-    items.forEach((item, i) => insertItem.run(section, JSON.stringify(item), i));
-    logInfo('Database', `Seeded ${items.length} default "${section}" items into ${DB_PATH}`);
-  }
-}
+db.init(async () => {
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS settings_items (
+      id ${db.PK},
+      section TEXT NOT NULL,
+      data TEXT NOT NULL,
+      position INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    )
+  `);
 
-// Backfills `type: 'nyaa'` onto an existing "Nyaa.si" indexer row from
-// before real search existed — a database that already seeded its indexers
-// table (any install from before this feature) has a Nyaa.si row with no
-// `type` field at all, and real search/test (see server/lib/nyaa-search.js)
-// needs that field to reliably find "the one real indexer" rather than
-// matching on a name string the row could just as easily be renamed away
-// from. Runs every startup but only actually updates anything the first
-// time — cheap at this table's size (a handful of rows) and avoids a
-// separate one-shot migration-tracking mechanism for a single field.
-for (const row of db.prepare("SELECT * FROM settings_items WHERE section = 'indexers'").all()) {
-  const data = JSON.parse(row.data);
-  if (data.name === 'Nyaa.si' && !data.type) {
-    data.type = 'nyaa';
-    db.prepare('UPDATE settings_items SET data = ? WHERE id = ?').run(JSON.stringify(data), row.id);
-    logInfo('Database', 'Migrated indexers row "Nyaa.si": added type "nyaa"');
+  const countBySection = db.prepare('SELECT COUNT(*) AS n FROM settings_items WHERE section = ?');
+  const insertItem = db.prepare('INSERT INTO settings_items (section, data, position, created_at) VALUES (?, ?, ?, ?)');
+  for (const [section, items] of Object.entries(LIST_SECTION_SEEDS)) {
+    if (Number((await countBySection.get(section)).n) === 0) {
+      if (db.SEED_DEMO_DATA) {
+        for (let i = 0; i < items.length; i++) await insertItem.run(section, JSON.stringify(items[i]), i, db.now());
+        logInfo('Database', `Seeded ${items.length} default "${section}" items into ${db.describe()}`);
+      } else {
+        logInfo('Database', `"${section}" settings are empty — skipping demo seed (APP_ENV=${db.APP_ENV})`);
+      }
+    }
   }
-}
+
+  // Backfills `type: 'nyaa'` onto an existing "Nyaa.si" indexer row from
+  // before real search existed — a database that already seeded its indexers
+  // table (any install from before this feature) has a Nyaa.si row with no
+  // `type` field at all, and real search/test (see server/lib/nyaa-search.js)
+  // needs that field to reliably find "the one real indexer" rather than
+  // matching on a name string the row could just as easily be renamed away
+  // from. Runs every startup but only actually updates anything the first
+  // time — cheap at this table's size (a handful of rows) and avoids a
+  // separate one-shot migration-tracking mechanism for a single field.
+  for (const row of await db.prepare("SELECT * FROM settings_items WHERE section = 'indexers'").all()) {
+    const data = JSON.parse(row.data);
+    if (data.name === 'Nyaa.si' && !data.type) {
+      data.type = 'nyaa';
+      await db.prepare('UPDATE settings_items SET data = ? WHERE id = ?').run(JSON.stringify(data), row.id);
+      logInfo('Database', 'Migrated indexers row "Nyaa.si": added type "nyaa"');
+    }
+  }
+});
 
 // ---------------------------------------------------------------------------
 // /api/settings-items/:section — list-style settings sections
@@ -210,7 +216,7 @@ async function handleSettingsItemsApi(req, res, urlPath) {
   // display order (position, then insertion order as a tiebreaker).
   if (req.method === 'GET' && listMatch) {
     const [, section] = listMatch;
-    const rows = db.prepare('SELECT * FROM settings_items WHERE section = ? ORDER BY position ASC, id ASC').all(section);
+    const rows = await db.prepare('SELECT * FROM settings_items WHERE section = ? ORDER BY position ASC, id ASC').all(section);
     sendJson(res, 200, rows.map(rowToItem));
     return true;
   }
@@ -225,11 +231,10 @@ async function handleSettingsItemsApi(req, res, urlPath) {
       sendJson(res, 400, { error: 'Invalid JSON body' });
       return true;
     }
-    const maxPos = db.prepare('SELECT COALESCE(MAX(position), -1) AS m FROM settings_items WHERE section = ?').get(section).m;
-    const { lastInsertRowid } = db.prepare('INSERT INTO settings_items (section, data, position) VALUES (?, ?, ?)')
-      .run(section, JSON.stringify(body), maxPos + 1);
-    const created = db.prepare('SELECT * FROM settings_items WHERE id = ?').get(lastInsertRowid);
-    logInfo('SettingsService', `Added "${section}" item: ${body.name || body.path || `#${lastInsertRowid}`}`);
+    const maxPos = (await db.prepare('SELECT COALESCE(MAX(position), -1) AS m FROM settings_items WHERE section = ?').get(section)).m;
+    const created = await db.prepare('INSERT INTO settings_items (section, data, position, created_at) VALUES (?, ?, ?, ?) RETURNING *')
+      .get(section, JSON.stringify(body), Number(maxPos) + 1, db.now());
+    logInfo('SettingsService', `Added "${section}" item: ${body.name || body.path || `#${created.id}`}`);
     sendJson(res, 201, rowToItem(created));
     return true;
   }
@@ -238,7 +243,7 @@ async function handleSettingsItemsApi(req, res, urlPath) {
   if (req.method === 'PATCH' && itemMatch) {
     const [, section, idStr] = itemMatch;
     const id = Number(idStr);
-    const existing = db.prepare('SELECT * FROM settings_items WHERE id = ? AND section = ?').get(id, section);
+    const existing = await db.prepare('SELECT * FROM settings_items WHERE id = ? AND section = ?').get(id, section);
     if (!existing) {
       sendJson(res, 404, { error: 'Item not found' });
       return true;
@@ -259,11 +264,11 @@ async function handleSettingsItemsApi(req, res, urlPath) {
     const { position, ...dataFields } = body;
     const merged = { ...JSON.parse(existing.data), ...dataFields };
     if (position !== undefined) {
-      db.prepare('UPDATE settings_items SET data = ?, position = ? WHERE id = ?').run(JSON.stringify(merged), position, id);
+      await db.prepare('UPDATE settings_items SET data = ?, position = ? WHERE id = ?').run(JSON.stringify(merged), position, id);
     } else {
-      db.prepare('UPDATE settings_items SET data = ? WHERE id = ?').run(JSON.stringify(merged), id);
+      await db.prepare('UPDATE settings_items SET data = ? WHERE id = ?').run(JSON.stringify(merged), id);
     }
-    const updated = db.prepare('SELECT * FROM settings_items WHERE id = ?').get(id);
+    const updated = await db.prepare('SELECT * FROM settings_items WHERE id = ?').get(id);
     sendJson(res, 200, rowToItem(updated));
     return true;
   }
@@ -272,19 +277,19 @@ async function handleSettingsItemsApi(req, res, urlPath) {
   if (req.method === 'DELETE' && itemMatch) {
     const [, section, idStr] = itemMatch;
     const id = Number(idStr);
-    const existing = db.prepare('SELECT * FROM settings_items WHERE id = ? AND section = ?').get(id, section);
+    const existing = await db.prepare('SELECT * FROM settings_items WHERE id = ? AND section = ?').get(id, section);
     if (!existing) {
       sendJson(res, 404, { error: 'Item not found' });
       return true;
     }
-    db.prepare('DELETE FROM settings_items WHERE id = ?').run(id);
+    await db.prepare('DELETE FROM settings_items WHERE id = ?').run(id);
     const existingData = JSON.parse(existing.data);
     logInfo('SettingsService', `Removed "${section}" item: ${existingData.name || existingData.path || `#${id}`}`);
     // Root folder removal is the one delete in this generic handler that
     // needs to trigger a Disk usage recompute (see server/lib/disk-usage.js
     // and the matching hook on the add path in routes/root-folders.js) —
     // fire-and-forget, doesn't hold up this response.
-    if (section === 'root-folders') refreshDiskUsage();
+    if (section === 'root-folders') refreshDiskUsage().catch(() => {});
     sendJson(res, 200, { ok: true });
     return true;
   }
