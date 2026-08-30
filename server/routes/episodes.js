@@ -11,7 +11,7 @@ const { walkVideoFiles, guessQualityTierName, guessSeasonEpisode, resolutionGrou
 const { probeMediaStreams } = require('../lib/ffprobe');
 const { episodeFileNameFor, getMediaManagementSettings } = require('../lib/episode-paths');
 const { applyPermissions } = require('../lib/permissions');
-const { applyDefaultTrackFlags } = require('../lib/mkvpropedit');
+const { applyDefaultTrackFlags, checkMkvpropeditAvailability } = require('../lib/mkvpropedit');
 
 // ---------------------------------------------------------------------------
 // Episode persistence — real per-episode titles/air dates
@@ -180,6 +180,9 @@ async function handleSeriesEpisodesApi(req, res, urlPath) {
 
   const editTracksMatch = req.method === 'PATCH' && urlPath.match(/^\/api\/episodes\/(\d+)\/tracks$/);
   if (editTracksMatch) return handleEditEpisodeTracks(req, res, editTracksMatch);
+
+  const editSeriesTracksMatch = req.method === 'PATCH' && urlPath.match(/^\/api\/series\/(\d+)\/tracks$/);
+  if (editSeriesTracksMatch) return handleEditSeriesTracks(req, res, editSeriesTracksMatch);
 
   const renamePreviewMatch = req.method === 'GET' && urlPath.match(/^\/api\/series\/(\d+)\/rename-preview$/);
   if (renamePreviewMatch) return handleRenamePreview(req, res, renamePreviewMatch);
@@ -478,6 +481,177 @@ async function handleEditEpisodeTracks(req, res, match) {
 
   logInfo('EpisodeService', `Updated default tracks for episode ${id} (S${episode.season_number}E${episode.num}): ${Object.keys(edits).join(', ')}`);
   sendJson(res, 200, { id, mediaStreams: freshStreams || mediaStreams });
+  return true;
+}
+
+// Finds the 1-based position of the track a bulk selection (see
+// handleEditSeriesTracks below) resolves to within one episode's own real
+// probed track list — the frontend picks a selection from the UNION of
+// every track it saw across the whole season/series (built client-side from
+// each episode's own mediaStreams), so any one episode's file may or may not
+// actually have a track matching it (a different release group's batch, a
+// missing dub, etc.). Matches by language always; by title too, but only
+// when the selection actually specifies one — a selection with no title
+// (the common case: one track per language) matches the first track of
+// that language regardless of what it's titled, while a selection that DID
+// specify a title (picking "English — Signs & Songs" over "English —
+// Dialogue") only matches a track whose title is exactly that one, rather
+// than silently falling back to "any English track" and picking the wrong
+// one. Returns null (not a fabricated best guess) when nothing qualifies.
+function findTrackIndex(tracks, selection) {
+  for (let i = 0; i < tracks.length; i += 1) {
+    const t = tracks[i];
+    if (t.language !== selection.language) continue;
+    if (selection.title != null && t.title !== selection.title) continue;
+    return i + 1;
+  }
+  return null;
+}
+
+// PATCH /api/series/:id/tracks — the same default-audio/default-subtitle
+// edit handleEditEpisodeTracks does for one episode, applied across every
+// real, probed .mkv file in a whole season (body.seasonNumber given) or the
+// whole series (omitted). Selections here are by {language, title} —
+// see findTrackIndex above — rather than the single-episode endpoint's raw
+// 1-based index, because a batch spans files whose track order/count can
+// differ episode to episode; the frontend still shows the same kind of
+// radio list, just built from the union of every in-scope episode's tracks
+// instead of one episode's own. Same body shape as the single-episode
+// endpoint otherwise: a key present (even as null) means "touch this
+// type," a key absent means "leave it alone"; null means "clear this
+// type's default on every file that has one."
+//
+// Every eligible file gets its own independent attempt — one file with no
+// matching track, or one mkvpropedit failure, doesn't stop the rest from
+// being processed. The one thing checked up front rather than per-file is
+// whether mkvpropedit is even on this machine's PATH at all: if it isn't,
+// every single file would fail identically, so that's reported once instead
+// of once per episode.
+async function handleEditSeriesTracks(req, res, match) {
+  const user = await getSessionUser(req);
+  if (!user) {
+    sendJson(res, 401, { error: 'Not signed in.' });
+    return true;
+  }
+  const seriesId = Number(match[1]);
+  const series = await db.prepare('SELECT * FROM series WHERE id = ?').get(seriesId);
+  if (!series) {
+    sendJson(res, 404, { error: 'Series not found' });
+    return true;
+  }
+
+  let body;
+  try {
+    body = await readJsonBody(req);
+  } catch {
+    sendJson(res, 400, { error: 'Invalid JSON body' });
+    return true;
+  }
+
+  const hasAudioSelection = 'audioSelection' in body;
+  const hasSubtitleSelection = 'subtitleSelection' in body;
+  if (!hasAudioSelection && !hasSubtitleSelection) {
+    sendJson(res, 400, { error: 'Nothing to change — provide audioSelection and/or subtitleSelection.' });
+    return true;
+  }
+  for (const [field, value] of [['audioSelection', body.audioSelection], ['subtitleSelection', body.subtitleSelection]]) {
+    if (value != null && (typeof value !== 'object' || typeof value.language !== 'string' || !value.language)) {
+      sendJson(res, 400, { error: `${field} must be null or an object with a language.` });
+      return true;
+    }
+  }
+
+  if (!checkMkvpropeditAvailability()) {
+    sendJson(res, 500, { error: "mkvpropedit isn't installed on this machine — install MKVToolNix to edit default tracks." });
+    return true;
+  }
+
+  const seasonNumber = body.seasonNumber != null ? Number(body.seasonNumber) : null;
+  const rows = seasonNumber != null
+    ? await db.prepare('SELECT * FROM episodes WHERE series_id = ? AND season_number = ?').all(seriesId, seasonNumber)
+    : await db.prepare('SELECT * FROM episodes WHERE series_id = ?').all(seriesId);
+
+  // Only real, downloaded, probed .mkv files are even candidates — anything
+  // else (not downloaded, a non-.mkv container, downloaded before ffprobe
+  // ever ran) has no real track data to match a selection against, same
+  // gate the single-episode endpoint applies to the one file it's given.
+  const eligible = rows.filter((row) => {
+    if (!row.downloaded || !row.path) return false;
+    if (path.extname(row.path).toLowerCase() !== '.mkv') return false;
+    return !!row.media_streams;
+  });
+  if (eligible.length === 0) {
+    sendJson(res, 400, {
+      error: seasonNumber != null
+        ? 'No probed .mkv files found in this season yet.'
+        : 'No probed .mkv files found in this series yet.',
+    });
+    return true;
+  }
+
+  const updated = [];
+  const skipped = [];
+  const errors = [];
+
+  for (const row of eligible) {
+    let mediaStreams;
+    try {
+      mediaStreams = JSON.parse(row.media_streams);
+    } catch {
+      continue; // corrupt row — same as "never probed" for this purpose, silently excluded
+    }
+    const code = `S${row.season_number}E${row.num}`;
+    const edits = {};
+    const unmatchedTypes = [];
+
+    for (const [type, field, list] of [
+      ['audio', 'audioSelection', mediaStreams.audio || []],
+      ['subtitle', 'subtitleSelection', mediaStreams.subtitles || []],
+    ]) {
+      if (!(field in body)) continue;
+      const selection = body[field];
+      if (list.length === 0) continue; // nothing of this type on this file — not a failure, just not applicable
+      if (selection === null) {
+        edits[type] = { count: list.length, defaultIndex: null };
+        continue;
+      }
+      const foundIndex = findTrackIndex(list, selection);
+      if (foundIndex === null) {
+        unmatchedTypes.push(type);
+        continue;
+      }
+      edits[type] = { count: list.length, defaultIndex: foundIndex };
+    }
+
+    if (Object.keys(edits).length === 0) {
+      if (unmatchedTypes.length > 0) {
+        skipped.push({ episodeId: row.id, code, reason: `no matching ${unmatchedTypes.join(' or ')} track` });
+      }
+      continue;
+    }
+
+    const result = await applyDefaultTrackFlags(row.path, edits);
+    if (!result.ok) {
+      errors.push({ episodeId: row.id, code, error: result.error });
+      continue;
+    }
+
+    const freshStreams = await probeMediaStreams(row.path);
+    if (freshStreams) {
+      await db.prepare('UPDATE episodes SET media_streams = ? WHERE id = ?').run(JSON.stringify(freshStreams), row.id);
+    }
+    if (unmatchedTypes.length > 0) {
+      skipped.push({ episodeId: row.id, code, reason: `no matching ${unmatchedTypes.join(' or ')} track` });
+    }
+    updated.push({ episodeId: row.id, code });
+  }
+
+  logInfo(
+    'EpisodeService',
+    `Bulk-updated default tracks for "${series.title}"${seasonNumber != null ? ` season ${seasonNumber}` : ''}: `
+      + `${updated.length} updated, ${skipped.length} skipped, ${errors.length} failed.`
+  );
+  sendJson(res, 200, { updated, skipped, errors });
   return true;
 }
 
