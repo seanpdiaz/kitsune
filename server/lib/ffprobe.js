@@ -74,9 +74,9 @@ function channelsLabel(channels, channelLayout) {
   return channels ? `${channels}ch` : 'Unknown';
 }
 
-// Returns { audio: [{language, codec, channels, default}], subtitles:
-// [{language, codec, forced, default}] } read straight from the real file,
-// or null if ffprobe
+// Returns { audio: [{language, codec, channels, default, title}],
+// subtitles: [{language, codec, forced, default, title}] } read straight
+// from the real file, or null if ffprobe
 // isn't installed, the file can't be read, or the probe fails for any other
 // reason. Callers treat null exactly like every other real-vs-simulated gap
 // in this app: an honest "don't know," not a guess dressed up as one.
@@ -124,6 +124,13 @@ async function probeMediaStreams(filePath) {
   // exactly the 1-based track number mkvpropedit's own track:a<N>/track:s<N>
   // selectors expect — confirmed directly against a real file — so nothing
   // else needs to be stored alongside these to make that edit later.
+  //
+  // `title` is each stream's own free-text name tag — the thing a fansub/
+  // encode group sets (via mkvmerge --track-name or equivalent) to tell two
+  // same-language tracks apart, e.g. two English ASS subtitle streams
+  // labeled "Dialogue" and "Signs & Songs". null when a stream just doesn't
+  // have one (most audio tracks don't), same "don't know"/"doesn't exist"
+  // treatment as every other optional field here — never fabricated.
   const audio = streams
     .filter((s) => s.codec_type === 'audio')
     .map((s) => ({
@@ -131,6 +138,7 @@ async function probeMediaStreams(filePath) {
       codec: s.codec_name ? s.codec_name.toUpperCase() : 'Unknown',
       channels: channelsLabel(s.channels, s.channel_layout),
       default: !!(s.disposition && s.disposition.default),
+      title: (s.tags && s.tags.title) || null,
     }));
   const subtitles = streams
     .filter((s) => s.codec_type === 'subtitle')
@@ -139,6 +147,7 @@ async function probeMediaStreams(filePath) {
       codec: s.codec_name ? s.codec_name.toUpperCase() : 'Unknown',
       forced: !!(s.disposition && s.disposition.forced),
       default: !!(s.disposition && s.disposition.default),
+      title: (s.tags && s.tags.title) || null,
     }));
   // The real video stream's own width/height/codec — `-show_streams` (above)
   // always returned this alongside audio/subtitles, it just wasn't kept
