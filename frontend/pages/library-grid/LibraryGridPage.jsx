@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { icons } from '../../lib/icons.jsx';
 import { tagChipStyleObj as baseTagChipStyleObj } from '../../lib/tagChipStyleObj.js';
@@ -56,17 +56,41 @@ function tagChipStyleObj(hex) {
   return { '--tag-scale': 0.85, ...baseTagChipStyleObj(hex) };
 }
 
-// Backs the "Missing episodes" stat card below — s.eps is always a real
-// "N / M" string (server/lib/series-stats.js keeps it in sync with real
-// per-episode downloaded flags, respecting each series' own Ignore
-// Specials toggle — see routes/series.js), so "missing" for one series is
-// just its own M - N. Same regex SeriesPage.jsx's own eps parsing uses.
-function missingCountFor(s) {
+// s.eps is always a real "N / M" string (server/lib/series-stats.js keeps
+// it in sync with real per-episode downloaded flags, respecting each
+// series' own Ignore Specials toggle — see routes/series.js). Shared by
+// missingCountFor below (the "Missing episodes" stat card) and
+// effectivePct further down (the Library progress bars' live-download
+// blending) — same regex SeriesPage.jsx's own eps parsing uses.
+function parseEpsCounts(s) {
   const m = /(\d+)\s*\/\s*(\d+)/.exec(s.eps || '');
-  if (!m) return 0;
-  const done = parseInt(m[1], 10);
-  const total = parseInt(m[2], 10);
-  return Math.max(0, total - done);
+  return m ? { done: parseInt(m[1], 10), total: parseInt(m[2], 10) } : null;
+}
+
+// Backs the "Missing episodes" stat card below — "missing" for one series
+// is just its own M - N.
+function missingCountFor(s) {
+  const counts = parseEpsCounts(s);
+  return counts ? Math.max(0, counts.total - counts.done) : 0;
+}
+
+// Blends a series' committed "N of M downloaded" progress with any
+// currently-downloading episode's own real qBittorrent progress (see
+// server/routes/queue.js's progress_pct, kept current by its background
+// poll) so the Library bar visibly creeps forward while a torrent is still
+// running, instead of sitting frozen at the same width until the episode
+// finishes and the bar jumps a whole episode's worth at once. liveFraction
+// is this series' downloading queue rows' progress_pct/100, summed (see
+// the liveFractionBySeries memo below — a batch grab can have more than
+// one episode downloading at once) — capped at however many episodes are
+// actually still missing, so a stale or duplicated queue row can never
+// push the bar past parseEpsCounts' own total, let alone past 100%.
+function effectivePct(s, liveFraction) {
+  const counts = parseEpsCounts(s);
+  if (!counts || counts.total === 0 || !liveFraction) return s.pct;
+  const remaining = counts.total - counts.done;
+  const boosted = ((counts.done + Math.min(liveFraction, remaining)) / counts.total) * 100;
+  return Math.min(100, Math.round(boosted));
 }
 
 function matchesFilter(s, filter) {
@@ -252,6 +276,12 @@ export default function LibraryGridPage({ searchContainer }) {
   // poll for live updates, so a grab starting/finishing while this page is
   // open won't move the number until it's reloaded.
   const [downloadingCount, setDownloadingCount] = useState(0);
+  // Raw /api/queue rows, kept around (not just the downloadingCount above)
+  // so each series' progress bar can blend in its own in-progress episode's
+  // live torrent percentage — see liveFractionBySeries/effectivePct below.
+  // Same one-time, non-polling fetch as downloadingCount: a grab's progress
+  // moving while this page sits open won't animate the bar until reload.
+  const [queueRows, setQueueRows] = useState([]);
 
   // Poster size slider (Poster view only). Written straight to the grid's
   // own CSS custom property via refs, the same imperative pattern Settings
@@ -350,6 +380,7 @@ export default function LibraryGridPage({ searchContainer }) {
         const body = await res.json();
         const rows = Array.isArray(body.queue) ? body.queue : [];
         setDownloadingCount(rows.filter((q) => q.status === 'downloading').length);
+        setQueueRows(rows);
       } catch {
         // Stat card just falls back to 0 rather than blocking the rest of
         // the page — same "a failed secondary fetch shouldn't break Library
@@ -357,6 +388,21 @@ export default function LibraryGridPage({ searchContainer }) {
       }
     })();
   }, []);
+
+  // Sums each downloading queue row's progress_pct/100 by series — a
+  // series with two episodes grabbing at once (a batch) gets credit for
+  // both. Recomputed only when queueRows itself changes, not on every
+  // render (filter/sort/search all touch this component far more often
+  // than the once-on-mount queue fetch does).
+  const liveFractionBySeries = useMemo(() => {
+    const map = new Map();
+    for (const q of queueRows) {
+      if (q.status !== 'downloading') continue;
+      const frac = (Number(q.progressPct) || 0) / 100;
+      map.set(q.seriesId, (map.get(q.seriesId) || 0) + frac);
+    }
+    return map;
+  }, [queueRows]);
 
   // Tags aren't part of the Poster view at all, but both Table and Overview
   // show them — fetched once, lazily, the first time either view actually
@@ -406,6 +452,11 @@ export default function LibraryGridPage({ searchContainer }) {
     let list = seriesData.filter((s) => matchesFilter(s, filter));
     if (q) list = list.filter((s) => s.title.toLowerCase().includes(q));
     list = sortSeries(list, sort);
+    // Display-only override: the bar should reflect committed downloads
+    // plus whatever's actively grabbing right now, but nothing else here
+    // (filtering, sorting, missingCountFor above) should see the boosted
+    // number — see effectivePct's own comment for why.
+    list = list.map((s) => ({ ...s, pct: effectivePct(s, liveFractionBySeries.get(s.id)) }));
 
     if (list.length === 0) {
       gridContent = <p style={{ color: 'var(--text-muted)', gridColumn: '1 / -1' }}>No series match your filters.</p>;
