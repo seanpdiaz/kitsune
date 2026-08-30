@@ -2287,11 +2287,25 @@ input[type="range"].size-slider::-moz-range-track {
    .segment-tabs button.active); the direction arrow is only ever present
    on that one button, injected as text by updateSortHeader() rather than
    living in the markup, since it's a two-value (asc/desc), not three-value
-   (asc/desc/none), thing to represent. */
+   (asc/desc/none), thing to represent.
+   Every one of these properties has to be re-declared on :hover too, not
+   just the base state — this app's global `button` rule (way up near the
+   top of this file) gives every plain <button> a 36px height, a visible
+   surface-2 background/border, and `button:hover` brightens that
+   background to surface-3. A bare `.release-sort-btn:hover { color: ... }`
+   only out-specifies plain `button` (one class beats one element), but
+   NOT `button:hover` (element+pseudo-class ties a bare class on
+   specificity's middle component, and then wins on the element count) —
+   so on hover the real background/border this rule resets in the base
+   state came right back, rendering as a stray boxed-looking highlight
+   around just that one header label. Real, reported bug — fixed by
+   overriding the same properties again inside :hover itself, which _does_
+   outrank button:hover (two classes beats one class + one element). */
 .release-sort-btn {
   display: inline-flex;
   align-items: center;
   gap: 3px;
+  height: auto;
   font: inherit;
   color: inherit;
   text-transform: inherit;
@@ -2302,7 +2316,11 @@ input[type="range"].size-slider::-moz-range-track {
   margin: 0;
   cursor: pointer;
 }
-.release-sort-btn:hover { color: var(--text-secondary); }
+.release-sort-btn:hover {
+  background: none;
+  border-color: transparent;
+  color: var(--text-secondary);
+}
 .release-sort-btn.active { color: var(--text-primary); }
 .release-sort-btn svg { width: 10px; height: 10px; }
 .release-row {
