@@ -1226,6 +1226,15 @@ function EditTracksScopeModal({ seriesId, scope, seasonNumber, scopeLabel, episo
             </p>
           )}
         </div>
+        {/* Applying to a whole season/series' worth of real .mkv files runs
+            as one PATCH that mkvpropedit's + re-probes every eligible
+            episode before responding — for anything past a handful of
+            episodes that's long enough that the Save button alone doesn't
+            read as "still working," just unresponsive. This is the same
+            indeterminate bar System > Tasks' Disk Usage recompute uses —
+            see modal-progress-track's own comment in styles.css for why an
+            unknown, still-in-progress percentage isn't faked here either. */}
+        {saving && <div className="modal-progress-track" />}
         <div className="modal-footer">
           <button type="button" onClick={onClose}>{result ? 'Close' : 'Cancel'}</button>
           {!result && (
