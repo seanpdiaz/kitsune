@@ -28,12 +28,12 @@
 const db = require('../db');
 const { logInfo, logWarn } = require('../logger');
 const { sendJson, readJsonBody } = require('../lib/http');
-const fs = require('fs');
 const path = require('path');
 const { walkVideoFiles, guessQualityTierName, guessSeasonEpisode, resolutionGroupFromHeight } = require('../lib/media-files');
 const { recomputeSeriesEpisodeStats } = require('../lib/series-stats');
 const { probeMediaStreams } = require('../lib/ffprobe');
 const { findExistingSeriesFolder } = require('./episodes');
+const { pathExists } = require('../lib/fs-helpers');
 
 async function handleImportFilesApi(req, res, urlPath) {
   const match = req.method === 'POST' && urlPath.match(/^\/api\/series\/(\d+)\/import-files$/);
@@ -94,7 +94,7 @@ async function handleImportFilesApi(req, res, urlPath) {
     // anything. Treat an existing-but-missing path the same as no path at
     // all: worth a fresh real-folder lookup rather than reporting "doesn't
     // exist on disk yet" for what might just be a bad guess from add time.
-    if (folderPath && !fs.existsSync(folderPath)) folderPath = null;
+    if (folderPath && !(await pathExists(folderPath))) folderPath = null;
     if (!folderPath) {
       // Reaching here with no real path yet is a real, common gap, not
       // just "no root folder configured" (the message this used to always
@@ -133,7 +133,7 @@ async function handleImportFilesApi(req, res, urlPath) {
   // right now" — worth telling apart now that this route can be reached
   // from a real path instead of only ever a folder Library Import's own
   // scan had just confirmed exists.
-  if (!fs.existsSync(folderPath)) {
+  if (!(await pathExists(folderPath))) {
     sendJson(res, 200, { matched: [], unmatched: [], seriesEps: series.eps, seriesPath: folderPath, message: `"${folderPath}" doesn't exist on disk yet.` });
     return true;
   }

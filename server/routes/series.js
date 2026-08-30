@@ -1,9 +1,8 @@
-const fs = require('fs');
 const path = require('path');
 const db = require('../db');
 const { logInfo, logWarn } = require('../logger');
 const { sendJson, readJsonBody } = require('../lib/http');
-const { normalizeFolderName } = require('../lib/fs-helpers');
+const { normalizeFolderName, pathExists } = require('../lib/fs-helpers');
 const { sanitizeForPath } = require('../lib/episode-paths');
 const { recomputeSeriesEpisodeStats } = require('../lib/series-stats');
 const { warmEpisodesInBackground } = require('./episodes');
@@ -590,7 +589,7 @@ async function handleSeriesApi(req, res, urlPath) {
         sendJson(res, 400, { error: 'Path cannot be empty' });
         return true;
       }
-      if (!fs.existsSync(newPath)) {
+      if (!(await pathExists(newPath))) {
         sendJson(res, 400, { error: `"${newPath}" doesn't exist on disk.` });
         return true;
       }

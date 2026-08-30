@@ -354,7 +354,7 @@ async function handleDeleteEpisodeFile(req, res, match) {
   }
 
   try {
-    fs.unlinkSync(episode.path);
+    await fs.promises.unlink(episode.path);
   } catch (err) {
     if (err.code !== 'ENOENT') {
       logWarn('EpisodeService', `Could not delete file "${episode.path}" for episode ${id}: ${err.code || err.message}`);
@@ -692,7 +692,7 @@ async function handleRenamePreview(req, res, match) {
 }
 
 // POST /api/series/:id/rename — body: { episodeIds: [...] }. Actually
-// renames the real file for each given episode on disk (fs.renameSync,
+// renames the real file for each given episode on disk (fs.promises.rename,
 // same directory — this relabels the filename only, it never restructures
 // season/series folders) using the exact same computation
 // handleRenamePreview above already showed the user, then updates that
@@ -700,7 +700,11 @@ async function handleRenamePreview(req, res, match) {
 // file that moved out from under Kitsune since the preview was fetched) is
 // reported per-episode rather than aborting the whole batch, same "one bad
 // item shouldn't block the rest" rule this app's other bulk actions
-// (Search All, Grab best match for a whole season) already follow.
+// (Search All, Grab best match for a whole season) already follow. The
+// async rename matters more here than a single fs call normally would —
+// this loops over every selected episode (a whole-season batch rename is
+// the common case), so a synchronous renameSync would freeze the entire
+// app once per episode in the batch, back to back.
 async function handleRenameFiles(req, res, match) {
   // Same session gate as the other write paths in this file — see
   // handleRenameSeason's comment for why this was added. This one renames
@@ -746,7 +750,7 @@ async function handleRenameFiles(req, res, match) {
       continue;
     }
     try {
-      fs.renameSync(r.path, newPath);
+      await fs.promises.rename(r.path, newPath);
     } catch (err) {
       results.push({ episodeId, ok: false, error: err.code || err.message });
       continue;
