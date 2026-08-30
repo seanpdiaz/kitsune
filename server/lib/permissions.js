@@ -32,10 +32,22 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
 const db = require('../db');
 const { logInfo, logWarn } = require('../logger');
 const { getMediaManagementSettings } = require('./episode-paths');
+
+// Async (execFile via promisify, not execFileSync) for the same reason
+// ffprobe.js's probeMediaStreams already made this same switch: uid/gid
+// resolution below runs on every real import and every Apply Permissions
+// walk step, and execFileSync blocks Node's single-threaded event loop for
+// however long the child process (`id`, `getent`, `dscacheutil`) takes to
+// exit — freezing every other page load and API request meanwhile. The
+// idCache below still means this only actually runs once per unique
+// username/group per process, but "once" is still enough to freeze the app
+// for that one request if it's synchronous.
+const execFileAsync = promisify(execFile);
 
 const OCTAL_MODE_RE = /^[0-7]{3,4}$/;
 
@@ -59,15 +71,15 @@ async function getPermissionSettings() {
 // Kitsune is running won't be picked up until the next restart.
 const idCache = new Map();
 
-function resolveUid(username) {
+async function resolveUid(username) {
   if (!username) return null;
   if (/^\d+$/.test(username)) return Number(username);
   const cacheKey = `uid:${username}`;
   if (idCache.has(cacheKey)) return idCache.get(cacheKey);
   let uid = null;
   try {
-    const out = execFileSync('id', ['-u', username], { encoding: 'utf8' }).trim();
-    uid = Number(out);
+    const { stdout } = await execFileAsync('id', ['-u', username], { encoding: 'utf8' });
+    uid = Number(stdout.trim());
     if (!Number.isFinite(uid)) uid = null;
   } catch (err) {
     logWarn('Permissions', `Could not resolve chown user "${username}" to a uid (${err.code || err.message}) — is that a real local account on this machine? Falling back to leaving the owner unchanged.`);
@@ -76,7 +88,7 @@ function resolveUid(username) {
   return uid;
 }
 
-function resolveGid(groupname) {
+async function resolveGid(groupname) {
   if (!groupname) return null;
   if (/^\d+$/.test(groupname)) return Number(groupname);
   const cacheKey = `gid:${groupname}`;
@@ -86,16 +98,16 @@ function resolveGid(groupname) {
     if (os.platform() === 'darwin') {
       // macOS has no `getent` — dscacheutil is the standard lookup (same
       // source `dscl`/Directory Utility.app read from).
-      const out = execFileSync('dscacheutil', ['-q', 'group', '-a', 'name', groupname], { encoding: 'utf8' });
-      const m = /^gid:\s*(\d+)/m.exec(out);
+      const { stdout } = await execFileAsync('dscacheutil', ['-q', 'group', '-a', 'name', groupname], { encoding: 'utf8' });
+      const m = /^gid:\s*(\d+)/m.exec(stdout);
       gid = m ? Number(m[1]) : null;
     } else {
       // Linux (the more common real Kitsune deployment target — see the
       // wiki's Docker note on this same settings section): getent reads
       // /etc/group plus any configured NSS backend, same source
       // `chgrp`/`id` use.
-      const out = execFileSync('getent', ['group', groupname], { encoding: 'utf8' });
-      const gidField = out.trim().split(':')[2];
+      const { stdout } = await execFileAsync('getent', ['group', groupname], { encoding: 'utf8' });
+      const gidField = stdout.trim().split(':')[2];
       gid = gidField ? Number(gidField) : null;
     }
     if (!Number.isFinite(gid)) gid = null;
@@ -106,22 +118,22 @@ function resolveGid(groupname) {
   return gid;
 }
 
-function chmodPath(targetPath, modeStr, kind) {
+async function chmodPath(targetPath, modeStr, kind) {
   if (!OCTAL_MODE_RE.test(modeStr || '')) {
     logWarn('Permissions', `Skipped chmod on "${targetPath}" — configured ${kind} chmod "${modeStr}" isn't a valid octal permission string (expected e.g. "755" or "644").`);
     return;
   }
   try {
-    fs.chmodSync(targetPath, parseInt(modeStr, 8));
+    await fs.promises.chmod(targetPath, parseInt(modeStr, 8));
   } catch (err) {
     logWarn('Permissions', `Could not chmod ${kind} "${targetPath}" to ${modeStr}: ${err.code || err.message}`);
   }
 }
 
-function chownPath(targetPath, settings) {
+async function chownPath(targetPath, settings) {
   if (!settings.chownUser && !settings.chownGroup) return;
-  const uid = settings.chownUser ? resolveUid(settings.chownUser) : null;
-  const gid = settings.chownGroup ? resolveGid(settings.chownGroup) : null;
+  const uid = settings.chownUser ? await resolveUid(settings.chownUser) : null;
+  const gid = settings.chownGroup ? await resolveGid(settings.chownGroup) : null;
   // resolveUid/resolveGid already logged the specific reason — bail here
   // rather than falling through to a chown that would silently reset the
   // half that failed to resolve.
@@ -130,7 +142,7 @@ function chownPath(targetPath, settings) {
 
   let current;
   try {
-    current = fs.statSync(targetPath);
+    current = await fs.promises.stat(targetPath);
   } catch (err) {
     logWarn('Permissions', `Could not stat "${targetPath}" before chown: ${err.code || err.message}`);
     return;
@@ -144,7 +156,7 @@ function chownPath(targetPath, settings) {
   const finalUid = uid != null ? uid : current.uid;
   const finalGid = gid != null ? gid : current.gid;
   try {
-    fs.chownSync(targetPath, finalUid, finalGid);
+    await fs.promises.chown(targetPath, finalUid, finalGid);
   } catch (err) {
     const hint = err.code === 'EPERM'
       ? ' — chown almost always requires Kitsune\'s own process to be running as root; this is an expected outcome unprivileged, not a bug in Kitsune'
@@ -165,12 +177,12 @@ async function applyPermissions({ filePath, dirPaths = [] } = {}) {
 
   for (const dir of dirPaths) {
     if (!dir) continue;
-    chmodPath(dir, settings.folderMode, 'folder');
-    chownPath(dir, settings);
+    await chmodPath(dir, settings.folderMode, 'folder');
+    await chownPath(dir, settings);
   }
   if (filePath) {
-    chmodPath(filePath, settings.fileMode, 'file');
-    chownPath(filePath, settings);
+    await chmodPath(filePath, settings.fileMode, 'file');
+    await chownPath(filePath, settings);
   }
 
   const chownSummary = settings.chownUser || settings.chownGroup
@@ -276,8 +288,8 @@ let timer = null;
 // walk has the exact same "one bad folder shouldn't sink a scan of a
 // hundred good ones" reasoning behind it.
 async function walkAndApply(dirPath, settings, counts) {
-  chmodPath(dirPath, settings.folderMode, 'folder');
-  chownPath(dirPath, settings);
+  await chmodPath(dirPath, settings.folderMode, 'folder');
+  await chownPath(dirPath, settings);
   counts.folders += 1;
 
   let entries;
@@ -294,8 +306,8 @@ async function walkAndApply(dirPath, settings, counts) {
     if (entry.isDirectory()) {
       await walkAndApply(full, settings, counts);
     } else if (entry.isFile()) {
-      chmodPath(full, settings.fileMode, 'file');
-      chownPath(full, settings);
+      await chmodPath(full, settings.fileMode, 'file');
+      await chownPath(full, settings);
       counts.files += 1;
     }
     // Symlinks are intentionally neither followed nor chmod/chown'd — same

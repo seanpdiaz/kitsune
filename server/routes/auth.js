@@ -134,7 +134,7 @@ async function handleAuthApi(req, res, urlPath) {
       return true;
     }
     const created = await db.prepare('INSERT INTO users (username, password_hash, role, created_at) VALUES (?, ?, ?, ?) RETURNING *')
-      .get(username, hashPassword(password), 'admin', db.now());
+      .get(username, await hashPassword(password), 'admin', db.now());
     setCookie(res, SESSION_COOKIE, await createSession(created.id), { maxAgeSeconds: SESSION_MAX_AGE_SECONDS });
     logInfo('Auth', `First-run setup: created admin account "${username}"`);
     sendJson(res, 201, { user: rowToUser(created) });
@@ -150,7 +150,7 @@ async function handleAuthApi(req, res, urlPath) {
     const row = await db.prepare('SELECT * FROM users WHERE username = ?').get(username);
     // Same error either way (unknown username vs. wrong password) — doesn't
     // confirm or deny whether a given username exists on this server.
-    if (!row || !verifyPassword(password, row.password_hash)) {
+    if (!row || !(await verifyPassword(password, row.password_hash))) {
       logWarn('Auth', `Failed sign-in attempt for "${username}"`);
       sendJson(res, 401, { error: 'Invalid username or password.' });
       return true;
@@ -182,7 +182,7 @@ async function handleAuthApi(req, res, urlPath) {
     let body;
     try { body = await readJsonBody(req); } catch { sendJson(res, 400, { error: 'Invalid JSON body' }); return true; }
     const row = await db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
-    if (!verifyPassword(String(body.currentPassword || ''), row.password_hash)) {
+    if (!(await verifyPassword(String(body.currentPassword || ''), row.password_hash))) {
       sendJson(res, 400, { error: 'Current password is incorrect.' });
       return true;
     }
@@ -199,7 +199,7 @@ async function handleAuthApi(req, res, urlPath) {
         sendJson(res, 400, { error: `New password must be at least ${MIN_PASSWORD_LENGTH} characters.` });
         return true;
       }
-      updates.password_hash = hashPassword(String(body.newPassword));
+      updates.password_hash = await hashPassword(String(body.newPassword));
     }
     if (Object.keys(updates).length > 0) {
       const setClause = Object.keys(updates).map((k) => `${k} = ?`).join(', ');
@@ -234,7 +234,7 @@ async function handleAuthApi(req, res, urlPath) {
       return true;
     }
     const created = await db.prepare('INSERT INTO users (username, password_hash, role, created_at) VALUES (?, ?, ?, ?) RETURNING *')
-      .get(username, hashPassword(password), role, db.now());
+      .get(username, await hashPassword(password), role, db.now());
     logInfo('Auth', `Admin created user "${username}" (${role})`);
     sendJson(res, 201, rowToUser(created));
     return true;
@@ -276,7 +276,7 @@ async function handleAuthApi(req, res, urlPath) {
         sendJson(res, 400, { error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.` });
         return true;
       }
-      updates.password_hash = hashPassword(String(body.password));
+      updates.password_hash = await hashPassword(String(body.password));
     }
     if (Object.keys(updates).length > 0) {
       const setClause = Object.keys(updates).map((k) => `${k} = ?`).join(', ');

@@ -44,6 +44,23 @@ function guessTitleFromFolderName(name) {
   return stripReleaseNoise(name) || name;
 }
 
+// Async replacement for the fs.existsSync(path) check several routes used
+// to make inline — fs-browse.js/root-folders.js/import-files.js/series.js
+// all validate a real, user-supplied filesystem path (a root folder, a
+// series folder, a manual Path override) before acting on it, and none of
+// those paths are guaranteed to be local/fast (a network share is a normal
+// setup — see computeRootFolderStats' own comment below). Centralized here
+// rather than each call site repeating its own try/catch around
+// fs.promises.access.
+async function pathExists(targetPath) {
+  try {
+    await fs.promises.access(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function formatBytes(bytes) {
   if (!Number.isFinite(bytes) || bytes < 0) return '—';
   const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
@@ -57,10 +74,13 @@ function formatBytes(bytes) {
 }
 
 // Real free-space + "how much of this folder isn't in the Library yet"
-// numbers for a root folder, computed once at add time (not live on every
-// page load). fs.statfsSync has been available since Node 18.15 — already
-// below the Node 22.5+ floor node:sqlite requires, so no extra version
-// dependency.
+// numbers for a root folder — called at add time, and again on every
+// System > Status / Media Management / dashboard load that needs it. Uses
+// fs.promises.statfs/readdir (available since the same Node versions as
+// their Sync counterparts) rather than statfsSync/readdirSync — a root
+// folder is whatever real path the user pointed Kitsune at, which can
+// perfectly normally be a network share, so this shouldn't assume the
+// underlying I/O is always fast enough to block the event loop for.
 async function computeRootFolderStats(dirPath) {
   let free = '—';
   // Raw byte counts, alongside the already-formatted `free` string above —
@@ -73,7 +93,7 @@ async function computeRootFolderStats(dirPath) {
   let totalBytes = null;
   let usedBytes = null;
   try {
-    const stats = fs.statfsSync(dirPath);
+    const stats = await fs.promises.statfs(dirPath);
     freeBytes = stats.bavail * stats.bsize;
     totalBytes = stats.blocks * stats.bsize;
     usedBytes = totalBytes - freeBytes;
@@ -95,7 +115,7 @@ async function computeRootFolderStats(dirPath) {
   let unmapped = 0;
   try {
     const knownTitles = new Set((await db.prepare('SELECT title FROM series').all()).map((r) => normalizeFolderName(r.title)));
-    const subfolders = fs.readdirSync(dirPath, { withFileTypes: true }).filter((e) => e.isDirectory() && !e.name.startsWith('.'));
+    const subfolders = (await fs.promises.readdir(dirPath, { withFileTypes: true })).filter((e) => e.isDirectory() && !e.name.startsWith('.'));
     unmapped = subfolders.filter((f) => !knownTitles.has(normalizeFolderName(f.name))).length;
   } catch {
     // leave unmapped at 0 if the folder can't be read for some reason
@@ -104,4 +124,4 @@ async function computeRootFolderStats(dirPath) {
   return { free, unmapped, freeBytes, totalBytes, usedBytes };
 }
 
-module.exports = { stripReleaseNoise, normalizeFolderName, guessTitleFromFolderName, formatBytes, computeRootFolderStats };
+module.exports = { stripReleaseNoise, normalizeFolderName, guessTitleFromFolderName, formatBytes, computeRootFolderStats, pathExists };

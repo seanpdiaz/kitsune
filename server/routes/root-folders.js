@@ -7,7 +7,7 @@ const path = require('path');
 const db = require('../db');
 const { logInfo } = require('../logger');
 const { sendJson, readJsonBody } = require('../lib/http');
-const { normalizeFolderName, guessTitleFromFolderName, computeRootFolderStats, formatBytes } = require('../lib/fs-helpers');
+const { normalizeFolderName, guessTitleFromFolderName, computeRootFolderStats, formatBytes, pathExists } = require('../lib/fs-helpers');
 const { refreshDiskUsage } = require('../lib/disk-usage');
 const { walkVideoFiles, summarizeFiles, guessQualityTierName, guessSeasonEpisode } = require('../lib/media-files');
 const { rowToItem } = require('./settings-items');
@@ -35,7 +35,7 @@ async function handleRootFoldersApi(req, res, urlPath) {
     const resolved = path.resolve(folderPath);
     let stat;
     try {
-      stat = fs.statSync(resolved);
+      stat = await fs.promises.stat(resolved);
     } catch (err) {
       sendJson(res, 400, { error: `"${resolved}" doesn't exist or isn't readable (${err.code || err.message})` });
       return true;
@@ -90,7 +90,7 @@ async function handleRootFoldersApi(req, res, urlPath) {
 
     let entries;
     try {
-      entries = fs.readdirSync(folderPath, { withFileTypes: true });
+      entries = await fs.promises.readdir(folderPath, { withFileTypes: true });
     } catch (err) {
       sendJson(res, 502, { error: `Can't read "${folderPath}": ${err.message}` });
       return true;
@@ -155,7 +155,7 @@ async function handleRootFoldersApi(req, res, urlPath) {
       sendJson(res, 400, { error: 'Invalid folder name' });
       return true;
     }
-    if (!fs.existsSync(subfolderPath)) {
+    if (!(await pathExists(subfolderPath))) {
       sendJson(res, 404, { error: `"${folderName}" doesn't exist under this root folder` });
       return true;
     }
