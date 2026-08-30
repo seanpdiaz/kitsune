@@ -39,19 +39,34 @@ async function importEpisodeFile(series, episode, quality, sourcePath) {
   // episode-paths.js always lays a real import out as root/seasonFolder/
   // fileName (see buildEpisodeFilePath/seriesFolderNameFor/
   // seasonFolderNameFor) — two directory levels above the file, both
-  // possibly just created by the mkdirSync below — so both get Folder
+  // possibly just created by the mkdir below — so both get Folder
   // Chmod/chown, not just the immediate parent.
   const importDirPaths = [path.dirname(path.dirname(destPath)), path.dirname(destPath)];
 
+  // Every fs call below uses the fs.promises (non-blocking) form rather than
+  // the *Sync one, and this matters for more than just style: fs.*Sync calls
+  // run on Node's single main thread and block it completely until they
+  // finish, meaning the entire app — every other page load, every other API
+  // request — freezes for as long as the call takes. statSync/mkdirSync/
+  // unlinkSync/linkSync are metadata-only and effectively instant, but
+  // copyFileSync (the EXDEV fallback below) is a real byte-for-byte copy of
+  // the whole episode file — hundreds of MB to a few GB — and was confirmed
+  // to freeze the whole web UI for the entire duration of a real import
+  // whenever the hardlink fast path wasn't available (downloads and Library
+  // on separate mounts/drives, or a network share — both completely normal
+  // real-world setups, see the comment below). The promise forms hand the
+  // actual disk I/O off to libuv's threadpool instead of the main thread, so
+  // the rest of the app — including this same route serving other
+  // requests — stays responsive while a big copy is in flight.
   let stat;
   try {
-    stat = fs.statSync(sourcePath);
+    stat = await fs.promises.stat(sourcePath);
   } catch (err) {
     return { ok: false, error: `Source file not found at "${sourcePath}" (${err.code || err.message})` };
   }
 
   try {
-    fs.mkdirSync(path.dirname(destPath), { recursive: true });
+    await fs.promises.mkdir(path.dirname(destPath), { recursive: true });
   } catch (err) {
     return { ok: false, error: `Could not create "${path.dirname(destPath)}" (${err.code || err.message})` };
   }
@@ -61,11 +76,11 @@ async function importEpisodeFile(series, episode, quality, sourcePath) {
   // it first. Best-effort: if this itself fails (permissions, etc.), the
   // link/copy attempt below will surface a clearer, more specific error.
   try {
-    fs.unlinkSync(destPath);
+    await fs.promises.unlink(destPath);
   } catch { /* didn't exist, or couldn't remove — proceed either way */ }
 
   try {
-    fs.linkSync(sourcePath, destPath);
+    await fs.promises.link(sourcePath, destPath);
     await applyPermissions({ filePath: destPath, dirPaths: importDirPaths });
     return { ok: true, path: destPath, sizeBytes: stat.size, method: 'hardlink' };
   } catch (linkErr) {
@@ -75,7 +90,7 @@ async function importEpisodeFile(series, episode, quality, sourcePath) {
     // (unsupported filesystem, permissions) falls back the same way; only a
     // genuine copy failure is reported as an actual error.
     try {
-      fs.copyFileSync(sourcePath, destPath);
+      await fs.promises.copyFile(sourcePath, destPath);
       await applyPermissions({ filePath: destPath, dirPaths: importDirPaths });
       return { ok: true, path: destPath, sizeBytes: stat.size, method: 'copy' };
     } catch (copyErr) {
