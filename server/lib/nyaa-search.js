@@ -505,54 +505,78 @@ async function searchWithFallback(series, matchFn, { extraQueryTerm, exhaustive 
     // ones. Tracked here by each item's real identity (infoHash, same key
     // dedupeReleases uses) — when an entire page turns out to be nothing
     // this attempt hasn't already seen on an earlier page, that's treated
-    // as the real end of pagination, same as a genuinely empty page.
+    // as the real end of pagination, same as a genuinely empty page. Shared
+    // across every sort pass below (not reset per sort) so the same
+    // release seen under one sort order is never double-counted when it
+    // also appears under the other.
     const seenInfoHashes = new Set();
-    for (let page = 1; page <= maxPages; page++) {
-      const results = await searchNyaa(query, page, {
-        sort: exhaustive ? 'size' : undefined,
-        category: exhaustive ? ANIME_CATEGORY_ENGLISH : undefined,
-      });
-      // An empty page means nyaa.si has run out of results for this query
-      // entirely — no point requesting page N+1, it'll be empty too.
-      if (results.length === 0) {
-        logDebug('IndexerService', `Query "${query}" page ${page}: 0 results — end of results for this query, stopping pagination.`);
-        break;
-      }
-      const newResults = results.filter((r) => {
-        const key = r.infoHash || r.magnetUrl;
-        if (!key || seenInfoHashes.has(key)) return false;
-        seenInfoHashes.add(key);
-        return true;
-      });
-      if (newResults.length === 0) {
-        logDebug('IndexerService', `Query "${query}" page ${page}: all ${results.length} result(s) were repeats of an earlier page — treating this as the real end of results.`);
-        break;
-      }
-      const pageMatches = newResults.filter(matchFn);
-      attemptMatches = attemptMatches.concat(pageMatches);
-      logInfo(
-        'IndexerService',
-        `Query "${query}" page ${page}: ${results.length} result(s) back from Nyaa.si (${newResults.length} new), ${pageMatches.length} matched the filter for this search (${attemptMatches.length} total so far).`,
-      );
-      // Diagnostic only (exhaustive/batch search, debug level) — every
-      // title on this page isBatchRelease() recognizes as a batch shape at
-      // all, whether or not it passed matchFn (which also requires
-      // releaseCoversSeason to agree on the season). Added to answer a
-      // question the other logging above can't: when the final match count
-      // looks low, is that because there genuinely aren't more batch-shaped
-      // releases on this page, or because a batch is present but its season
-      // was parsed as something other than what was searched for (in which
-      // case it'd show up here but not in pageMatches above).
-      if (exhaustive) {
-        const batchCandidates = newResults.filter((r) => isBatchRelease(r.title));
-        if (batchCandidates.length > 0) {
-          const listing = batchCandidates
-            .map((r) => `"${r.title}" (season(s): ${JSON.stringify(extractSeasonNumbers(r.title))}, ${(r.sizeBytes / (1024 ** 3)).toFixed(2)} GiB)`)
-            .join(' | ');
-          logDebug('IndexerService', `Query "${query}" page ${page}: ${batchCandidates.length} batch-shaped title(s) on this page — ${listing}`);
+    // Real, confirmed limitation (production logs): the clamping behavior
+    // above isn't just "gives up after 40 pages" — for a size-sorted,
+    // category-narrowed query, page 2 already comes back byte-for-byte
+    // identical to page 1, meaning genuinely only ~75 items of this query's
+    // real result set are ever reachable through Nyaa's RSS endpoint no
+    // matter how many pages get requested. A real season's worth of
+    // batches can still be missed if they're smaller than whatever
+    // individual-episode uploads happen to dominate that one reachable
+    // page by size. Nyaa's own default sort (upload-date-descending, no
+    // s=/o=) hits the same ~75-item ceiling but is very unlikely to be
+    // dominated by the *same* items — different sort order, different 75.
+    // Trying both and merging (via seenInfoHashes above) roughly doubles
+    // the real, distinct result surface actually reachable per query
+    // without needing Nyaa's pagination to work any better than it does.
+    // Per-episode (non-exhaustive) search stays single-sort — it already
+    // stops at the first page with any match, so a second sort pass would
+    // just be an extra request for a case that's already fast.
+    const sortsToTry = exhaustive ? ['size', undefined] : [undefined];
+    for (const sort of sortsToTry) {
+      for (let page = 1; page <= maxPages; page++) {
+        const results = await searchNyaa(query, page, {
+          sort,
+          category: exhaustive ? ANIME_CATEGORY_ENGLISH : undefined,
+        });
+        // An empty page means nyaa.si has run out of results for this query
+        // entirely — no point requesting page N+1, it'll be empty too.
+        if (results.length === 0) {
+          logDebug('IndexerService', `Query "${query}" page ${page} (sort=${sort || 'default'}): 0 results — end of results for this sort, stopping pagination.`);
+          break;
         }
+        const newResults = results.filter((r) => {
+          const key = r.infoHash || r.magnetUrl;
+          if (!key || seenInfoHashes.has(key)) return false;
+          seenInfoHashes.add(key);
+          return true;
+        });
+        if (newResults.length === 0) {
+          logDebug('IndexerService', `Query "${query}" page ${page} (sort=${sort || 'default'}): all ${results.length} result(s) were repeats of an earlier page/sort — treating this as the real end of results for this sort.`);
+          break;
+        }
+        const pageMatches = newResults.filter(matchFn);
+        attemptMatches = attemptMatches.concat(pageMatches);
+        logInfo(
+          'IndexerService',
+          `Query "${query}" page ${page} (sort=${sort || 'default'}): ${results.length} result(s) back from Nyaa.si (${newResults.length} new), ${pageMatches.length} matched the filter for this search (${attemptMatches.length} total so far).`,
+        );
+        // Diagnostic only (exhaustive/batch search, debug level) — every
+        // title on this page isBatchRelease() recognizes as a batch shape
+        // at all, whether or not it passed matchFn (which also requires
+        // releaseCoversSeason to agree on the season). Added to answer a
+        // question the other logging above can't: when the final match
+        // count looks low, is that because there genuinely aren't more
+        // batch-shaped releases on this page, or because a batch is
+        // present but its season was parsed as something other than what
+        // was searched for (in which case it'd show up here but not in
+        // pageMatches above).
+        if (exhaustive) {
+          const batchCandidates = newResults.filter((r) => isBatchRelease(r.title));
+          if (batchCandidates.length > 0) {
+            const listing = batchCandidates
+              .map((r) => `"${r.title}" (season(s): ${JSON.stringify(extractSeasonNumbers(r.title))}, ${(r.sizeBytes / (1024 ** 3)).toFixed(2)} GiB)`)
+              .join(' | ');
+            logDebug('IndexerService', `Query "${query}" page ${page} (sort=${sort || 'default'}): ${batchCandidates.length} batch-shaped title(s) on this page — ${listing}`);
+          }
+        }
+        if (attemptMatches.length > 0 && !exhaustive) break;
       }
-      if (attemptMatches.length > 0 && !exhaustive) break;
     }
     matches = attemptMatches;
     if (matches.length > 0) {
