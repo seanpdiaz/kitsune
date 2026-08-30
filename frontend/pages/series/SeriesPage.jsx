@@ -204,9 +204,9 @@ function buildMediaInfo(ep, resolutionGroupByQuality) {
     // Real data straight from ffprobe — see this section's header comment.
     const realAudio = Array.isArray(ep.mediaStreams.audio) ? ep.mediaStreams.audio : [];
     const realSubs = Array.isArray(ep.mediaStreams.subtitles) ? ep.mediaStreams.subtitles : [];
-    audioTracks = realAudio.map((t) => `${t.codec} ${t.channels} (${t.language})`);
+    audioTracks = realAudio.map((t) => `${t.codec} ${t.channels} (${t.language})${t.title ? ` — ${t.title}` : ''}`);
     subtitles = realSubs.length
-      ? realSubs.map((s) => `${s.language}${s.forced ? ' (Forced)' : ''}`).join(', ')
+      ? realSubs.map((s) => `${s.language}${s.forced ? ' (Forced)' : ''}${s.title ? ` — ${s.title}` : ''}`).join(', ')
       : (realAudio.length ? 'None' : null);
   } else {
     // Never probed (a simulated download, a real import from before ffprobe
@@ -1048,7 +1048,7 @@ function EditTracksModal({ ep, onClose, onSaved }) {
               {audioTracks.map((t, i) => (
                 <label className="edit-tracks-option" key={`audio-${i}`}>
                   <input type="radio" name="edit-tracks-audio" checked={audioIndex === i + 1} onChange={() => setAudioIndex(i + 1)} />
-                  {t.language} · {t.codec} · {t.channels}
+                  {t.language} · {t.codec} · {t.channels}{t.title ? ` — ${t.title}` : ''}
                 </label>
               ))}
             </div>
@@ -1063,7 +1063,7 @@ function EditTracksModal({ ep, onClose, onSaved }) {
               {subtitleTracks.map((t, i) => (
                 <label className="edit-tracks-option" key={`subtitle-${i}`}>
                   <input type="radio" name="edit-tracks-subtitle" checked={subtitleIndex === i + 1} onChange={() => setSubtitleIndex(i + 1)} />
-                  {t.language} · {t.codec}{t.forced ? ' · Forced' : ''}
+                  {t.language} · {t.codec}{t.forced ? ' · Forced' : ''}{t.title ? ` — ${t.title}` : ''}
                 </label>
               ))}
             </div>
