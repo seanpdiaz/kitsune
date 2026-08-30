@@ -1135,6 +1135,13 @@ select {
 .ep-title.ep-title-clickable { cursor: pointer; }
 .ep-title.ep-title-clickable:hover { text-decoration: underline; }
 
+/* Activity > Queue's series name (QueueList.jsx) — a real link to that
+   series' page now, same subtle "underline only on hover" affordance as
+   .ep-title-clickable above rather than looking like a normal blue link
+   (the global `a { color: inherit; text-decoration: none; }` rule already
+   makes it inherit .settings-title's own color with no static underline). */
+.queue-series-link:hover { text-decoration: underline; }
+
 .ep-date { color: var(--text-secondary); font-size: 12px; }
 .audio-tag {
   font-size: 10.5px;
