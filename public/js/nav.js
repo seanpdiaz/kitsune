@@ -362,6 +362,47 @@ async function refreshWantedBadge() {
   }
 }
 
+// ---------- Activity sidebar badge: how many torrents are downloading now ----------
+// Same "real count, applied to the DOM after the fact" shape as
+// refreshWantedBadge() above — GET /api/queue (server/routes/queue.js) is
+// the same list Activity > Queue itself renders from, so this always
+// agrees with what clicking through actually shows. Counts only status ===
+// 'downloading', not 'paused' — a paused torrent isn't actively downloading
+// anything right now, so it shouldn't make this badge claim it is. Unlike
+// the Wanted badge, this one also gets re-checked on an interval (see
+// ACTIVITY_BADGE_POLL_MS below): a download can start or finish while
+// you're sitting on some other page entirely (Settings, a series page,
+// ...), not just between page loads the way the Wanted count realistically
+// changes.
+async function refreshActivityBadge() {
+  const link = document.querySelector('a.nav-item[href="activity-queue.html"]');
+  if (!link) return; // Activity section not present for this render (shouldn't happen, but don't throw)
+  try {
+    const res = await fetch('/api/queue');
+    const body = await res.json();
+    const count = Array.isArray(body.queue) ? body.queue.filter((q) => q.status === 'downloading').length : 0;
+    let badge = link.querySelector('.nav-badge');
+    if (count > 0) {
+      if (!badge) {
+        badge = document.createElement('span');
+        badge.className = 'nav-badge';
+        link.appendChild(badge);
+      }
+      badge.textContent = String(count);
+    } else if (badge) {
+      badge.remove();
+    }
+  } catch {
+    // Sidebar still works without it — just no badge until the next successful poll.
+  }
+}
+// 15s: frequent enough that starting or finishing a download shows up on
+// the sidebar without a page reload, infrequent enough that every single
+// page in the app (not just Activity > Queue, which already polls every
+// 2s in its own right — see QueueList.jsx) isn't hammering the same
+// endpoint on a tight loop just to keep one badge current.
+const ACTIVITY_BADGE_POLL_MS = 15000;
+
 // ---------- Sidebar collapse: applied synchronously, before the auth gate ----------
 // This used to happen inside initSidebarInteractions() below, which only
 // runs once checkAuthAndInit()'s GET /api/auth/state round trip resolves —
@@ -617,6 +658,8 @@ async function checkAuthAndInit() {
     initSidebarInteractions();
   }
   refreshWantedBadge(); // fire-and-forget — doesn't block the rest of the sidebar rendering
+  refreshActivityBadge(); // ditto
 }
 
 checkAuthAndInit();
+setInterval(refreshActivityBadge, ACTIVITY_BADGE_POLL_MS);
