@@ -534,6 +534,24 @@ async function searchWithFallback(series, matchFn, { extraQueryTerm, exhaustive 
         'IndexerService',
         `Query "${query}" page ${page}: ${results.length} result(s) back from Nyaa.si (${newResults.length} new), ${pageMatches.length} matched the filter for this search (${attemptMatches.length} total so far).`,
       );
+      // Diagnostic only (exhaustive/batch search, debug level) — every
+      // title on this page isBatchRelease() recognizes as a batch shape at
+      // all, whether or not it passed matchFn (which also requires
+      // releaseCoversSeason to agree on the season). Added to answer a
+      // question the other logging above can't: when the final match count
+      // looks low, is that because there genuinely aren't more batch-shaped
+      // releases on this page, or because a batch is present but its season
+      // was parsed as something other than what was searched for (in which
+      // case it'd show up here but not in pageMatches above).
+      if (exhaustive) {
+        const batchCandidates = newResults.filter((r) => isBatchRelease(r.title));
+        if (batchCandidates.length > 0) {
+          const listing = batchCandidates
+            .map((r) => `"${r.title}" (season(s): ${JSON.stringify(extractSeasonNumbers(r.title))}, ${(r.sizeBytes / (1024 ** 3)).toFixed(2)} GiB)`)
+            .join(' | ');
+          logDebug('IndexerService', `Query "${query}" page ${page}: ${batchCandidates.length} batch-shaped title(s) on this page — ${listing}`);
+        }
+      }
       if (attemptMatches.length > 0 && !exhaustive) break;
     }
     matches = attemptMatches;
