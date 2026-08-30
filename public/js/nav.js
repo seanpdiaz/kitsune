@@ -493,6 +493,31 @@ function writeCachedUser(user) {
   }
 }
 
+// Declared here, before the cached-render block just below can call
+// initSidebarInteractions() (which reaches bindUserMenuOutsideClick(),
+// defined further down but hoisted) — real, confirmed bug: this `let` used
+// to sit right above bindUserMenuOutsideClick() itself, well after the
+// cached-render block that can call into it. Function declarations are
+// hoisted, so calling initSidebarInteractions() before reaching that point
+// in the file was never the problem; but a `let` binding is NOT
+// initialized until its own declaration line actually executes, and stays
+// in the temporal dead zone until then. On the very first page load in a
+// session (no cached user yet) the `if (cachedUser)` block below never
+// runs, so this never got exercised — the crash only ever hit on every
+// SUBSEQUENT page load/refresh, once sessionStorage had a cached user to
+// synchronously render from. Confirmed live: "Uncaught ReferenceError:
+// Cannot access 'userMenuOutsideClickBound' before initialization" at
+// bindUserMenuOutsideClick, thrown from the `if (cachedUser)` block's own
+// initSidebarInteractions() call — and because this is a top-level
+// module-script statement throwing synchronously, it aborted the rest of
+// this file's top-level code on the spot: checkAuthAndInit() and the
+// setInterval(refreshActivityBadge, ...) call at the very bottom of this
+// file never ran at all, which is why the Wanted/Activity sidebar badges
+// (and, less visibly, the logout button — wired up later in
+// initSidebarInteractions, past where this threw) worked right after
+// logging in but silently stopped updating on every reload after that.
+let userMenuOutsideClickBound = false;
+
 const cachedUser = readCachedUser();
 if (cachedUser) {
   currentUser = cachedUser;
@@ -506,7 +531,6 @@ if (cachedUser) {
 // Wired up once, right after the sidebar's real markup exists — was two
 // separate top-level blocks running at import time before the auth gate
 // below made rendering itself conditional (see checkAuthAndInit).
-let userMenuOutsideClickBound = false;
 function bindUserMenuOutsideClick() {
   if (userMenuOutsideClickBound) return;
   userMenuOutsideClickBound = true;
