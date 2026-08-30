@@ -31,7 +31,9 @@
 // ---------------------------------------------------------------------------
 const fs = require('fs');
 const os = require('os');
+const path = require('path');
 const { execFileSync } = require('child_process');
+const db = require('../db');
 const { logInfo, logWarn } = require('../logger');
 const { getMediaManagementSettings } = require('./episode-paths');
 
@@ -177,4 +179,248 @@ async function applyPermissions({ filePath, dirPaths = [] } = {}) {
   logInfo('Permissions', `Applied permissions (folders ${settings.folderMode}, files ${settings.fileMode}${chownSummary}) for "${filePath || dirPaths[dirPaths.length - 1] || '(unknown path)'}"`);
 }
 
-module.exports = { applyPermissions };
+// ---------------------------------------------------------------------------
+// System > Tasks' "Apply Permissions" row — applyPermissions() above only
+// ever touches a file/folder Kitsune itself just created (a fresh import or
+// rename). It has no way to reach anything that was already sitting in a
+// root folder before Set Permissions was ever turned on, or that landed
+// there some other way (a manual copy, a restore from backup, an external
+// tool). This is that: a real, on-demand-or-scheduled walk of every
+// configured root folder's entire existing tree, applying the exact same
+// Folder Chmod/File Chmod (+ chown) settings to everything already on disk.
+//
+// Same real-task shape System > Tasks already established for Disk Usage
+// Recompute (see disk-usage.js — getTaskInfo/setIntervalHours/runNow, an
+// interval persisted in the same 'scheduled-tasks' app_settings row under
+// its own key, last-run state persisted separately so it survives a
+// restart) — server/routes/system-tasks.js and TaskList.jsx's RealRow
+// were both generalized to drive either task through the same endpoints
+// and UI rather than duplicating either.
+//
+// One deliberate difference from Disk Usage: that task kicks off a fresh
+// scan immediately at every server startup (see startDiskUsageScheduler),
+// since a stat-only walk is cheap and the dashboard needs a real number
+// right away. This one does NOT run at startup — chmod/chown is a real
+// filesystem write across a potentially huge tree, and doing that
+// unprompted on every restart (including a quick dev-server bounce) would
+// be surprising. It only ever runs from an explicit Run Now or its own
+// scheduled interval, both starting the clock from whenever the server
+// actually came up.
+// ---------------------------------------------------------------------------
+db.init(async () => {
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      section TEXT PRIMARY KEY,
+      data TEXT NOT NULL DEFAULT '{}',
+      updated_at TEXT NOT NULL
+    )
+  `);
+});
+
+const TASK_SETTINGS_SECTION = 'scheduled-tasks'; // shared with disk-usage.js — see that file's own persistIntervalHours
+const TASK_CACHE_SECTION = 'apply-permissions-cache';
+const TASK_ID = 'apply-permissions';
+const TASK_NAME = 'Apply Permissions';
+const MIN_INTERVAL_HOURS = 1;
+const MAX_INTERVAL_HOURS = 168; // 1 week
+
+async function loadPersistedIntervalHours(fallback) {
+  const row = await db.prepare('SELECT data FROM app_settings WHERE section = ?').get(TASK_SETTINGS_SECTION);
+  if (!row) return fallback;
+  try {
+    const hours = Number(JSON.parse(row.data).applyPermissionsIntervalHours);
+    return Number.isFinite(hours) && hours > 0 ? hours : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+async function persistIntervalHours(hours) {
+  const row = await db.prepare('SELECT data FROM app_settings WHERE section = ?').get(TASK_SETTINGS_SECTION);
+  const merged = { ...(row ? JSON.parse(row.data) : {}), applyPermissionsIntervalHours: hours };
+  await db.prepare(`
+    INSERT INTO app_settings (section, data, updated_at) VALUES (?, ?, ?)
+    ON CONFLICT(section) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at
+  `).run(TASK_SETTINGS_SECTION, JSON.stringify(merged), db.now());
+}
+
+async function loadPersistedLastRun() {
+  const row = await db.prepare('SELECT data FROM app_settings WHERE section = ?').get(TASK_CACHE_SECTION);
+  if (!row) return null;
+  try {
+    const parsed = JSON.parse(row.data);
+    if (!parsed.lastRunAt) return null;
+    const lastRunAt = new Date(parsed.lastRunAt);
+    return Number.isNaN(lastRunAt.getTime()) ? null : lastRunAt;
+  } catch {
+    return null;
+  }
+}
+
+async function persistLastRun(lastRunAt) {
+  await db.prepare(`
+    INSERT INTO app_settings (section, data, updated_at) VALUES (?, ?, ?)
+    ON CONFLICT(section) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at
+  `).run(TASK_CACHE_SECTION, JSON.stringify({ lastRunAt: lastRunAt.toISOString() }), db.now());
+}
+
+const taskState = { running: false, lastRunAt: null };
+let intervalHours = 24; // overwritten by startPermissionsScheduler before anything else runs
+let nextRunAt = null;
+let timer = null;
+
+// One directory (chmod/chown'd itself, then every entry inside it) at a
+// time, depth-first — same shape as disk-usage.js's own folderSizeBytes,
+// including the "skip symlinks, log and move on past an unreadable
+// subfolder rather than aborting the whole walk" conventions, since this
+// walk has the exact same "one bad folder shouldn't sink a scan of a
+// hundred good ones" reasoning behind it.
+async function walkAndApply(dirPath, settings, counts) {
+  chmodPath(dirPath, settings.folderMode, 'folder');
+  chownPath(dirPath, settings);
+  counts.folders += 1;
+
+  let entries;
+  try {
+    entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+  } catch (err) {
+    logWarn('Permissions', `Could not read "${dirPath}" while applying permissions: ${err.code || err.message}`);
+    counts.errors += 1;
+    return;
+  }
+
+  for (const entry of entries) {
+    const full = path.join(dirPath, entry.name);
+    if (entry.isDirectory()) {
+      await walkAndApply(full, settings, counts);
+    } else if (entry.isFile()) {
+      chmodPath(full, settings.fileMode, 'file');
+      chownPath(full, settings);
+      counts.files += 1;
+    }
+    // Symlinks are intentionally neither followed nor chmod/chown'd — same
+    // "don't risk a cyclic link or reach outside the root folder" call
+    // disk-usage.js's folderSizeBytes already makes.
+  }
+}
+
+// The actual work, callable directly (used by both the scheduler and a
+// manual Run Now, and independently testable without the task-state
+// wrapper around it). Every real root folder gets its own full walk;
+// `enabled: false` is a deliberate no-op (not an error) — Set Permissions
+// is the master switch for whether Kitsune manages permissions at all, and
+// this task shouldn't start doing so on a whole library just because
+// someone clicked Run Now while it happens to be off.
+async function applyPermissionsToRootFolders() {
+  const settings = await getPermissionSettings();
+  if (!settings.enabled) {
+    logInfo('Permissions', 'Apply Permissions skipped — Set Permissions is turned off in Settings > Media Management.');
+    return { enabled: false, rootFolderCount: 0, folders: 0, files: 0, errors: 0 };
+  }
+
+  const rootFolders = (await db.prepare("SELECT data FROM settings_items WHERE section = 'root-folders'").all())
+    .map((row) => { try { return JSON.parse(row.data); } catch { return null; } })
+    .filter(Boolean);
+
+  const counts = { folders: 0, files: 0, errors: 0 };
+  for (const rf of rootFolders) {
+    if (!rf.path) continue;
+    try {
+      await fs.promises.stat(rf.path);
+    } catch (err) {
+      logWarn('Permissions', `Skipped root folder "${rf.path}" — not readable (${err.code || err.message})`);
+      counts.errors += 1;
+      continue;
+    }
+    await walkAndApply(rf.path, settings, counts);
+  }
+
+  const chownSummary = settings.chownUser || settings.chownGroup
+    ? `, chown ${settings.chownUser || '(unchanged)'}:${settings.chownGroup || '(unchanged)'}`
+    : '';
+  logInfo('Permissions', `Apply Permissions: folders ${settings.folderMode}, files ${settings.fileMode}${chownSummary} — ` +
+    `${counts.folders} folder(s) and ${counts.files} file(s) across ${rootFolders.length} root folder(s)` +
+    `${counts.errors ? `, ${counts.errors} error(s) (see warnings above)` : ''}`);
+  return { enabled: true, rootFolderCount: rootFolders.length, ...counts };
+}
+
+// Guards against a second run overlapping the first (a scheduled fire
+// landing mid-way through a still-running manual Run Now on a big
+// library), same convention as disk-usage.js's refreshDiskUsage.
+async function refreshPermissionsTask() {
+  if (taskState.running) {
+    logWarn('Permissions', 'Skipped a scheduled Apply Permissions run — the previous run is still in progress');
+    return;
+  }
+  taskState.running = true;
+  try {
+    await applyPermissionsToRootFolders();
+  } catch (err) {
+    logWarn('Permissions', `Apply Permissions run failed: ${err.stack || err}`);
+  } finally {
+    taskState.running = false;
+    taskState.lastRunAt = new Date();
+    await persistLastRun(taskState.lastRunAt);
+  }
+}
+
+function scheduleNext() {
+  if (timer) clearTimeout(timer);
+  const ms = intervalHours * 60 * 60 * 1000;
+  nextRunAt = new Date(Date.now() + ms);
+  timer = setTimeout(async () => {
+    await refreshPermissionsTask();
+    scheduleNext();
+  }, ms);
+}
+
+// System > Tasks' Run Now button for this row.
+async function runNow() {
+  await refreshPermissionsTask();
+  scheduleNext();
+}
+
+async function setIntervalHours(hours) {
+  const clamped = Math.min(MAX_INTERVAL_HOURS, Math.max(MIN_INTERVAL_HOURS, Math.round(hours)));
+  intervalHours = clamped;
+  await persistIntervalHours(clamped);
+  scheduleNext();
+  logInfo('Permissions', `Apply Permissions interval changed to every ${clamped}h`);
+  return clamped;
+}
+
+// Backs GET /api/system-tasks alongside disk-usage.js's own getTaskInfo —
+// server/routes/system-tasks.js returns both in the same array.
+function getTaskInfo() {
+  return {
+    id: TASK_ID,
+    name: TASK_NAME,
+    intervalHours,
+    minIntervalHours: MIN_INTERVAL_HOURS,
+    maxIntervalHours: MAX_INTERVAL_HOURS,
+    lastRunAt: taskState.lastRunAt ? taskState.lastRunAt.toISOString() : null,
+    nextRunAt: nextRunAt ? nextRunAt.toISOString() : null,
+    running: taskState.running,
+  };
+}
+
+// Called once from server.js at startup. Loads the persisted interval and
+// last-run timestamp (so "last run" survives a restart instead of showing
+// "Never" right after one) and arms the recurring timer — but, unlike
+// startDiskUsageScheduler, does NOT run a scan immediately; see this
+// section's own header comment for why.
+async function startPermissionsScheduler(defaultIntervalHours) {
+  intervalHours = await loadPersistedIntervalHours(defaultIntervalHours);
+  taskState.lastRunAt = await loadPersistedLastRun();
+  logInfo('Permissions', `Apply Permissions will run every ${intervalHours}h (next run scheduled from server startup, not run immediately)`);
+  scheduleNext();
+}
+
+module.exports = {
+  applyPermissions,
+  applyPermissionsToRootFolders,
+  getTaskInfo,
+  setIntervalHours,
+  runNow,
+  startPermissionsScheduler,
+};

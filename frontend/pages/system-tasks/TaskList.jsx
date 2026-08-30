@@ -2,17 +2,19 @@ import { useEffect, useRef, useState } from 'react';
 
 // ---------------------------------------------------------------------------
 // System > Tasks — the pilot page for Kitsune's React migration (see
-// README's "React migration" section and vite.config.mjs). A faithful port
-// of public/js/pages/system-tasks.js's logic — same seven decorative rows,
-// same one real row (Disk Usage Recompute, backed by /api/system-tasks —
-// see server/lib/disk-usage.js), same polling-while-running behavior, same
-// completion flash — talking to the exact same unchanged backend endpoints.
-// Nothing server-side changed for this migration at all.
+// README's "React migration" section and vite.config.mjs). Originally a
+// faithful port of public/js/pages/system-tasks.js's logic (now gone,
+// superseded by this) with one real row (Disk Usage Recompute) alongside
+// the same seven decorative placeholder rows that page always had.
 //
-// The old public/js/pages/system-tasks.js is gone (superseded by this, not
-// left running alongside it) and app.js no longer imports it — see the
-// README entry for why loading both would have meant two separate render
-// loops fighting over the same #taskList container.
+// RealRow now takes its task's id/endpoints as props instead of having
+// Disk Usage Recompute's hardcoded in, so Apply Permissions (see
+// server/lib/permissions.js and server/routes/system-tasks.js) could join
+// it as a second genuinely real row without copy-pasting the whole
+// polling/flash/interval-dropdown component a second time — both rows
+// share identical behavior (interval dropdown, Run Now, poll-while-running,
+// completion flash) because both back onto the exact same GET/POST/PATCH
+// shape on the server side.
 // ---------------------------------------------------------------------------
 
 const TASKS_DATA = [
@@ -79,10 +81,15 @@ function FakeRow({ task }) {
   );
 }
 
-// The one real row: Disk Usage Recompute. Renders nothing until
-// /api/system-tasks has answered once (matching the old version, which
-// only ever appended this row to the list once `realTask` was non-null).
-function RealRow() {
+// A real row backed by GET/POST/PATCH /api/system-tasks — Disk Usage
+// Recompute and Apply Permissions both render through this same component
+// (see TaskList below), told apart only by `taskId` (which row to pick out
+// of GET /api/system-tasks' array) and the two endpoints to call for this
+// task's Run Now / interval change. Renders nothing until /api/system-tasks
+// has answered once and included this taskId (matching the old
+// single-task version, which only ever appended its row once `realTask`
+// was non-null).
+function RealRow({ taskId, runPath, patchPath }) {
   const [task, setTask] = useState(null);
   const [flashing, setFlashing] = useState(false);
   const [changingInterval, setChangingInterval] = useState(false);
@@ -97,7 +104,7 @@ function RealRow() {
     try {
       const res = await fetch('/api/system-tasks');
       const tasks = await res.json();
-      return tasks.find((t) => t.id === 'disk-usage') || null;
+      return tasks.find((t) => t.id === taskId) || null;
     } catch {
       return null; // keep whatever's currently shown rather than blanking it
     }
@@ -155,7 +162,7 @@ function RealRow() {
     // ahead of the fetch.
     setTask((t) => (t ? { ...t, running: true } : t));
     try {
-      const res = await fetch('/api/system-tasks/disk-usage/run', { method: 'POST' });
+      const res = await fetch(runPath, { method: 'POST' });
       const body = await res.json();
       if (body.task) {
         wasRunningRef.current = body.task.running;
@@ -172,7 +179,7 @@ function RealRow() {
     const hours = Number(e.target.value);
     setChangingInterval(true);
     try {
-      const res = await fetch('/api/system-tasks/disk-usage', {
+      const res = await fetch(patchPath, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ intervalHours: hours }),
@@ -222,7 +229,8 @@ export default function TaskList() {
       {TASKS_DATA.map((task) => (
         <FakeRow key={task.id} task={task} />
       ))}
-      <RealRow />
+      <RealRow taskId="disk-usage" runPath="/api/system-tasks/disk-usage/run" patchPath="/api/system-tasks/disk-usage" />
+      <RealRow taskId="apply-permissions" runPath="/api/system-tasks/apply-permissions/run" patchPath="/api/system-tasks/apply-permissions" />
     </>
   );
 }
