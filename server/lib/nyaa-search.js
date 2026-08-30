@@ -278,7 +278,7 @@ function simplifyTitleForSearch(title) {
 // 2020-2026 BD/compilation re-upload of the same show. See
 // searchWithFallback, which pages through this until it finds a match
 // rather than trusting page 1 alone.
-async function searchNyaa(query, page = 1) {
+async function searchNyaa(query, page = 1, { sort } = {}) {
   const params = new URLSearchParams({
     page: 'rss', q: query, c: ANIME_CATEGORY,
     // f=0 (no filter) rather than f=1 ("no remakes") — same reasoning as
@@ -294,6 +294,24 @@ async function searchNyaa(query, page = 1) {
     m: '1', // undocumented but confirmed-in-source: makes <link> a ready-made magnet URI instead of a .torrent download link
   });
   if (page > 1) params.set('p', String(page));
+  // `sort` (set by searchWithFallback for a batch search — see its own
+  // comment) — real, confirmed fix: nyaa.si's own default with no s=/o= is
+  // upload-date-descending, which for a popular/long-running show buries a
+  // real batch under potentially thousands of individual-episode re-uploads
+  // accumulated over years, needing dozens of pages to ever reach one. A
+  // season pack is nearly always one of the largest files that exists for
+  // a show (12+ episodes bundled into one torrent vs. one episode each), so
+  // sorting by size descending — exactly what a person doing this search by
+  // hand on nyaa.si would naturally do, and exactly what put every real
+  // batch for Farming Life in Another World on page 1 in a live side-by-
+  // side comparison — puts real batches at or near the top instead of
+  // scattered arbitrarily deep in a date-sorted list. Left unset (nyaa.si's
+  // own date-descending default) for per-episode search, where the newest
+  // upload of a specific episode — not the largest file — is what's wanted.
+  if (sort) {
+    params.set('s', sort);
+    params.set('o', 'desc');
+  }
   const url = `${NYAA_BASE}?${params.toString()}`;
   logDebug('IndexerService', `Nyaa.si request: ${url}`);
   const res = await fetchWithTimeout(url);
@@ -459,7 +477,7 @@ async function searchWithFallback(series, matchFn, { extraQueryTerm, exhaustive 
     // as the real end of pagination, same as a genuinely empty page.
     const seenInfoHashes = new Set();
     for (let page = 1; page <= maxPages; page++) {
-      const results = await searchNyaa(query, page);
+      const results = await searchNyaa(query, page, { sort: exhaustive ? 'size' : undefined });
       // An empty page means nyaa.si has run out of results for this query
       // entirely — no point requesting page N+1, it'll be empty too.
       if (results.length === 0) {
