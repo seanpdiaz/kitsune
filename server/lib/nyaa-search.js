@@ -442,6 +442,22 @@ async function searchWithFallback(series, matchFn, { extraQueryTerm, exhaustive 
     // extra Nyaa.si requests and latency.
     let attemptMatches = [];
     const maxPages = exhaustive ? MAX_PAGES_PER_ATTEMPT_EXHAUSTIVE : MAX_PAGES_PER_ATTEMPT;
+    // Real, confirmed miss with exhaustive search: requesting a page number
+    // far past a query's actual result depth doesn't reliably come back
+    // empty — a live "Isekai Nonbiri Nouka" exhaustive search returned
+    // exactly 75 items with exactly 2 filter matches on every single page
+    // from 1 through 40, an exactness that real, independently-varying
+    // content essentially never produces. That smells like nyaa.si
+    // reusing/clamping to already-seen content once a query runs out of
+    // genuinely new results, rather than a clean empty response — so
+    // relying only on `results.length === 0` to detect "end of results"
+    // (as the code did before this) let 39 pages of what's most likely the
+    // same handful of torrents accumulate as if they were 39 pages of new
+    // ones. Tracked here by each item's real identity (infoHash, same key
+    // dedupeReleases uses) — when an entire page turns out to be nothing
+    // this attempt hasn't already seen on an earlier page, that's treated
+    // as the real end of pagination, same as a genuinely empty page.
+    const seenInfoHashes = new Set();
     for (let page = 1; page <= maxPages; page++) {
       const results = await searchNyaa(query, page);
       // An empty page means nyaa.si has run out of results for this query
@@ -450,11 +466,21 @@ async function searchWithFallback(series, matchFn, { extraQueryTerm, exhaustive 
         logDebug('IndexerService', `Query "${query}" page ${page}: 0 results — end of results for this query, stopping pagination.`);
         break;
       }
-      const pageMatches = results.filter(matchFn);
+      const newResults = results.filter((r) => {
+        const key = r.infoHash || r.magnetUrl;
+        if (!key || seenInfoHashes.has(key)) return false;
+        seenInfoHashes.add(key);
+        return true;
+      });
+      if (newResults.length === 0) {
+        logDebug('IndexerService', `Query "${query}" page ${page}: all ${results.length} result(s) were repeats of an earlier page — treating this as the real end of results.`);
+        break;
+      }
+      const pageMatches = newResults.filter(matchFn);
       attemptMatches = attemptMatches.concat(pageMatches);
       logInfo(
         'IndexerService',
-        `Query "${query}" page ${page}: ${results.length} result(s) back from Nyaa.si, ${pageMatches.length} matched the filter for this search (${attemptMatches.length} total so far).`,
+        `Query "${query}" page ${page}: ${results.length} result(s) back from Nyaa.si (${newResults.length} new), ${pageMatches.length} matched the filter for this search (${attemptMatches.length} total so far).`,
       );
       if (attemptMatches.length > 0 && !exhaustive) break;
     }
