@@ -45,6 +45,25 @@ const REQUEST_TIMEOUT_MS = 10000;
 // ignored. See nyaa.si/help or nyaadevs/nyaa's category table for the full
 // code list.
 const ANIME_CATEGORY = '1_0';
+// English-translated only (a subcategory of ANIME_CATEGORY) — used only for
+// exhaustive/batch search, not per-episode search. Real, confirmed cause of
+// under-counted batch results: side-by-side with the user's own manual
+// nyaa.si search (same query, same s=size&o=desc sort, but scoped to c=1_2)
+// their search surfaced every real season batch on page 1, while this app's
+// broader c=1_0 query for the exact same title/sort came back with almost
+// none. The 1_0 category also pulls in raw/non-English/dual-audio releases,
+// which for a long-running show include Blu-ray raw collections far larger
+// than any English fansub batch — sorted by size, a handful of those can
+// fill most of a single 75-item RSS page before a real English batch ever
+// appears, and (see MAX_PAGES_PER_ATTEMPT_EXHAUSTIVE's comment) nyaa.si's
+// RSS pagination can't reliably be paged past that point for a narrow,
+// size-sorted query — it starts repeating page 1's content instead of
+// returning genuinely new items. Narrowing to 1_2 for batch search only
+// keeps that noise out, matching what a person doing this search by hand
+// would naturally scope to. Left broad (1_0) for per-episode search, where
+// the original English-tagged-wrong-category miss this constant was first
+// introduced for (see ANIME_CATEGORY's own comment) still applies.
+const ANIME_CATEGORY_ENGLISH = '1_2';
 const CANDIDATE_LIMIT = 8;
 
 // nyaa.si's own bundled default tracker list (trackers.txt in its repo) —
@@ -278,9 +297,9 @@ function simplifyTitleForSearch(title) {
 // 2020-2026 BD/compilation re-upload of the same show. See
 // searchWithFallback, which pages through this until it finds a match
 // rather than trusting page 1 alone.
-async function searchNyaa(query, page = 1, { sort } = {}) {
+async function searchNyaa(query, page = 1, { sort, category } = {}) {
   const params = new URLSearchParams({
-    page: 'rss', q: query, c: ANIME_CATEGORY,
+    page: 'rss', q: query, c: category || ANIME_CATEGORY,
     // f=0 (no filter) rather than f=1 ("no remakes") — same reasoning as
     // ANIME_CATEGORY above: "remake" is a self-reported uploader flag, not
     // something reliably indicating a release isn't wanted, and excluding
@@ -349,6 +368,18 @@ async function searchNyaa(query, page = 1, { sort } = {}) {
     `Nyaa.si query "${query}" page ${page}: RSS had ${items.length} item(s), ${withMagnet.length} usable (had a magnet/infoHash).`
     + (items.length > 0 && withMagnet.length === 0 ? ' All items were dropped — no magnetUrl/infoHash could be built from any of them.' : ''),
   );
+  // Diagnostic only (debug level, top 5) — added alongside the
+  // ANIME_CATEGORY_ENGLISH fix so the *next* time a batch search's result
+  // count looks wrong, System > Logs shows which titles/sizes a page
+  // actually contained instead of just a count, without needing another
+  // manual side-by-side against nyaa.si's own site. Cheap (already-parsed
+  // data, no extra request).
+  if (withMagnet.length > 0) {
+    const sample = withMagnet.slice(0, 5)
+      .map((r) => `"${r.title}" (${(r.sizeBytes / (1024 ** 3)).toFixed(2)} GiB)`)
+      .join(', ');
+    logDebug('IndexerService', `Nyaa.si query "${query}" page ${page}: top result(s) — ${sample}`);
+  }
   return withMagnet;
 }
 
@@ -477,7 +508,10 @@ async function searchWithFallback(series, matchFn, { extraQueryTerm, exhaustive 
     // as the real end of pagination, same as a genuinely empty page.
     const seenInfoHashes = new Set();
     for (let page = 1; page <= maxPages; page++) {
-      const results = await searchNyaa(query, page, { sort: exhaustive ? 'size' : undefined });
+      const results = await searchNyaa(query, page, {
+        sort: exhaustive ? 'size' : undefined,
+        category: exhaustive ? ANIME_CATEGORY_ENGLISH : undefined,
+      });
       // An empty page means nyaa.si has run out of results for this query
       // entirely — no point requesting page N+1, it'll be empty too.
       if (results.length === 0) {
