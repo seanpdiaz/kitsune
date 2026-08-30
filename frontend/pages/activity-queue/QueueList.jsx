@@ -121,7 +121,8 @@ export default function QueueList() {
             hold something more useful: the actual episode name. */}
         <div className="settings-name">
           <p className="settings-title">
-            {q.seriesTitle} <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>{q.episodeLabel}</span>
+            <a className="queue-series-link" href={`series.html?id=${q.seriesId}`}>{q.seriesTitle}</a>{' '}
+            <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>{q.episodeLabel}</span>
           </p>
           <span className="settings-meta">{q.episodeTitle || '—'}</span>
         </div>
