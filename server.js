@@ -54,6 +54,7 @@ const { handleBackupsApi } = require('./server/routes/backups');
 const { handleSslApi } = require('./server/routes/ssl');
 const { handleIndexersApi } = require('./server/routes/indexers');
 const { startDiskUsageScheduler } = require('./server/lib/disk-usage');
+const { startPermissionsScheduler } = require('./server/lib/permissions');
 
 // Default for how often the Library dashboard's Disk usage stat card
 // recomputes (a real recursive directory walk — expensive, so it runs on a
@@ -63,6 +64,16 @@ const { startDiskUsageScheduler } = require('./server/lib/disk-usage');
 // wins over this on every subsequent startup — this is just the fallback
 // before anyone's customized it, not a fixed recommendation.
 const DISK_USAGE_REFRESH_HOURS = Number(process.env.DISK_USAGE_REFRESH_HOURS) || 6;
+
+// Same fallback-only-until-someone-customizes-it role as the disk usage
+// interval above, for System > Tasks' Apply Permissions row (see
+// server/lib/permissions.js). Defaults far less often than disk usage's
+// 6h — a chmod/chown walk across a whole library is real filesystem
+// writes, not just reads, and existing permissions rarely drift on their
+// own; this task exists mainly to backfill files that predate the Set
+// Permissions toggle or arrived outside Kitsune, not to fight a constant
+// battle against something actively changing them.
+const APPLY_PERMISSIONS_INTERVAL_HOURS = Number(process.env.APPLY_PERMISSIONS_INTERVAL_HOURS) || 24;
 
 // ---------------------------------------------------------------------------
 // Server
@@ -187,6 +198,13 @@ const server = http.createServer(async (req, res) => {
     // startDiskUsageScheduler's own header comment.
     startDiskUsageScheduler(DISK_USAGE_REFRESH_HOURS).catch((err) => {
       logError('Server', `Disk usage scheduler failed to start: ${err && err.stack ? err.stack : err}`);
+    });
+    // Also not awaited, same reasoning — arms the Apply Permissions
+    // schedule without blocking server startup on it. Unlike disk usage,
+    // this deliberately does NOT run a scan immediately at startup — see
+    // startPermissionsScheduler's own comment in permissions.js.
+    startPermissionsScheduler(APPLY_PERMISSIONS_INTERVAL_HOURS).catch((err) => {
+      logError('Server', `Apply Permissions scheduler failed to start: ${err && err.stack ? err.stack : err}`);
     });
   });
 })();
