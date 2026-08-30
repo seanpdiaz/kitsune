@@ -360,6 +360,23 @@ async function searchNyaa(query, page = 1) {
 // history like Tsugumomo's.
 const MAX_PAGES_PER_ATTEMPT = 15;
 
+// Real, confirmed miss with exhaustive batch search on: a popular,
+// years-running show ("Farming Life in Another World") had its primary
+// title query come back with ZERO batch matches across all 15 pages
+// (1125 raw items — years of individual-episode uploads and re-uploads
+// for an ongoing isekai series easily fill that many pages before a
+// season-pack ever turns up), while the alt title found real matches on
+// page 1. There's no guarantee 15 pages is enough for a franchise this
+// size on either query. Batch search (Search Season/Search All/Grab best
+// match for a season) is a deliberate, occasional click, not something
+// that fires on every page load the way per-episode search does, so it
+// can afford to look considerably further before giving up — hence a
+// separate, more generous cap used only when `exhaustive` is set, while
+// per-episode search keeps the tighter MAX_PAGES_PER_ATTEMPT above.
+const MAX_PAGES_PER_ATTEMPT_EXHAUSTIVE = 40;
+
+
+
 // Shared by both single-episode and batch search below — tries the series'
 // primary title (plus an optional narrowing term, e.g. a season's own
 // name), then falls back through series.alt_titles in turn, same pattern
@@ -370,7 +387,7 @@ const MAX_PAGES_PER_ATTEMPT = 15;
 // MAX_PAGES_PER_ATTEMPT) before trying the next title. Throws on a genuine
 // network/HTTP failure (from searchNyaa); returns an empty array, not an
 // error, if nothing ever matched.
-async function searchWithFallback(series, matchFn, { extraQueryTerm } = {}) {
+async function searchWithFallback(series, matchFn, { extraQueryTerm, exhaustive = false } = {}) {
   const attempts = [];
   if (extraQueryTerm) attempts.push(`${series.title} ${extraQueryTerm}`);
   attempts.push(series.title);
@@ -407,7 +424,25 @@ async function searchWithFallback(series, matchFn, { extraQueryTerm } = {}) {
     }
     seenQueries.add(query);
 
-    for (let page = 1; page <= MAX_PAGES_PER_ATTEMPT; page++) {
+    // Real, confirmed miss: stopping at the very first page that had *any*
+    // match meant a popular/long-running show's real batch releases —
+    // scattered across many pages of nyaa.si's upload-date-descending sort,
+    // mixed in among hundreds of individual-episode uploads accumulated
+    // over years — only ever surfaced whichever single batch happened to
+    // land on that first lucky page, silently dropping every other real
+    // batch sitting on a later page of that exact same successful query.
+    // `exhaustive` (set by searchBatchReleases below, not per-episode
+    // search) keeps paging all the way through MAX_PAGES_PER_ATTEMPT (or
+    // until a genuinely empty page ends it) once matches start turning up,
+    // accumulating every one instead of stopping at the first. Left off by
+    // default for per-episode search, which runs far more often and where
+    // a new episode's own release is almost always still on page 1 anyway
+    // (it just aired) — paging all 15 pages on every single "Search
+    // episode" click for a benefit that case rarely needs isn't worth the
+    // extra Nyaa.si requests and latency.
+    let attemptMatches = [];
+    const maxPages = exhaustive ? MAX_PAGES_PER_ATTEMPT_EXHAUSTIVE : MAX_PAGES_PER_ATTEMPT;
+    for (let page = 1; page <= maxPages; page++) {
       const results = await searchNyaa(query, page);
       // An empty page means nyaa.si has run out of results for this query
       // entirely — no point requesting page N+1, it'll be empty too.
@@ -415,13 +450,15 @@ async function searchWithFallback(series, matchFn, { extraQueryTerm } = {}) {
         logDebug('IndexerService', `Query "${query}" page ${page}: 0 results — end of results for this query, stopping pagination.`);
         break;
       }
-      matches = results.filter(matchFn);
+      const pageMatches = results.filter(matchFn);
+      attemptMatches = attemptMatches.concat(pageMatches);
       logInfo(
         'IndexerService',
-        `Query "${query}" page ${page}: ${results.length} result(s) back from Nyaa.si, ${matches.length} matched the filter for this search.`,
+        `Query "${query}" page ${page}: ${results.length} result(s) back from Nyaa.si, ${pageMatches.length} matched the filter for this search (${attemptMatches.length} total so far).`,
       );
-      if (matches.length > 0) break;
+      if (attemptMatches.length > 0 && !exhaustive) break;
     }
+    matches = attemptMatches;
     if (matches.length > 0) {
       logInfo('IndexerService', `Nyaa.si search for "${series.title}" matched on query "${query}" — ${matches.length} release(s).`);
       break;
@@ -606,7 +643,7 @@ async function searchBatchReleases(series, { extraQueryTerm, profile, seasonNumb
   logInfo('IndexerService', `Searching Nyaa.si for "${series.title}" batch releases${extraQueryTerm ? ` (narrowed with "${extraQueryTerm}")` : ''}${seasonNumber != null ? ` (season ${seasonNumber} only)` : ''}.`);
   let matches;
   try {
-    matches = await searchWithFallback(series, (r) => isBatchRelease(r.title) && releaseCoversSeason(r.title, seasonNumber), { extraQueryTerm });
+    matches = await searchWithFallback(series, (r) => isBatchRelease(r.title) && releaseCoversSeason(r.title, seasonNumber), { extraQueryTerm, exhaustive: true });
   } catch (err) {
     logWarn('IndexerService', `Nyaa.si batch search failed for "${series.title}": ${err.message}`);
     return { ok: false, error: err.message };
