@@ -131,13 +131,13 @@ async function sortAndLimitReleases(releases, profile) {
 // errored — one indexer failing while another succeeds still returns real
 // results from whichever one(s) came back, same principle as a single
 // flaky indexer not being allowed to take down the whole Search button.
-async function searchRealIndexers(indexers, { series, episode, extraQueryTerm, profile }) {
+async function searchRealIndexers(indexers, { series, episode, extraQueryTerm, profile, seasonNumber }) {
   const isBatch = !episode;
   const outcomes = await Promise.all(indexers.map(async (idx) => {
     try {
       const result = idx.type === 'nyaa'
-        ? (isBatch ? await nyaaSearch.searchBatchReleases(series, { extraQueryTerm, profile }) : await nyaaSearch.searchReleasesForEpisode(series, episode, profile))
-        : (isBatch ? await prowlarrSearch.searchBatchReleases(idx.config, series, { extraQueryTerm, profile }) : await prowlarrSearch.searchReleasesForEpisode(idx.config, series, episode, profile));
+        ? (isBatch ? await nyaaSearch.searchBatchReleases(series, { extraQueryTerm, profile, seasonNumber }) : await nyaaSearch.searchReleasesForEpisode(series, episode, profile))
+        : (isBatch ? await prowlarrSearch.searchBatchReleases(idx.config, series, { extraQueryTerm, profile, seasonNumber }) : await prowlarrSearch.searchReleasesForEpisode(idx.config, series, episode, profile));
       return { type: idx.type, ...result };
     } catch (err) {
       return { type: idx.type, ok: false, error: err.message };
@@ -253,7 +253,13 @@ async function searchForBatchScope(series, seasonNumber, { extraQueryTerm, episo
   if (indexers.length === 0) {
     notice = 'No indexers enabled — enable one in Settings > Indexers to search.';
   } else {
-    const result = await searchRealIndexers(indexers, { series, extraQueryTerm, profile });
+    // seasonNumber is null for a whole-series "Search All" (scopeParam ===
+    // 'series' below never sets it) and a real season number for a single
+    // season's own Search Season/Grab best match — passed through so a
+    // same-show batch for a *different* season (a real, confirmed miss —
+    // see nyaa-search.js's releaseCoversSeason) doesn't get treated as a
+    // match here just because it's some kind of batch for this show.
+    const result = await searchRealIndexers(indexers, { series, extraQueryTerm, profile, seasonNumber });
     if (result.ok) {
       releases = result.releases;
       if (result.partialError) notice = `Some indexers failed (${result.partialError}) — showing results from the rest.`;

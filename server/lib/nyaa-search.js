@@ -523,6 +523,50 @@ function isBatchRelease(title) {
   return false;
 }
 
+// Which season number(s) a release's own title explicitly claims to cover —
+// a bare "S01"/"S1", a spelled-out "Season 2", or a range like "Season 1-2"
+// / "S1&2" (expanded to every season in the range). Returns null when the
+// title doesn't mention a season at all, which is the common case for a
+// real single-season show's batch ("[SubsPlease] Some Show (01-12) [1080p]
+// (Batch)" never says "Season 1" because there's never been a Season 2 to
+// disambiguate from) — null means "doesn't say," not "season 0," and
+// releaseCoversSeason below treats that as compatible with whatever season
+// is being searched for, same permissive default every batch search has
+// always had.
+function extractSeasonNumbers(title) {
+  const range = /\bs(?:eason)?s?\.?\s*(\d{1,2})\s*(?:[-~&]|and)\s*(?:s(?:eason)?\.?\s*)?(\d{1,2})\b/i.exec(title);
+  if (range) {
+    const lo = Math.min(Number(range[1]), Number(range[2]));
+    const hi = Math.max(Number(range[1]), Number(range[2]));
+    const seasons = [];
+    for (let s = lo; s <= hi; s++) seasons.push(s);
+    return seasons;
+  }
+  const abbreviated = /\bS(\d{1,2})\b/i.exec(title);
+  if (abbreviated && !/\bS\d{1,2}\s*E\d{1,3}\b/i.test(title)) return [Number(abbreviated[1])];
+  const spelledOut = /\bSeason\s*(\d{1,2})\b/i.exec(title);
+  if (spelledOut) return [Number(spelledOut[1])];
+  return null;
+}
+
+// Guards a season-scoped batch search (Search Season / Grab best match for
+// one season — see routes/releases.js's searchForBatchScope) against a real
+// confirmed miss: isBatchRelease alone only asks "does this look like a
+// season pack," never "which season," so a real Season 2 batch ("[Judas]
+// ... (Season 02) ... (Batch)") could show up — and be grabbed — under a
+// Season 1 search for the exact same show, with nothing here to tell them
+// apart. `seasonNumber` is null for a whole-series "Search All" (routes/
+// releases.js passes null there), where there's nothing to narrow against,
+// so every batch still matches; for a specific season, a release that
+// names a *different* season is excluded, while one that doesn't mention a
+// season at all still matches (see extractSeasonNumbers above).
+function releaseCoversSeason(title, seasonNumber) {
+  if (seasonNumber == null) return true;
+  const seasons = extractSeasonNumbers(title);
+  if (seasons == null) return true;
+  return seasons.includes(seasonNumber);
+}
+
 // Backs Search Season / Search All (whole series) on the series detail page
 // — same shape as searchReleasesForEpisode, but filtered to batch-looking
 // results instead of a specific episode number. `extraQueryTerm` (a
@@ -534,11 +578,11 @@ function isBatchRelease(title) {
 // *specific* episodes a grabbed batch ends up covering is decided by
 // server/routes/queue.js from real Library data instead, not from anything
 // parsed here.
-async function searchBatchReleases(series, { extraQueryTerm, profile } = {}) {
-  logInfo('IndexerService', `Searching Nyaa.si for "${series.title}" batch releases${extraQueryTerm ? ` (narrowed with "${extraQueryTerm}")` : ''}.`);
+async function searchBatchReleases(series, { extraQueryTerm, profile, seasonNumber } = {}) {
+  logInfo('IndexerService', `Searching Nyaa.si for "${series.title}" batch releases${extraQueryTerm ? ` (narrowed with "${extraQueryTerm}")` : ''}${seasonNumber != null ? ` (season ${seasonNumber} only)` : ''}.`);
   let matches;
   try {
-    matches = await searchWithFallback(series, (r) => isBatchRelease(r.title), { extraQueryTerm });
+    matches = await searchWithFallback(series, (r) => isBatchRelease(r.title) && releaseCoversSeason(r.title, seasonNumber), { extraQueryTerm });
   } catch (err) {
     logWarn('IndexerService', `Nyaa.si batch search failed for "${series.title}": ${err.message}`);
     return { ok: false, error: err.message };
@@ -573,6 +617,6 @@ async function testNyaaReachable() {
 
 module.exports = {
   searchNyaa, searchReleasesForEpisode, searchBatchReleases, testNyaaReachable,
-  classifyQualityFromTitle, titleMatchesEpisode, isBatchRelease, parseSizeString, buildMagnet, simplifyTitleForSearch,
+  classifyQualityFromTitle, titleMatchesEpisode, isBatchRelease, releaseCoversSeason, parseSizeString, buildMagnet, simplifyTitleForSearch,
   isHttpUrl,
 };
