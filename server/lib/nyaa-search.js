@@ -383,6 +383,108 @@ async function searchNyaa(query, page = 1, { sort, category } = {}) {
   return withMagnet;
 }
 
+// ---------------------------------------------------------------------------
+// HTML search — a live, direct comparison showed the RSS feed above isn't
+// a reliable way to run an exhaustive/batch search at all. Same query,
+// same category, same s=size&o=desc: Nyaa.si's real HTML search page
+// showed a dozen genuine Season 1/2 batches (24.6 GiB, 11.6 GiB, down to
+// 2.7 GiB) clustered at the top, while the RSS request for the *identical*
+// query/category/sort came back with a completely different, unrelated
+// set of results (a run of individual Season 2 episodes from one
+// uploader) — and requesting `p=2` of that RSS query came back byte-for-
+// byte identical to `p=1`. The most likely explanation: `page=rss` is a
+// fundamentally different, more limited code path on nyaa.si's end that
+// doesn't honor `s=`/`o=` (or paginate meaningfully) the way the real
+// search page does, not just an XML-formatted view of the same search.
+// Confirmed real pagination works on the HTML page too: `p=2` of the same
+// query came back with a genuinely different set of individual episodes,
+// not a repeat of `p=1` the way RSS's did.
+//
+// Used for exhaustive/batch search only (see searchWithFallback) — per-
+// episode search stays on the RSS feed above, which has no evidence of a
+// problem for its own use case (single query, page 1, nyaa.si's own
+// default sort) and is the simpler of the two to parse.
+// ---------------------------------------------------------------------------
+function extractRowBlocks(html) {
+  // A real torrent result row always carries exactly one of these five
+  // classes — see nyaadevs/nyaa's own search_results.html template:
+  // `<tr class="{% if torrent.deleted %}deleted{% elif torrent.hidden %}
+  // warning{% elif torrent.remake %}danger{% elif torrent.trusted %}
+  // success{% else %}default{% endif %}">`. Matching this exact class set
+  // (confirmed against that template source directly, not guessed) rather
+  // than just any `<tr>` means the header row and anything else on the
+  // page can't accidentally be picked up as a result.
+  const re = /<tr class="(deleted|warning|danger|success|default)">([\s\S]*?)<\/tr>/g;
+  const rows = [];
+  let m;
+  while ((m = re.exec(html))) rows.push({ rowClass: m[1], body: m[2] });
+  return rows;
+}
+
+async function searchNyaaHtml(query, page = 1, { sort, category } = {}) {
+  const params = new URLSearchParams({ q: query, c: category || ANIME_CATEGORY, f: '0' });
+  if (page > 1) params.set('p', String(page));
+  if (sort) {
+    params.set('s', sort);
+    params.set('o', 'desc');
+  }
+  const url = `${NYAA_BASE}?${params.toString()}`;
+  logDebug('IndexerService', `Nyaa.si HTML request: ${url}`);
+  const res = await fetchWithTimeout(url);
+  if (!res.ok) throw new Error(`Nyaa.si returned status ${res.status}`);
+  const html = await res.text();
+
+  const rows = extractRowBlocks(html);
+  const parsed = rows.map(({ rowClass, body }) => {
+    // The title link ("<a href="/view/12345" title="...">...</a>") is what
+    // this needs — a comment-count link can appear right before it in the
+    // very same cell, pointing at the *same* torrent but with a
+    // "#comments" URL fragment ("/view/12345#comments"). Requiring the
+    // closing quote to follow the id digits immediately (nothing in
+    // between) is what tells the two apart without needing to also match
+    // the comment-count link and discard it.
+    const titleMatch = /<a href="\/view\/(\d+)" title="([^"]*)">/.exec(body);
+    const torrentId = titleMatch ? titleMatch[1] : null;
+    const title = titleMatch ? decodeXmlEntities(titleMatch[2]) : 'Unknown';
+    const magnetMatch = /<a href="(magnet:[^"]*)"/.exec(body);
+    const magnetUrl = magnetMatch ? decodeXmlEntities(magnetMatch[1]) : null;
+    const infoHash = magnetUrl ? (/urn:btih:([a-zA-Z0-9]+)/.exec(magnetUrl) || [])[1] : null;
+    // Every plain `<td class="text-center">value</td>` cell in a row, in
+    // template order: size first, then (nyaa.si's own site has
+    // ENABLE_SHOW_STATS on, confirmed by the seeders/leechers this file
+    // already parses out of the RSS feed above) seeders, then leechers.
+    // The date cell in between is skipped automatically — its opening tag
+    // always carries an extra `data-timestamp="..."` attribute, so it can
+    // never match this exact-attribute pattern.
+    const plainCells = [...body.matchAll(/<td class="text-center">([^<]*)<\/td>/g)].map((mm) => mm[1].trim());
+    const sizeBytes = parseSizeString(plainCells[0]);
+    const seeders = parseInt(plainCells[1] || '0', 10) || 0;
+    const leechers = parseInt(plainCells[2] || '0', 10) || 0;
+    return {
+      title,
+      magnetUrl,
+      infoHash: infoHash ? infoHash.toLowerCase() : null,
+      infoUrl: torrentId ? `${NYAA_BASE}view/${torrentId}` : null,
+      sizeBytes,
+      seeders,
+      leechers,
+      trusted: rowClass === 'success',
+    };
+  });
+  const withMagnet = parsed.filter((r) => !!r.magnetUrl);
+  logDebug(
+    'IndexerService',
+    `Nyaa.si HTML query "${query}" page ${page}: page had ${rows.length} row(s), ${withMagnet.length} usable (had a magnet link).`,
+  );
+  if (withMagnet.length > 0) {
+    const sample = withMagnet.slice(0, 5)
+      .map((r) => `"${r.title}" (${(r.sizeBytes / (1024 ** 3)).toFixed(2)} GiB)`)
+      .join(', ');
+    logDebug('IndexerService', `Nyaa.si HTML query "${query}" page ${page}: top result(s) — ${sample}`);
+  }
+  return withMagnet;
+}
+
 // How many pages of a single query to page through before giving up on that
 // attempt and moving to the next (alt title, or done). nyaa.si's default
 // sort with no `s=`/`o=` is upload date descending, not relevance — for a
@@ -510,73 +612,65 @@ async function searchWithFallback(series, matchFn, { extraQueryTerm, exhaustive 
     // release seen under one sort order is never double-counted when it
     // also appears under the other.
     const seenInfoHashes = new Set();
-    // Real, confirmed limitation (production logs): the clamping behavior
-    // above isn't just "gives up after 40 pages" — for a size-sorted,
-    // category-narrowed query, page 2 already comes back byte-for-byte
-    // identical to page 1, meaning genuinely only ~75 items of this query's
-    // real result set are ever reachable through Nyaa's RSS endpoint no
-    // matter how many pages get requested. A real season's worth of
-    // batches can still be missed if they're smaller than whatever
-    // individual-episode uploads happen to dominate that one reachable
-    // page by size. Nyaa's own default sort (upload-date-descending, no
-    // s=/o=) hits the same ~75-item ceiling but is very unlikely to be
-    // dominated by the *same* items — different sort order, different 75.
-    // Trying both and merging (via seenInfoHashes above) roughly doubles
-    // the real, distinct result surface actually reachable per query
-    // without needing Nyaa's pagination to work any better than it does.
-    // Per-episode (non-exhaustive) search stays single-sort — it already
-    // stops at the first page with any match, so a second sort pass would
-    // just be an extra request for a case that's already fast.
-    const sortsToTry = exhaustive ? ['size', undefined] : [undefined];
-    for (const sort of sortsToTry) {
-      for (let page = 1; page <= maxPages; page++) {
-        const results = await searchNyaa(query, page, {
-          sort,
-          category: exhaustive ? ANIME_CATEGORY_ENGLISH : undefined,
-        });
-        // An empty page means nyaa.si has run out of results for this query
-        // entirely — no point requesting page N+1, it'll be empty too.
-        if (results.length === 0) {
-          logDebug('IndexerService', `Query "${query}" page ${page} (sort=${sort || 'default'}): 0 results — end of results for this sort, stopping pagination.`);
-          break;
-        }
-        const newResults = results.filter((r) => {
-          const key = r.infoHash || r.magnetUrl;
-          if (!key || seenInfoHashes.has(key)) return false;
-          seenInfoHashes.add(key);
-          return true;
-        });
-        if (newResults.length === 0) {
-          logDebug('IndexerService', `Query "${query}" page ${page} (sort=${sort || 'default'}): all ${results.length} result(s) were repeats of an earlier page/sort — treating this as the real end of results for this sort.`);
-          break;
-        }
-        const pageMatches = newResults.filter(matchFn);
-        attemptMatches = attemptMatches.concat(pageMatches);
-        logInfo(
-          'IndexerService',
-          `Query "${query}" page ${page} (sort=${sort || 'default'}): ${results.length} result(s) back from Nyaa.si (${newResults.length} new), ${pageMatches.length} matched the filter for this search (${attemptMatches.length} total so far).`,
-        );
-        // Diagnostic only (exhaustive/batch search, debug level) — every
-        // title on this page isBatchRelease() recognizes as a batch shape
-        // at all, whether or not it passed matchFn (which also requires
-        // releaseCoversSeason to agree on the season). Added to answer a
-        // question the other logging above can't: when the final match
-        // count looks low, is that because there genuinely aren't more
-        // batch-shaped releases on this page, or because a batch is
-        // present but its season was parsed as something other than what
-        // was searched for (in which case it'd show up here but not in
-        // pageMatches above).
-        if (exhaustive) {
-          const batchCandidates = newResults.filter((r) => isBatchRelease(r.title));
-          if (batchCandidates.length > 0) {
-            const listing = batchCandidates
-              .map((r) => `"${r.title}" (season(s): ${JSON.stringify(extractSeasonNumbers(r.title))}, ${(r.sizeBytes / (1024 ** 3)).toFixed(2)} GiB)`)
-              .join(' | ');
-            logDebug('IndexerService', `Query "${query}" page ${page} (sort=${sort || 'default'}): ${batchCandidates.length} batch-shaped title(s) on this page — ${listing}`);
-          }
-        }
-        if (attemptMatches.length > 0 && !exhaustive) break;
+    // Real, confirmed limitation of the RSS feed (see searchNyaaHtml's own
+    // comment for the full side-by-side): for exhaustive/batch search,
+    // fetch the real HTML search page instead — it supports genuine deep
+    // pagination and an honored size sort, neither of which the RSS feed
+    // above turned out to actually provide. Per-episode (non-exhaustive)
+    // search is untouched: still the RSS feed, still nyaa.si's own default
+    // (upload-date-descending) order, still stopping at the first page
+    // with any match — no evidence that path has a problem, and it's the
+    // simpler of the two to parse.
+    const fetchPage = exhaustive ? searchNyaaHtml : searchNyaa;
+    const sort = exhaustive ? 'size' : undefined;
+    const category = exhaustive ? ANIME_CATEGORY_ENGLISH : undefined;
+    for (let page = 1; page <= maxPages; page++) {
+      const results = await fetchPage(query, page, { sort, category });
+      // An empty page means nyaa.si has run out of results for this query
+      // entirely — no point requesting page N+1, it'll be empty too.
+      if (results.length === 0) {
+        logDebug('IndexerService', `Query "${query}" page ${page}: 0 results — end of results for this query, stopping pagination.`);
+        break;
       }
+      const newResults = results.filter((r) => {
+        const key = r.infoHash || r.magnetUrl;
+        if (!key || seenInfoHashes.has(key)) return false;
+        seenInfoHashes.add(key);
+        return true;
+      });
+      if (newResults.length === 0) {
+        // Real for the RSS feed (see searchNyaaHtml's comment) but kept
+        // here as a defensive stop for the HTML path too, in case it ever
+        // clamps the same way once a query's real results run out — cheap
+        // insurance, costs nothing when it never triggers.
+        logDebug('IndexerService', `Query "${query}" page ${page}: all ${results.length} result(s) were repeats of an earlier page — treating this as the real end of results.`);
+        break;
+      }
+      const pageMatches = newResults.filter(matchFn);
+      attemptMatches = attemptMatches.concat(pageMatches);
+      logInfo(
+        'IndexerService',
+        `Query "${query}" page ${page}: ${results.length} result(s) back from Nyaa.si (${newResults.length} new), ${pageMatches.length} matched the filter for this search (${attemptMatches.length} total so far).`,
+      );
+      // Diagnostic only (exhaustive/batch search, debug level) — every
+      // title on this page isBatchRelease() recognizes as a batch shape at
+      // all, whether or not it passed matchFn (which also requires
+      // releaseCoversSeason to agree on the season). Added to answer a
+      // question the other logging above can't: when the final match count
+      // looks low, is that because there genuinely aren't more batch-shaped
+      // releases on this page, or because a batch is present but its season
+      // was parsed as something other than what was searched for (in which
+      // case it'd show up here but not in pageMatches above).
+      if (exhaustive) {
+        const batchCandidates = newResults.filter((r) => isBatchRelease(r.title));
+        if (batchCandidates.length > 0) {
+          const listing = batchCandidates
+            .map((r) => `"${r.title}" (season(s): ${JSON.stringify(extractSeasonNumbers(r.title))}, ${(r.sizeBytes / (1024 ** 3)).toFixed(2)} GiB)`)
+            .join(' | ');
+          logDebug('IndexerService', `Query "${query}" page ${page}: ${batchCandidates.length} batch-shaped title(s) on this page — ${listing}`);
+        }
+      }
+      if (attemptMatches.length > 0 && !exhaustive) break;
     }
     matches = attemptMatches;
     if (matches.length > 0) {
