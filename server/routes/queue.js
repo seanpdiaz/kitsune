@@ -752,11 +752,40 @@ async function realTick() {
       return Math.round((torrent.progress || 0) * 100);
     }
 
+    // Real, confirmed miss: completion used to be gated on the whole
+    // torrent's own `progress` reaching 1, same field the "still
+    // downloading" branch below already knew wasn't good enough for a
+    // batch grab's per-row PERCENTAGE (see rowProgressPct's own comment,
+    // and pickFileForEpisode/GET torrents/files above it) — but the
+    // completion check itself never got the same fix, so a batch's
+    // individual episodes kept reporting 100% and "Downloading" at once,
+    // stayed in the queue, and kept counting toward the sidebar's active-
+    // download badge, until literally every other file in that same
+    // torrent also finished — qBittorrent doesn't necessarily download a
+    // multi-file torrent's files in lockstep, so one 4.3 GB episode can
+    // legitimately sit fully downloaded and importable for many minutes
+    // before the batch's last file catches up. This checks THIS row's own
+    // file's exact progress (not rounded — rowProgressPct's rounding is
+    // fine for a display percentage, but importing a file before it's
+    // 100.000% written to disk risks copying a truncated one) and falls
+    // back to the torrent-level check only when a specific file can't be
+    // confidently matched — the same safety net every other per-file guess
+    // in this section already falls back to.
+    async function rowIsComplete(row, torrent) {
+      const episode = await db.prepare('SELECT season_number, num FROM episodes WHERE id = ?').get(row.episode_id);
+      if (episode) {
+        const files = await filesForHash(row.torrent_hash);
+        const file = pickFileForEpisode(files, episode);
+        if (file && typeof file.progress === 'number') return file.progress >= 1;
+      }
+      return (torrent.progress || 0) >= 1;
+    }
+
     for (const row of rows) {
       const t = row.torrent_hash ? byHash.get(row.torrent_hash) : null;
       if (!t) continue; // still fetching metadata, or removed directly in qBittorrent — leave as-is, don't guess
 
-      if ((t.progress || 0) >= 1) {
+      if (await rowIsComplete(row, t)) {
         const files = await filesForHash(row.torrent_hash);
         await completeRealDownload(row, t, client, files);
       } else if (t.state === 'error' || t.state === 'missingFiles') {

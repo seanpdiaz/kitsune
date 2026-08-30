@@ -45,6 +45,25 @@ const REQUEST_TIMEOUT_MS = 10000;
 // ignored. See nyaa.si/help or nyaadevs/nyaa's category table for the full
 // code list.
 const ANIME_CATEGORY = '1_0';
+// English-translated only (a subcategory of ANIME_CATEGORY) — used only for
+// exhaustive/batch search, not per-episode search. Real, confirmed cause of
+// under-counted batch results: side-by-side with the user's own manual
+// nyaa.si search (same query, same s=size&o=desc sort, but scoped to c=1_2)
+// their search surfaced every real season batch on page 1, while this app's
+// broader c=1_0 query for the exact same title/sort came back with almost
+// none. The 1_0 category also pulls in raw/non-English/dual-audio releases,
+// which for a long-running show include Blu-ray raw collections far larger
+// than any English fansub batch — sorted by size, a handful of those can
+// fill most of a single 75-item RSS page before a real English batch ever
+// appears, and (see MAX_PAGES_PER_ATTEMPT_EXHAUSTIVE's comment) nyaa.si's
+// RSS pagination can't reliably be paged past that point for a narrow,
+// size-sorted query — it starts repeating page 1's content instead of
+// returning genuinely new items. Narrowing to 1_2 for batch search only
+// keeps that noise out, matching what a person doing this search by hand
+// would naturally scope to. Left broad (1_0) for per-episode search, where
+// the original English-tagged-wrong-category miss this constant was first
+// introduced for (see ANIME_CATEGORY's own comment) still applies.
+const ANIME_CATEGORY_ENGLISH = '1_2';
 const CANDIDATE_LIMIT = 8;
 
 // nyaa.si's own bundled default tracker list (trackers.txt in its repo) —
@@ -278,9 +297,9 @@ function simplifyTitleForSearch(title) {
 // 2020-2026 BD/compilation re-upload of the same show. See
 // searchWithFallback, which pages through this until it finds a match
 // rather than trusting page 1 alone.
-async function searchNyaa(query, page = 1) {
+async function searchNyaa(query, page = 1, { sort, category } = {}) {
   const params = new URLSearchParams({
-    page: 'rss', q: query, c: ANIME_CATEGORY,
+    page: 'rss', q: query, c: category || ANIME_CATEGORY,
     // f=0 (no filter) rather than f=1 ("no remakes") — same reasoning as
     // ANIME_CATEGORY above: "remake" is a self-reported uploader flag, not
     // something reliably indicating a release isn't wanted, and excluding
@@ -294,6 +313,24 @@ async function searchNyaa(query, page = 1) {
     m: '1', // undocumented but confirmed-in-source: makes <link> a ready-made magnet URI instead of a .torrent download link
   });
   if (page > 1) params.set('p', String(page));
+  // `sort` (set by searchWithFallback for a batch search — see its own
+  // comment) — real, confirmed fix: nyaa.si's own default with no s=/o= is
+  // upload-date-descending, which for a popular/long-running show buries a
+  // real batch under potentially thousands of individual-episode re-uploads
+  // accumulated over years, needing dozens of pages to ever reach one. A
+  // season pack is nearly always one of the largest files that exists for
+  // a show (12+ episodes bundled into one torrent vs. one episode each), so
+  // sorting by size descending — exactly what a person doing this search by
+  // hand on nyaa.si would naturally do, and exactly what put every real
+  // batch for Farming Life in Another World on page 1 in a live side-by-
+  // side comparison — puts real batches at or near the top instead of
+  // scattered arbitrarily deep in a date-sorted list. Left unset (nyaa.si's
+  // own date-descending default) for per-episode search, where the newest
+  // upload of a specific episode — not the largest file — is what's wanted.
+  if (sort) {
+    params.set('s', sort);
+    params.set('o', 'desc');
+  }
   const url = `${NYAA_BASE}?${params.toString()}`;
   logDebug('IndexerService', `Nyaa.si request: ${url}`);
   const res = await fetchWithTimeout(url);
@@ -331,6 +368,120 @@ async function searchNyaa(query, page = 1) {
     `Nyaa.si query "${query}" page ${page}: RSS had ${items.length} item(s), ${withMagnet.length} usable (had a magnet/infoHash).`
     + (items.length > 0 && withMagnet.length === 0 ? ' All items were dropped — no magnetUrl/infoHash could be built from any of them.' : ''),
   );
+  // Diagnostic only (debug level, top 5) — added alongside the
+  // ANIME_CATEGORY_ENGLISH fix so the *next* time a batch search's result
+  // count looks wrong, System > Logs shows which titles/sizes a page
+  // actually contained instead of just a count, without needing another
+  // manual side-by-side against nyaa.si's own site. Cheap (already-parsed
+  // data, no extra request).
+  if (withMagnet.length > 0) {
+    const sample = withMagnet.slice(0, 5)
+      .map((r) => `"${r.title}" (${(r.sizeBytes / (1024 ** 3)).toFixed(2)} GiB)`)
+      .join(', ');
+    logDebug('IndexerService', `Nyaa.si query "${query}" page ${page}: top result(s) — ${sample}`);
+  }
+  return withMagnet;
+}
+
+// ---------------------------------------------------------------------------
+// HTML search — a live, direct comparison showed the RSS feed above isn't
+// a reliable way to run an exhaustive/batch search at all. Same query,
+// same category, same s=size&o=desc: Nyaa.si's real HTML search page
+// showed a dozen genuine Season 1/2 batches (24.6 GiB, 11.6 GiB, down to
+// 2.7 GiB) clustered at the top, while the RSS request for the *identical*
+// query/category/sort came back with a completely different, unrelated
+// set of results (a run of individual Season 2 episodes from one
+// uploader) — and requesting `p=2` of that RSS query came back byte-for-
+// byte identical to `p=1`. The most likely explanation: `page=rss` is a
+// fundamentally different, more limited code path on nyaa.si's end that
+// doesn't honor `s=`/`o=` (or paginate meaningfully) the way the real
+// search page does, not just an XML-formatted view of the same search.
+// Confirmed real pagination works on the HTML page too: `p=2` of the same
+// query came back with a genuinely different set of individual episodes,
+// not a repeat of `p=1` the way RSS's did.
+//
+// Used for exhaustive/batch search only (see searchWithFallback) — per-
+// episode search stays on the RSS feed above, which has no evidence of a
+// problem for its own use case (single query, page 1, nyaa.si's own
+// default sort) and is the simpler of the two to parse.
+// ---------------------------------------------------------------------------
+function extractRowBlocks(html) {
+  // A real torrent result row always carries exactly one of these five
+  // classes — see nyaadevs/nyaa's own search_results.html template:
+  // `<tr class="{% if torrent.deleted %}deleted{% elif torrent.hidden %}
+  // warning{% elif torrent.remake %}danger{% elif torrent.trusted %}
+  // success{% else %}default{% endif %}">`. Matching this exact class set
+  // (confirmed against that template source directly, not guessed) rather
+  // than just any `<tr>` means the header row and anything else on the
+  // page can't accidentally be picked up as a result.
+  const re = /<tr class="(deleted|warning|danger|success|default)">([\s\S]*?)<\/tr>/g;
+  const rows = [];
+  let m;
+  while ((m = re.exec(html))) rows.push({ rowClass: m[1], body: m[2] });
+  return rows;
+}
+
+async function searchNyaaHtml(query, page = 1, { sort, category } = {}) {
+  const params = new URLSearchParams({ q: query, c: category || ANIME_CATEGORY, f: '0' });
+  if (page > 1) params.set('p', String(page));
+  if (sort) {
+    params.set('s', sort);
+    params.set('o', 'desc');
+  }
+  const url = `${NYAA_BASE}?${params.toString()}`;
+  logDebug('IndexerService', `Nyaa.si HTML request: ${url}`);
+  const res = await fetchWithTimeout(url);
+  if (!res.ok) throw new Error(`Nyaa.si returned status ${res.status}`);
+  const html = await res.text();
+
+  const rows = extractRowBlocks(html);
+  const parsed = rows.map(({ rowClass, body }) => {
+    // The title link ("<a href="/view/12345" title="...">...</a>") is what
+    // this needs — a comment-count link can appear right before it in the
+    // very same cell, pointing at the *same* torrent but with a
+    // "#comments" URL fragment ("/view/12345#comments"). Requiring the
+    // closing quote to follow the id digits immediately (nothing in
+    // between) is what tells the two apart without needing to also match
+    // the comment-count link and discard it.
+    const titleMatch = /<a href="\/view\/(\d+)" title="([^"]*)">/.exec(body);
+    const torrentId = titleMatch ? titleMatch[1] : null;
+    const title = titleMatch ? decodeXmlEntities(titleMatch[2]) : 'Unknown';
+    const magnetMatch = /<a href="(magnet:[^"]*)"/.exec(body);
+    const magnetUrl = magnetMatch ? decodeXmlEntities(magnetMatch[1]) : null;
+    const infoHash = magnetUrl ? (/urn:btih:([a-zA-Z0-9]+)/.exec(magnetUrl) || [])[1] : null;
+    // Every plain `<td class="text-center">value</td>` cell in a row, in
+    // template order: size first, then (nyaa.si's own site has
+    // ENABLE_SHOW_STATS on, confirmed by the seeders/leechers this file
+    // already parses out of the RSS feed above) seeders, then leechers.
+    // The date cell in between is skipped automatically — its opening tag
+    // always carries an extra `data-timestamp="..."` attribute, so it can
+    // never match this exact-attribute pattern.
+    const plainCells = [...body.matchAll(/<td class="text-center">([^<]*)<\/td>/g)].map((mm) => mm[1].trim());
+    const sizeBytes = parseSizeString(plainCells[0]);
+    const seeders = parseInt(plainCells[1] || '0', 10) || 0;
+    const leechers = parseInt(plainCells[2] || '0', 10) || 0;
+    return {
+      title,
+      magnetUrl,
+      infoHash: infoHash ? infoHash.toLowerCase() : null,
+      infoUrl: torrentId ? `${NYAA_BASE}view/${torrentId}` : null,
+      sizeBytes,
+      seeders,
+      leechers,
+      trusted: rowClass === 'success',
+    };
+  });
+  const withMagnet = parsed.filter((r) => !!r.magnetUrl);
+  logDebug(
+    'IndexerService',
+    `Nyaa.si HTML query "${query}" page ${page}: page had ${rows.length} row(s), ${withMagnet.length} usable (had a magnet link).`,
+  );
+  if (withMagnet.length > 0) {
+    const sample = withMagnet.slice(0, 5)
+      .map((r) => `"${r.title}" (${(r.sizeBytes / (1024 ** 3)).toFixed(2)} GiB)`)
+      .join(', ');
+    logDebug('IndexerService', `Nyaa.si HTML query "${query}" page ${page}: top result(s) — ${sample}`);
+  }
   return withMagnet;
 }
 
@@ -360,6 +511,23 @@ async function searchNyaa(query, page = 1) {
 // history like Tsugumomo's.
 const MAX_PAGES_PER_ATTEMPT = 15;
 
+// Real, confirmed miss with exhaustive batch search on: a popular,
+// years-running show ("Farming Life in Another World") had its primary
+// title query come back with ZERO batch matches across all 15 pages
+// (1125 raw items — years of individual-episode uploads and re-uploads
+// for an ongoing isekai series easily fill that many pages before a
+// season-pack ever turns up), while the alt title found real matches on
+// page 1. There's no guarantee 15 pages is enough for a franchise this
+// size on either query. Batch search (Search Season/Search All/Grab best
+// match for a season) is a deliberate, occasional click, not something
+// that fires on every page load the way per-episode search does, so it
+// can afford to look considerably further before giving up — hence a
+// separate, more generous cap used only when `exhaustive` is set, while
+// per-episode search keeps the tighter MAX_PAGES_PER_ATTEMPT above.
+const MAX_PAGES_PER_ATTEMPT_EXHAUSTIVE = 40;
+
+
+
 // Shared by both single-episode and batch search below — tries the series'
 // primary title (plus an optional narrowing term, e.g. a season's own
 // name), then falls back through series.alt_titles in turn, same pattern
@@ -370,7 +538,7 @@ const MAX_PAGES_PER_ATTEMPT = 15;
 // MAX_PAGES_PER_ATTEMPT) before trying the next title. Throws on a genuine
 // network/HTTP failure (from searchNyaa); returns an empty array, not an
 // error, if nothing ever matched.
-async function searchWithFallback(series, matchFn, { extraQueryTerm } = {}) {
+async function searchWithFallback(series, matchFn, { extraQueryTerm, exhaustive = false } = {}) {
   const attempts = [];
   if (extraQueryTerm) attempts.push(`${series.title} ${extraQueryTerm}`);
   attempts.push(series.title);
@@ -407,21 +575,104 @@ async function searchWithFallback(series, matchFn, { extraQueryTerm } = {}) {
     }
     seenQueries.add(query);
 
-    for (let page = 1; page <= MAX_PAGES_PER_ATTEMPT; page++) {
-      const results = await searchNyaa(query, page);
+    // Real, confirmed miss: stopping at the very first page that had *any*
+    // match meant a popular/long-running show's real batch releases —
+    // scattered across many pages of nyaa.si's upload-date-descending sort,
+    // mixed in among hundreds of individual-episode uploads accumulated
+    // over years — only ever surfaced whichever single batch happened to
+    // land on that first lucky page, silently dropping every other real
+    // batch sitting on a later page of that exact same successful query.
+    // `exhaustive` (set by searchBatchReleases below, not per-episode
+    // search) keeps paging all the way through MAX_PAGES_PER_ATTEMPT (or
+    // until a genuinely empty page ends it) once matches start turning up,
+    // accumulating every one instead of stopping at the first. Left off by
+    // default for per-episode search, which runs far more often and where
+    // a new episode's own release is almost always still on page 1 anyway
+    // (it just aired) — paging all 15 pages on every single "Search
+    // episode" click for a benefit that case rarely needs isn't worth the
+    // extra Nyaa.si requests and latency.
+    let attemptMatches = [];
+    const maxPages = exhaustive ? MAX_PAGES_PER_ATTEMPT_EXHAUSTIVE : MAX_PAGES_PER_ATTEMPT;
+    // Real, confirmed miss with exhaustive search: requesting a page number
+    // far past a query's actual result depth doesn't reliably come back
+    // empty — a live "Isekai Nonbiri Nouka" exhaustive search returned
+    // exactly 75 items with exactly 2 filter matches on every single page
+    // from 1 through 40, an exactness that real, independently-varying
+    // content essentially never produces. That smells like nyaa.si
+    // reusing/clamping to already-seen content once a query runs out of
+    // genuinely new results, rather than a clean empty response — so
+    // relying only on `results.length === 0` to detect "end of results"
+    // (as the code did before this) let 39 pages of what's most likely the
+    // same handful of torrents accumulate as if they were 39 pages of new
+    // ones. Tracked here by each item's real identity (infoHash, same key
+    // dedupeReleases uses) — when an entire page turns out to be nothing
+    // this attempt hasn't already seen on an earlier page, that's treated
+    // as the real end of pagination, same as a genuinely empty page. Shared
+    // across every sort pass below (not reset per sort) so the same
+    // release seen under one sort order is never double-counted when it
+    // also appears under the other.
+    const seenInfoHashes = new Set();
+    // Real, confirmed limitation of the RSS feed (see searchNyaaHtml's own
+    // comment for the full side-by-side): for exhaustive/batch search,
+    // fetch the real HTML search page instead — it supports genuine deep
+    // pagination and an honored size sort, neither of which the RSS feed
+    // above turned out to actually provide. Per-episode (non-exhaustive)
+    // search is untouched: still the RSS feed, still nyaa.si's own default
+    // (upload-date-descending) order, still stopping at the first page
+    // with any match — no evidence that path has a problem, and it's the
+    // simpler of the two to parse.
+    const fetchPage = exhaustive ? searchNyaaHtml : searchNyaa;
+    const sort = exhaustive ? 'size' : undefined;
+    const category = exhaustive ? ANIME_CATEGORY_ENGLISH : undefined;
+    for (let page = 1; page <= maxPages; page++) {
+      const results = await fetchPage(query, page, { sort, category });
       // An empty page means nyaa.si has run out of results for this query
       // entirely — no point requesting page N+1, it'll be empty too.
       if (results.length === 0) {
         logDebug('IndexerService', `Query "${query}" page ${page}: 0 results — end of results for this query, stopping pagination.`);
         break;
       }
-      matches = results.filter(matchFn);
+      const newResults = results.filter((r) => {
+        const key = r.infoHash || r.magnetUrl;
+        if (!key || seenInfoHashes.has(key)) return false;
+        seenInfoHashes.add(key);
+        return true;
+      });
+      if (newResults.length === 0) {
+        // Real for the RSS feed (see searchNyaaHtml's comment) but kept
+        // here as a defensive stop for the HTML path too, in case it ever
+        // clamps the same way once a query's real results run out — cheap
+        // insurance, costs nothing when it never triggers.
+        logDebug('IndexerService', `Query "${query}" page ${page}: all ${results.length} result(s) were repeats of an earlier page — treating this as the real end of results.`);
+        break;
+      }
+      const pageMatches = newResults.filter(matchFn);
+      attemptMatches = attemptMatches.concat(pageMatches);
       logInfo(
         'IndexerService',
-        `Query "${query}" page ${page}: ${results.length} result(s) back from Nyaa.si, ${matches.length} matched the filter for this search.`,
+        `Query "${query}" page ${page}: ${results.length} result(s) back from Nyaa.si (${newResults.length} new), ${pageMatches.length} matched the filter for this search (${attemptMatches.length} total so far).`,
       );
-      if (matches.length > 0) break;
+      // Diagnostic only (exhaustive/batch search, debug level) — every
+      // title on this page isBatchRelease() recognizes as a batch shape at
+      // all, whether or not it passed matchFn (which also requires
+      // releaseCoversSeason to agree on the season). Added to answer a
+      // question the other logging above can't: when the final match count
+      // looks low, is that because there genuinely aren't more batch-shaped
+      // releases on this page, or because a batch is present but its season
+      // was parsed as something other than what was searched for (in which
+      // case it'd show up here but not in pageMatches above).
+      if (exhaustive) {
+        const batchCandidates = newResults.filter((r) => isBatchRelease(r.title));
+        if (batchCandidates.length > 0) {
+          const listing = batchCandidates
+            .map((r) => `"${r.title}" (season(s): ${JSON.stringify(extractSeasonNumbers(r.title))}, ${(r.sizeBytes / (1024 ** 3)).toFixed(2)} GiB)`)
+            .join(' | ');
+          logDebug('IndexerService', `Query "${query}" page ${page}: ${batchCandidates.length} batch-shaped title(s) on this page — ${listing}`);
+        }
+      }
+      if (attemptMatches.length > 0 && !exhaustive) break;
     }
+    matches = attemptMatches;
     if (matches.length > 0) {
       logInfo('IndexerService', `Nyaa.si search for "${series.title}" matched on query "${query}" — ${matches.length} release(s).`);
       break;
@@ -518,9 +769,109 @@ function isBatchRelease(title) {
   if (/\b\d{2,4}\s*[-~]\s*\d{2,4}\b/.test(title)) return true;
   if (/\bbatch\b/i.test(title)) return true;
   if (/\bcomplete\b/i.test(title)) return true;
-  if (/\bs(?:eason)?s?\.?\s*\d{1,2}\s*(?:[-~&]|and)\s*(?:s(?:eason)?\.?\s*)?\d{1,2}\b/i.test(title)) return true;
-  if (/\bS\d{1,2}\b/i.test(title) && !/\bS\d{1,2}\s*E\d{1,3}\b/i.test(title) && !/\bE\d{1,3}\b/i.test(title)) return true;
+  // Real, confirmed miss (production logs, "Isekai Nonbiri Nouka" batch
+  // search): this used to allow whitespace on both sides of a `-` season
+  // separator, which also matches the extremely common weekly single-
+  // episode naming style "ShowName S2 - 12 (1080p) [hash].mkv" (SubsPlease/
+  // ASW/etc.) — "S2 - 12" isn't a season-2-through-12 range, "12" is the
+  // episode number. A real season range is written tight against the
+  // number on at least one side ("S1-2", "Season 1-2", "S1&2", "season 01 &
+  // 02") — a bare space-hyphen-space is reserved for the per-episode dash
+  // convention, so only `-`/`~` require no surrounding whitespace here;
+  // `&` and spelled-out "and" (genuinely written with spaces, "1 & 2" / "1
+  // and 2") keep allowing it.
+  if (/\bs(?:eason)?s?\.?\s*\d{1,2}(?:[-~]|\s*&\s*|\s+and\s+)(?:s(?:eason)?\.?\s*)?\d{1,2}\b/i.test(title)) return true;
+  if (
+    // Real, confirmed regression while fixing the miss above: guarding with
+    // a plain title-wide "/[-–—]\s*\d{1,3}\b/" test (like the spelled-
+    // out "Season N" rule below does) also suppressed real batches that
+    // simply state their own episode range elsewhere in the same title —
+    // "[SubsPlease] ... S2 (01-12) (1080p) [Batch]" has a dash inside
+    // "01-12" that has nothing to do with the "S2" season tag, but a
+    // whole-title test can't tell the difference. Anchoring the exclusion
+    // as a lookahead immediately after THIS S<N> match — "is *this*
+    // occurrence of S2 immediately followed by ` - 12`-style text" — scopes
+    // it correctly: "S2 - 12" (no space before season-scoping content) is
+    // suppressed, "S2 (01-12)" is not.
+    /\bS\d{1,2}\b(?!\s*[-–—]\s*\d{1,3}\b)/i.test(title)
+    && !/\bS\d{1,2}\s*E\d{1,3}\b/i.test(title)
+    && !/\bE\d{1,3}\b/i.test(title)
+  ) return true;
+  // Real, confirmed miss: "[neoDESU] Farming Life in Another World [Season 1]
+  // [BD 1080p x265 HEVC OPUS] [Dual Audio] Isekai Nonbiri Nouka" and
+  // "[EMBER] Farming Life in Another World (2023) (Season 1) [BDRip] ..."
+  // are both plainly whole-season releases but never tripped any rule
+  // above — no "batch"/"complete"/range keyword, and the abbreviated "S01"
+  // rule only recognizes the short form, never the fully spelled-out
+  // "Season 1" fansub groups use just as often with no accompanying range.
+  // Same "whole season, not a single episode" signal as the abbreviated
+  // rule right above, so it needs the same exclusion guard: a real
+  // "Season 1 Episode 5"/"Season 1 - Ep 05" single-episode release must
+  // not be misread as a batch just for spelling "Season" out.
+  if (
+    /\bSeason\s*\d{1,2}\b/i.test(title)
+    && !/\bEp(?:isode)?\.?\s*\d{1,3}\b/i.test(title)
+    && !/\bE\d{1,3}\b/i.test(title)
+    // A trailing "- 05"-style bare episode number (no "E"/"Episode" at all,
+    // just a dash and a short number — "Farming Life in Another World
+    // Season 1 - 05 [1080p]") is a real single-episode release using a
+    // naming style the two guards above don't catch. \d{1,3}\b specifically
+    // (not \d{1,3} alone) so this can't misfire on a longer digit run right
+    // after a dash — a year ("- 2023") or a resolution ("-1080p") — since
+    // \b never matches between two digits.
+    && !/[-–—]\s*\d{1,3}\b/.test(title)
+  ) return true;
   return false;
+}
+
+// Which season number(s) a release's own title explicitly claims to cover —
+// a bare "S01"/"S1", a spelled-out "Season 2", or a range like "Season 1-2"
+// / "S1&2" (expanded to every season in the range). Returns null when the
+// title doesn't mention a season at all, which is the common case for a
+// real single-season show's batch ("[SubsPlease] Some Show (01-12) [1080p]
+// (Batch)" never says "Season 1" because there's never been a Season 2 to
+// disambiguate from) — null means "doesn't say," not "season 0," and
+// releaseCoversSeason below treats that as compatible with whatever season
+// is being searched for, same permissive default every batch search has
+// always had.
+function extractSeasonNumbers(title) {
+  const range = /\bs(?:eason)?s?\.?\s*(\d{1,2})(?:[-~]|\s*&\s*|\s+and\s+)(?:s(?:eason)?\.?\s*)?(\d{1,2})\b/i.exec(title);
+  if (range) {
+    const lo = Math.min(Number(range[1]), Number(range[2]));
+    const hi = Math.max(Number(range[1]), Number(range[2]));
+    const seasons = [];
+    for (let s = lo; s <= hi; s++) seasons.push(s);
+    return seasons;
+  }
+  // Same anchored dash guard as isBatchRelease's abbreviated rule (see its
+  // comment on the regression a whole-title version of this guard caused)
+  // — "S2 - 12" isn't season 2, it's episode 12 of season 2, so this
+  // deliberately returns null (unstated) rather than [2] for it; a batch
+  // that states its own episode range elsewhere ("S2 (01-12)") isn't
+  // affected, since the lookahead only looks right after this match.
+  const abbreviated = /\bS(\d{1,2})\b(?!\s*[-–—]\s*\d{1,3}\b)/i.exec(title);
+  if (abbreviated && !/\bS\d{1,2}\s*E\d{1,3}\b/i.test(title)) return [Number(abbreviated[1])];
+  const spelledOut = /\bSeason\s*(\d{1,2})\b/i.exec(title);
+  if (spelledOut) return [Number(spelledOut[1])];
+  return null;
+}
+
+// Guards a season-scoped batch search (Search Season / Grab best match for
+// one season — see routes/releases.js's searchForBatchScope) against a real
+// confirmed miss: isBatchRelease alone only asks "does this look like a
+// season pack," never "which season," so a real Season 2 batch ("[Judas]
+// ... (Season 02) ... (Batch)") could show up — and be grabbed — under a
+// Season 1 search for the exact same show, with nothing here to tell them
+// apart. `seasonNumber` is null for a whole-series "Search All" (routes/
+// releases.js passes null there), where there's nothing to narrow against,
+// so every batch still matches; for a specific season, a release that
+// names a *different* season is excluded, while one that doesn't mention a
+// season at all still matches (see extractSeasonNumbers above).
+function releaseCoversSeason(title, seasonNumber) {
+  if (seasonNumber == null) return true;
+  const seasons = extractSeasonNumbers(title);
+  if (seasons == null) return true;
+  return seasons.includes(seasonNumber);
 }
 
 // Backs Search Season / Search All (whole series) on the series detail page
@@ -534,11 +885,11 @@ function isBatchRelease(title) {
 // *specific* episodes a grabbed batch ends up covering is decided by
 // server/routes/queue.js from real Library data instead, not from anything
 // parsed here.
-async function searchBatchReleases(series, { extraQueryTerm, profile } = {}) {
-  logInfo('IndexerService', `Searching Nyaa.si for "${series.title}" batch releases${extraQueryTerm ? ` (narrowed with "${extraQueryTerm}")` : ''}.`);
+async function searchBatchReleases(series, { extraQueryTerm, profile, seasonNumber } = {}) {
+  logInfo('IndexerService', `Searching Nyaa.si for "${series.title}" batch releases${extraQueryTerm ? ` (narrowed with "${extraQueryTerm}")` : ''}${seasonNumber != null ? ` (season ${seasonNumber} only)` : ''}.`);
   let matches;
   try {
-    matches = await searchWithFallback(series, (r) => isBatchRelease(r.title), { extraQueryTerm });
+    matches = await searchWithFallback(series, (r) => isBatchRelease(r.title) && releaseCoversSeason(r.title, seasonNumber), { extraQueryTerm, exhaustive: true });
   } catch (err) {
     logWarn('IndexerService', `Nyaa.si batch search failed for "${series.title}": ${err.message}`);
     return { ok: false, error: err.message };
@@ -573,6 +924,6 @@ async function testNyaaReachable() {
 
 module.exports = {
   searchNyaa, searchReleasesForEpisode, searchBatchReleases, testNyaaReachable,
-  classifyQualityFromTitle, titleMatchesEpisode, isBatchRelease, parseSizeString, buildMagnet, simplifyTitleForSearch,
+  classifyQualityFromTitle, titleMatchesEpisode, isBatchRelease, releaseCoversSeason, parseSizeString, buildMagnet, simplifyTitleForSearch,
   isHttpUrl,
 };

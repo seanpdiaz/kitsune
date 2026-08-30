@@ -76,7 +76,12 @@ export default function MissingList({ buttonContainer }) {
         ? <p className="settings-empty">No missing episodes.</p>
         : episodes.map((ep) => (
           <div className="missing-row" key={ep.episodeId}>
-            <span className="settings-title">{ep.seriesTitle}</span>
+            {/* Real link to that series' page — same queue-series-link
+                affordance (hover underline, inherits .settings-title's own
+                color) Activity > Queue's QueueList.jsx already uses for the
+                same "episode row names a series, series page is one click
+                away" need. */}
+            <span className="settings-title"><a className="queue-series-link" href={`series.html?id=${ep.seriesId}`}>{ep.seriesTitle}</a></span>
             <span className="settings-meta">
               {`S${String(ep.seasonNumber).padStart(2, '0')}E${String(ep.num).padStart(2, '0')} - ${ep.title || `Episode ${ep.num}`}`}
             </span>

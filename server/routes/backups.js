@@ -32,10 +32,20 @@
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
+const { promisify } = require('util');
 const { execFile } = require('child_process');
 const db = require('../db');
 const { logInfo, logWarn } = require('../logger');
 const { sendJson } = require('../lib/http');
+
+// Promisified rather than zlib.gzipSync — gzipping a real database file is
+// CPU-bound work whose duration scales with the file's size, and (like
+// media-import.js's fs.copyFileSync, fixed separately) a *Sync call blocks
+// Node's single main thread for the whole duration: the entire app would
+// freeze for as long as compression takes, on every "Backup Now". The async
+// zlib API still does the actual compression on libuv's threadpool, just
+// without blocking the thread serving everyone else's requests meanwhile.
+const gzipAsync = promisify(zlib.gzip);
 
 const BACKUPS_DIR = path.join(__dirname, '..', '..', 'data', 'backups');
 if (!fs.existsSync(BACKUPS_DIR)) fs.mkdirSync(BACKUPS_DIR, { recursive: true });
@@ -93,7 +103,11 @@ function dumpPostgres() {
 // there's no single file to read in that case.
 async function dumpDatabase() {
   if (db.DB_CLIENT === 'postgres') return dumpPostgres();
-  return fs.readFileSync(db.DB_PATH);
+  // Async for the same reason as gzipAsync above — DB_PATH is a real,
+  // ever-growing SQLite file (every series/episode/history/settings row in
+  // the app), and reading it synchronously would block the whole server for
+  // however long that read takes.
+  return fs.promises.readFile(db.DB_PATH);
 }
 
 async function handleBackupsApi(req, res, urlPath) {
@@ -104,19 +118,21 @@ async function handleBackupsApi(req, res, urlPath) {
   }
 
   // POST /api/backups — "Backup Now": gzip the live database as it exists
-  // at this exact moment — a real SQLite file read synchronously under
-  // DB_CLIENT=sqlite (like every other filesystem call in this codebase —
-  // root-folders.js, fs-browse.js), or a real `pg_dump` run under
-  // DB_CLIENT=postgres (see dumpDatabase/dumpPostgres above). Either way the
-  // response only goes out once the backup file genuinely exists on disk.
+  // at this exact moment — a real SQLite file read, gzipped, and written out
+  // entirely through async fs/zlib calls (not the *Sync ones fs-browse.js/
+  // root-folders.js use for cheap directory metadata — this reads and
+  // compresses a whole real database file, which is a different, size-
+  // proportional cost), or a real `pg_dump` run under DB_CLIENT=postgres
+  // (see dumpDatabase/dumpPostgres above). Either way the response only
+  // goes out once the backup file genuinely exists on disk.
   if (req.method === 'POST' && urlPath === '/api/backups') {
     try {
-      const gz = zlib.gzipSync(await dumpDatabase());
+      const gz = await gzipAsync(await dumpDatabase());
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
       const filename = `kitsune_backup_${stamp}.db.gz`;
       const filePath = path.join(BACKUPS_DIR, filename);
-      fs.writeFileSync(filePath, gz);
-      const stat = fs.statSync(filePath);
+      await fs.promises.writeFile(filePath, gz);
+      const stat = await fs.promises.stat(filePath);
       logInfo('Backup', `Created ${filename} (${stat.size} bytes)`);
       sendJson(res, 201, { id: filename, name: filename, sizeBytes: stat.size, createdAt: stat.mtime.toISOString() });
     } catch (err) {
@@ -141,7 +157,7 @@ async function handleBackupsApi(req, res, urlPath) {
       sendJson(res, 404, { error: 'Backup not found' });
       return true;
     }
-    const content = fs.readFileSync(filePath);
+    const content = await fs.promises.readFile(filePath);
     res.writeHead(200, {
       'Content-Type': 'application/gzip',
       'Content-Disposition': `attachment; filename="${filename}"`,
@@ -164,7 +180,7 @@ async function handleBackupsApi(req, res, urlPath) {
       sendJson(res, 404, { error: 'Backup not found' });
       return true;
     }
-    fs.unlinkSync(filePath);
+    await fs.promises.unlink(filePath);
     logInfo('Backup', `Removed ${filename}`);
     sendJson(res, 200, { ok: true });
     return true;

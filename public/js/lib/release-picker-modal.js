@@ -27,7 +27,10 @@ function initReleasePickerModal() {
         <p class="release-picker-notice is-collapsed" id="releasePickerNotice"></p>
         <div class="release-list-wrap">
           <div class="release-header">
-            <span>Release</span><span>Indexer</span><span>Quality</span><span>Size</span><span>Seeders</span><span></span>
+            <span>Release</span><span>Indexer</span><span>Quality</span>
+            <button type="button" class="release-sort-btn" data-sort-key="sizeBytes">Size</button>
+            <button type="button" class="release-sort-btn" data-sort-key="seeders">Seeders</button>
+            <span></span>
           </div>
           <div id="releasePickerList"></div>
         </div>
@@ -47,6 +50,57 @@ function initReleasePickerModal() {
   const cancelBtn = modal.querySelector('#releasePickerCancel');
 
   let onGrabbed = null;
+
+  // Client-side only — re-sorts and re-renders whatever this search already
+  // returned, no re-fetch. Persists across searches on this page (not reset
+  // in open() below) since a user who wants releases seeders-first for one
+  // episode almost certainly wants that for the next one too. `key` is
+  // whichever field the clicked header represents ('seeders' or the
+  // sizeBytes release field itself, reused directly as the key so
+  // compareReleases doesn't need a second lookup table) or null for the
+  // server's own best-first order (server/lib/quality.js's
+  // rankReleaseCandidates) — the state new releases always start in.
+  const sortState = { key: null, dir: null };
+  const sortButtons = Array.from(modal.querySelectorAll('.release-sort-btn'));
+
+  function compareReleases(a, b) {
+    const av = Number(a[sortState.key]) || 0;
+    const bv = Number(b[sortState.key]) || 0;
+    return sortState.dir === 'asc' ? av - bv : bv - av;
+  }
+
+  // Reflects sortState on the header buttons themselves: an arrow on
+  // whichever column is active (pointing the way it's currently sorting),
+  // no arrow on the other one, and neither once a column's been clicked
+  // back past 'asc' to the server's own order (see the click handler below).
+  function updateSortHeader() {
+    sortButtons.forEach((btn) => {
+      const active = btn.dataset.sortKey === sortState.key;
+      btn.classList.toggle('active', active);
+      const arrow = active ? (sortState.dir === 'asc' ? icons.arrowUp : icons.arrowDown) : '';
+      btn.innerHTML = `${btn.dataset.sortKey === 'sizeBytes' ? 'Size' : 'Seeders'}${arrow}`;
+    });
+  }
+
+  // Three clicks on the same column cycle desc → asc → off (back to the
+  // server's best-first order); a click on the other column always starts
+  // it fresh at desc — most-seeders/largest-first being the generally more
+  // useful first look at either column.
+  sortButtons.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.sortKey;
+      if (sortState.key !== key) {
+        sortState.key = key;
+        sortState.dir = 'desc';
+      } else if (sortState.dir === 'desc') {
+        sortState.dir = 'asc';
+      } else {
+        sortState.key = null;
+        sortState.dir = null;
+      }
+      renderSortedReleases();
+    });
+  });
 
   function close() {
     modal.classList.remove('open');
@@ -107,16 +161,35 @@ function initReleasePickerModal() {
     return `<span class="release-title" title="${escapeAttr(r.title)}">${r.title}</span>`;
   }
 
+  // Split in two so the Size/Seeders header buttons above can re-sort and
+  // re-render already-fetched results instantly, with no server round trip:
+  // renderReleases() is the one real entry point (called once per search,
+  // stores what came back), renderSortedReleases() does the actual DOM work
+  // and re-runs on every sort-button click too.
+  let lastTarget = null;
+  let lastReleases = [];
+
   function renderReleases(target, releases) {
-    if (releases.length === 0) {
+    lastTarget = target;
+    lastReleases = releases;
+    renderSortedReleases();
+  }
+
+  function renderSortedReleases() {
+    updateSortHeader();
+    if (lastReleases.length === 0) {
       listEl.innerHTML = `<div class="release-row" style="grid-template-columns:1fr;"><span style="color:var(--text-muted);">No results.</span></div>`;
       return;
     }
     // The grab index sent to POST /api/queue is this release's POSITION in
-    // this already-best-first-sorted list (0 = the top result), not its
-    // `index` field (that's the pre-sort generation seed, unrelated to
-    // where it landed after sorting) — POST /api/queue re-derives the same
-    // sorted list server-side and looks the grab up by that same position.
+    // the ORIGINAL, still-best-first-sorted list GET /api/releases returned
+    // (0 = the top result) — POST /api/queue re-derives that exact list
+    // server-side (see releases.js's own cache) and looks the grab up by
+    // that same position. The Size/Seeders sort above only ever reorders
+    // this row's DOM position, never that original index — origIndex is
+    // captured once, before sorting, specifically so a re-sorted display
+    // still grabs the release the user actually clicked rather than
+    // whatever now happens to sit at that same visual row.
     // `inProfile` comes from server/lib/quality.js's rankReleaseCandidates —
     // false only when the series has a Quality Profile assigned AND this
     // release's tier isn't in that profile's allowed list (never true/false
@@ -125,14 +198,17 @@ function initReleasePickerModal() {
     // just visually deprioritized — see that function's own comment for why
     // filtering outright would be the wrong call for e.g. an obscure old
     // episode where an out-of-profile release might be the only real option.
-    listEl.innerHTML = releases.map((r, position) => `
-      <div class="release-row${r.inProfile === false ? ' out-of-profile' : ''}" data-position="${position}">
+    const view = lastReleases.map((r, origIndex) => ({ r, origIndex }));
+    if (sortState.key) view.sort((a, b) => compareReleases(a.r, b.r));
+
+    listEl.innerHTML = view.map(({ r, origIndex }) => `
+      <div class="release-row${r.inProfile === false ? ' out-of-profile' : ''}" data-position="${origIndex}">
         ${titleCell(r)}
         <span>${r.indexer}${r.isBatch ? ' · batch' : ''}</span>
         <span class="audio-tag">${r.quality}${r.inProfile === false ? ' <span class="quality-flag out-of-profile-flag" title="Not in this series\' Quality Profile">Outside profile</span>' : ''}</span>
         <span>${formatBytes(r.sizeBytes)}</span>
         <span>${r.seeders}</span>
-        <button class="btn-accent" type="button" data-grab="${position}" style="padding:4px 10px; font-size:12px;">Grab</button>
+        <button class="btn-accent" type="button" data-grab="${origIndex}" style="padding:4px 10px; font-size:12px;">Grab</button>
       </div>
     `).join('');
 
@@ -144,7 +220,7 @@ function initReleasePickerModal() {
           const res = await fetch('/api/queue', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(grabBody(target, Number(btn.dataset.grab))),
+            body: JSON.stringify(grabBody(lastTarget, Number(btn.dataset.grab))),
           });
           const body = await res.json();
           if (!res.ok) throw new Error(body.error || 'Could not grab that release.');
@@ -171,6 +247,10 @@ function initReleasePickerModal() {
       const type = targetType(target);
       showError('');
       showNotice('');
+      // Clears out whatever the previous search left in lastReleases so a
+      // sort-button click landing during this fetch can't re-render a stale
+      // list from a different episode over top of "Searching…".
+      lastReleases = [];
       listEl.innerHTML = `<div class="release-row" style="grid-template-columns:1fr;"><span style="color:var(--text-muted);">Searching…</span></div>`;
 
       let fetchUrl;

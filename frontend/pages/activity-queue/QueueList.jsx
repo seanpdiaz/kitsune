@@ -109,9 +109,22 @@ export default function QueueList() {
     const pauseDisabled = q.status === 'warning';
     return (
       <div className="queue-row" key={q.id}>
-        <div>
-          <p className="settings-title">{q.seriesTitle}</p>
-          <span className="settings-meta">{q.episodeLabel}</span>
+        {/* .settings-name (not just a bare div) so this column actually
+            gets the min-width: 0 it needs to shrink and ellipsis inside a
+            1fr grid track (see .queue-header/.queue-row's own grid-
+            template-columns) — without it, a long episode title below
+            would push the whole row wider rather than truncating, the same
+            flex/grid-item auto-min-size gotcha already fixed elsewhere in
+            this app (e.g. SeriesPage's mobile episode table). Episode
+            number moved up onto the title line itself (muted, de-
+            emphasized next to the series title) so the second line could
+            hold something more useful: the actual episode name. */}
+        <div className="settings-name">
+          <p className="settings-title">
+            <a className="queue-series-link" href={`series.html?id=${q.seriesId}`}>{q.seriesTitle}</a>{' '}
+            <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>{q.episodeLabel}</span>
+          </p>
+          <span className="settings-meta">{q.episodeTitle || '—'}</span>
         </div>
         <span className="audio-tag">{q.quality || '—'}</span>
         <span className="settings-meta">{formatBytes(q.sizeBytes)}</span>
