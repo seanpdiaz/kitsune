@@ -65,7 +65,11 @@ export default function CutoffList({ buttonContainer }) {
         ? <p className="settings-empty">Nothing below cutoff.</p>
         : episodes.map((ep) => (
           <div className="cutoff-row" key={ep.episodeId}>
-            <span className="settings-title">{ep.seriesTitle}</span>
+            {/* Same real series link as Wanted > Missing (MissingList.jsx)
+                and Activity > Queue (QueueList.jsx) — .queue-series-link's
+                CSS is generic (hover underline only), just reused as-is
+                rather than duplicated under a cutoff-specific name. */}
+            <span className="settings-title"><a className="queue-series-link" href={`series.html?id=${ep.seriesId}`}>{ep.seriesTitle}</a></span>
             <span className="settings-meta">
               {`S${String(ep.seasonNumber).padStart(2, '0')}E${String(ep.num).padStart(2, '0')} - ${ep.title || `Episode ${ep.num}`}`}
             </span>
