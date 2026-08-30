@@ -651,8 +651,34 @@ function isBatchRelease(title) {
   if (/\b\d{2,4}\s*[-~]\s*\d{2,4}\b/.test(title)) return true;
   if (/\bbatch\b/i.test(title)) return true;
   if (/\bcomplete\b/i.test(title)) return true;
-  if (/\bs(?:eason)?s?\.?\s*\d{1,2}\s*(?:[-~&]|and)\s*(?:s(?:eason)?\.?\s*)?\d{1,2}\b/i.test(title)) return true;
-  if (/\bS\d{1,2}\b/i.test(title) && !/\bS\d{1,2}\s*E\d{1,3}\b/i.test(title) && !/\bE\d{1,3}\b/i.test(title)) return true;
+  // Real, confirmed miss (production logs, "Isekai Nonbiri Nouka" batch
+  // search): this used to allow whitespace on both sides of a `-` season
+  // separator, which also matches the extremely common weekly single-
+  // episode naming style "ShowName S2 - 12 (1080p) [hash].mkv" (SubsPlease/
+  // ASW/etc.) — "S2 - 12" isn't a season-2-through-12 range, "12" is the
+  // episode number. A real season range is written tight against the
+  // number on at least one side ("S1-2", "Season 1-2", "S1&2", "season 01 &
+  // 02") — a bare space-hyphen-space is reserved for the per-episode dash
+  // convention, so only `-`/`~` require no surrounding whitespace here;
+  // `&` and spelled-out "and" (genuinely written with spaces, "1 & 2" / "1
+  // and 2") keep allowing it.
+  if (/\bs(?:eason)?s?\.?\s*\d{1,2}(?:[-~]|\s*&\s*|\s+and\s+)(?:s(?:eason)?\.?\s*)?\d{1,2}\b/i.test(title)) return true;
+  if (
+    // Real, confirmed regression while fixing the miss above: guarding with
+    // a plain title-wide "/[-–—]\s*\d{1,3}\b/" test (like the spelled-
+    // out "Season N" rule below does) also suppressed real batches that
+    // simply state their own episode range elsewhere in the same title —
+    // "[SubsPlease] ... S2 (01-12) (1080p) [Batch]" has a dash inside
+    // "01-12" that has nothing to do with the "S2" season tag, but a
+    // whole-title test can't tell the difference. Anchoring the exclusion
+    // as a lookahead immediately after THIS S<N> match — "is *this*
+    // occurrence of S2 immediately followed by ` - 12`-style text" — scopes
+    // it correctly: "S2 - 12" (no space before season-scoping content) is
+    // suppressed, "S2 (01-12)" is not.
+    /\bS\d{1,2}\b(?!\s*[-–—]\s*\d{1,3}\b)/i.test(title)
+    && !/\bS\d{1,2}\s*E\d{1,3}\b/i.test(title)
+    && !/\bE\d{1,3}\b/i.test(title)
+  ) return true;
   // Real, confirmed miss: "[neoDESU] Farming Life in Another World [Season 1]
   // [BD 1080p x265 HEVC OPUS] [Dual Audio] Isekai Nonbiri Nouka" and
   // "[EMBER] Farming Life in Another World (2023) (Season 1) [BDRip] ..."
@@ -691,7 +717,7 @@ function isBatchRelease(title) {
 // is being searched for, same permissive default every batch search has
 // always had.
 function extractSeasonNumbers(title) {
-  const range = /\bs(?:eason)?s?\.?\s*(\d{1,2})\s*(?:[-~&]|and)\s*(?:s(?:eason)?\.?\s*)?(\d{1,2})\b/i.exec(title);
+  const range = /\bs(?:eason)?s?\.?\s*(\d{1,2})(?:[-~]|\s*&\s*|\s+and\s+)(?:s(?:eason)?\.?\s*)?(\d{1,2})\b/i.exec(title);
   if (range) {
     const lo = Math.min(Number(range[1]), Number(range[2]));
     const hi = Math.max(Number(range[1]), Number(range[2]));
@@ -699,7 +725,13 @@ function extractSeasonNumbers(title) {
     for (let s = lo; s <= hi; s++) seasons.push(s);
     return seasons;
   }
-  const abbreviated = /\bS(\d{1,2})\b/i.exec(title);
+  // Same anchored dash guard as isBatchRelease's abbreviated rule (see its
+  // comment on the regression a whole-title version of this guard caused)
+  // — "S2 - 12" isn't season 2, it's episode 12 of season 2, so this
+  // deliberately returns null (unstated) rather than [2] for it; a batch
+  // that states its own episode range elsewhere ("S2 (01-12)") isn't
+  // affected, since the lookahead only looks right after this match.
+  const abbreviated = /\bS(\d{1,2})\b(?!\s*[-–—]\s*\d{1,3}\b)/i.exec(title);
   if (abbreviated && !/\bS\d{1,2}\s*E\d{1,3}\b/i.test(title)) return [Number(abbreviated[1])];
   const spelledOut = /\bSeason\s*(\d{1,2})\b/i.exec(title);
   if (spelledOut) return [Number(spelledOut[1])];
