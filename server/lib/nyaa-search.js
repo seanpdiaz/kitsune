@@ -520,6 +520,30 @@ function isBatchRelease(title) {
   if (/\bcomplete\b/i.test(title)) return true;
   if (/\bs(?:eason)?s?\.?\s*\d{1,2}\s*(?:[-~&]|and)\s*(?:s(?:eason)?\.?\s*)?\d{1,2}\b/i.test(title)) return true;
   if (/\bS\d{1,2}\b/i.test(title) && !/\bS\d{1,2}\s*E\d{1,3}\b/i.test(title) && !/\bE\d{1,3}\b/i.test(title)) return true;
+  // Real, confirmed miss: "[neoDESU] Farming Life in Another World [Season 1]
+  // [BD 1080p x265 HEVC OPUS] [Dual Audio] Isekai Nonbiri Nouka" and
+  // "[EMBER] Farming Life in Another World (2023) (Season 1) [BDRip] ..."
+  // are both plainly whole-season releases but never tripped any rule
+  // above — no "batch"/"complete"/range keyword, and the abbreviated "S01"
+  // rule only recognizes the short form, never the fully spelled-out
+  // "Season 1" fansub groups use just as often with no accompanying range.
+  // Same "whole season, not a single episode" signal as the abbreviated
+  // rule right above, so it needs the same exclusion guard: a real
+  // "Season 1 Episode 5"/"Season 1 - Ep 05" single-episode release must
+  // not be misread as a batch just for spelling "Season" out.
+  if (
+    /\bSeason\s*\d{1,2}\b/i.test(title)
+    && !/\bEp(?:isode)?\.?\s*\d{1,3}\b/i.test(title)
+    && !/\bE\d{1,3}\b/i.test(title)
+    // A trailing "- 05"-style bare episode number (no "E"/"Episode" at all,
+    // just a dash and a short number — "Farming Life in Another World
+    // Season 1 - 05 [1080p]") is a real single-episode release using a
+    // naming style the two guards above don't catch. \d{1,3}\b specifically
+    // (not \d{1,3} alone) so this can't misfire on a longer digit run right
+    // after a dash — a year ("- 2023") or a resolution ("-1080p") — since
+    // \b never matches between two digits.
+    && !/[-–—]\s*\d{1,3}\b/.test(title)
+  ) return true;
   return false;
 }
 
