@@ -27,7 +27,7 @@ const http = require('http');
 const { logDebug, logInfo, logWarn } = require('../logger');
 const { rankReleaseCandidates } = require('./quality');
 const {
-  titleMatchesEpisode, isBatchRelease, classifyQualityFromTitle, simplifyTitleForSearch, isHttpUrl,
+  titleMatchesEpisode, isBatchRelease, releaseCoversSeason, classifyQualityFromTitle, simplifyTitleForSearch, isHttpUrl,
 } = require('./nyaa-search');
 
 const REQUEST_TIMEOUT_MS = 15000; // longer than Nyaa.si's 10s — Prowlarr fans a query out to every configured indexer and waits on the slowest one
@@ -372,11 +372,14 @@ async function searchReleasesForEpisode(config, series, episode, profile) {
   return { ok: true, releases };
 }
 
-async function searchBatchReleases(config, series, { extraQueryTerm, profile } = {}) {
-  logInfo('IndexerService', `Searching Prowlarr for "${series.title}" batch releases${extraQueryTerm ? ` (narrowed with "${extraQueryTerm}")` : ''}.`);
+async function searchBatchReleases(config, series, { extraQueryTerm, profile, seasonNumber } = {}) {
+  logInfo('IndexerService', `Searching Prowlarr for "${series.title}" batch releases${extraQueryTerm ? ` (narrowed with "${extraQueryTerm}")` : ''}${seasonNumber != null ? ` (season ${seasonNumber} only)` : ''}.`);
   let matches;
   try {
-    matches = await searchWithFallback(config, series, (r) => isBatchRelease(r.title), { extraQueryTerm });
+    // See nyaa-search.js's releaseCoversSeason comment — same real miss
+    // (a different season's batch slipping into a season-scoped search)
+    // applies here too, since Prowlarr aggregates the same trackers.
+    matches = await searchWithFallback(config, series, (r) => isBatchRelease(r.title) && releaseCoversSeason(r.title, seasonNumber), { extraQueryTerm });
   } catch (err) {
     logWarn('IndexerService', `Prowlarr batch search failed for "${series.title}": ${err.message}`);
     return { ok: false, error: err.message };
