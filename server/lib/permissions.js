@@ -353,14 +353,21 @@ async function refreshPermissionsTask() {
     return;
   }
   taskState.running = true;
+  let result = null;
   try {
-    await applyPermissionsToRootFolders();
+    result = await applyPermissionsToRootFolders();
   } catch (err) {
     logWarn('Permissions', `Apply Permissions run failed: ${err.stack || err}`);
   } finally {
     taskState.running = false;
-    taskState.lastRunAt = new Date();
-    await persistLastRun(taskState.lastRunAt);
+    // A skip because Set Permissions is off didn't actually touch anything
+    // on disk — only stamp lastRunAt for a real walk (or a real error), so
+    // "Last Run" on System > Tasks doesn't claim a successful run just
+    // happened when nothing did.
+    if (!result || result.enabled !== false) {
+      taskState.lastRunAt = new Date();
+      await persistLastRun(taskState.lastRunAt);
+    }
   }
 }
 
@@ -390,8 +397,15 @@ async function setIntervalHours(hours) {
 }
 
 // Backs GET /api/system-tasks alongside disk-usage.js's own getTaskInfo —
-// server/routes/system-tasks.js returns both in the same array.
-function getTaskInfo() {
+// server/routes/system-tasks.js returns both in the same array. Async
+// (disk-usage.js's counterpart isn't) because it now needs to read Settings
+// > Media Management's Set Permissions toggle: `enabled`/`disabledReason`
+// tell TaskList.jsx's RealRow to grey the row out and disable Run Now
+// instead of letting someone click a button that — per
+// applyPermissionsToRootFolders' own enabled check above — would silently
+// no-op and only say so in the server log.
+async function getTaskInfo() {
+  const settings = await getPermissionSettings();
   return {
     id: TASK_ID,
     name: TASK_NAME,
@@ -401,6 +415,10 @@ function getTaskInfo() {
     lastRunAt: taskState.lastRunAt ? taskState.lastRunAt.toISOString() : null,
     nextRunAt: nextRunAt ? nextRunAt.toISOString() : null,
     running: taskState.running,
+    enabled: settings.enabled,
+    disabledReason: settings.enabled
+      ? null
+      : 'Set Permissions is turned off in Settings > Media Management — Run Now has no effect until it\'s turned back on.',
   };
 }
 

@@ -195,12 +195,23 @@ function RealRow({ taskId, runPath, patchPath }) {
 
   if (!task) return null;
 
+  // Only Apply Permissions sets this (see permissions.js's getTaskInfo) —
+  // Disk Usage Recompute's task object simply has no `enabled` field, so
+  // this is false for it and the row renders exactly as it always has.
+  const isDisabled = task.enabled === false;
   const lastRun = task.lastRunAt ? relativeTime(task.lastRunAt) : 'Never';
   const nextRun = task.running ? 'Running…' : (task.nextRunAt ? relativeTime(task.nextRunAt) : '—');
 
   return (
     <div className={`task-row${flashing ? ' row-flash-success' : ''}`}>
-      <p className="settings-title">{task.name}</p>
+      <div className="settings-name">
+        <p className="settings-title">{task.name}</p>
+        {/* Surfaces the exact reason Run Now would no-op (per the server
+            log line this same string comes from) right on the row, instead
+            of only in the log — so nobody's left clicking a button that
+            silently does nothing. */}
+        {task.disabledReason ? <span className="settings-meta">{task.disabledReason}</span> : null}
+      </div>
       <span className="settings-meta">
         <select
           className="field-select"
@@ -215,7 +226,13 @@ function RealRow({ taskId, runPath, patchPath }) {
       </span>
       <span className="settings-meta">{lastRun}</span>
       <span className="settings-meta">{nextRun}</span>
-      <button className="btn-test" type="button" disabled={task.running} onClick={handleRunNow}>
+      <button
+        className="btn-test"
+        type="button"
+        disabled={task.running || isDisabled}
+        title={isDisabled ? task.disabledReason : undefined}
+        onClick={handleRunNow}
+      >
         {task.running ? 'Running…' : 'Run Now'}
       </button>
       {task.running ? <div className="task-progress-track" /> : null}

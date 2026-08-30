@@ -24,7 +24,7 @@ async function handleSystemTasksApi(req, res, urlPath) {
   // finds its own row by `id`, so the order here doesn't matter and a
   // third task is just another entry.
   if (req.method === 'GET' && urlPath === '/api/system-tasks') {
-    sendJson(res, 200, [getTaskInfo(), getPermissionsTaskInfo()]);
+    sendJson(res, 200, [getTaskInfo(), await getPermissionsTaskInfo()]);
     return true;
   }
 
@@ -71,9 +71,20 @@ async function handleSystemTasksApi(req, res, urlPath) {
   // usage's Run Now above; a real recursive chmod/chown walk can take a
   // while on a big library for the same reason a real disk scan can.
   if (req.method === 'POST' && urlPath === '/api/system-tasks/apply-permissions/run') {
+    // Checked up front so a disabled toggle gets a real "this did nothing"
+    // response instead of the generic { ok: true } every other Run Now
+    // gets — see permissions.js's own getTaskInfo/disabledReason. Avoids
+    // even starting refreshPermissionsTask, so a click while disabled
+    // doesn't touch lastRunAt or flip `running` for the brief no-op.
+    const infoBeforeRun = await getPermissionsTaskInfo();
+    if (!infoBeforeRun.enabled) {
+      logInfo('SystemTasks', 'Apply Permissions Run Now ignored — Set Permissions is turned off in Settings > Media Management.');
+      sendJson(res, 200, { ok: false, error: infoBeforeRun.disabledReason, task: infoBeforeRun });
+      return true;
+    }
     logInfo('SystemTasks', 'Apply Permissions triggered manually (Run Now)');
     runPermissionsNow().catch((err) => logWarn('SystemTasks', `Apply Permissions Run Now failed: ${err.stack || err}`));
-    sendJson(res, 200, { ok: true, task: getPermissionsTaskInfo() });
+    sendJson(res, 200, { ok: true, task: await getPermissionsTaskInfo() });
     return true;
   }
 
@@ -96,7 +107,7 @@ async function handleSystemTasksApi(req, res, urlPath) {
     if (applied !== hours) {
       logWarn('SystemTasks', `Requested Apply Permissions interval ${hours}h was clamped to ${applied}h`);
     }
-    sendJson(res, 200, { ok: true, task: getPermissionsTaskInfo() });
+    sendJson(res, 200, { ok: true, task: await getPermissionsTaskInfo() });
     return true;
   }
 
