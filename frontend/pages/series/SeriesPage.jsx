@@ -60,6 +60,20 @@ function summarizeAudioTracks(mediaStreams) {
   return 'Dual';
 }
 
+// Gate for EpisodeActionsMenu's "Edit Tracks" item — mkvpropedit (see
+// server/lib/mkvpropedit.js) only knows how to rewrite an .mkv file's own
+// header flags, and there's nothing to default between if ffprobe never
+// found an audio or subtitle stream to pick from (not probed yet, or a
+// container ffprobe genuinely found nothing in).
+function canEditTracks(ep) {
+  if (!ep.path || !ep.path.toLowerCase().endsWith('.mkv')) return false;
+  const ms = ep.mediaStreams;
+  if (!ms) return false;
+  const audioCount = Array.isArray(ms.audio) ? ms.audio.length : 0;
+  const subtitleCount = Array.isArray(ms.subtitles) ? ms.subtitles.length : 0;
+  return audioCount > 0 || subtitleCount > 0;
+}
+
 function buildRealEpisodeRows(series, realEpisodes, queueByEpisodeId) {
   const today = new Date().toISOString().slice(0, 10);
   return realEpisodes.map((e) => {
@@ -257,7 +271,7 @@ function findScrollParent(el) {
 // renders — via a layout effect, before the browser paints, so there's no
 // visible flash of it opening downward first — rather than guessed up front
 // from a hardcoded item count/height.
-function EpisodeActionsMenu({ ep, onMediaInfo, onDeleteFile }) {
+function EpisodeActionsMenu({ ep, onMediaInfo, onDeleteFile, onEditTracks }) {
   const [open, setOpen] = useState(false);
   const [openUpward, setOpenUpward] = useState(false);
   const wrapRef = useRef(null);
@@ -301,6 +315,11 @@ function EpisodeActionsMenu({ ep, onMediaInfo, onDeleteFile }) {
           <button type="button" role="menuitem" onClick={() => { setOpen(false); onMediaInfo(ep); }}>
             {icons.info}Media Info
           </button>
+          {canEditTracks(ep) && (
+            <button type="button" role="menuitem" onClick={() => { setOpen(false); onEditTracks(ep); }}>
+              {icons.edit}Edit Tracks
+            </button>
+          )}
           <button type="button" role="menuitem" className="danger" onClick={() => { setOpen(false); onDeleteFile(ep); }}>
             {icons.trash}Delete
           </button>
@@ -313,7 +332,7 @@ function EpisodeActionsMenu({ ep, onMediaInfo, onDeleteFile }) {
 // ---------------------------------------------------------------------------
 // Episode row
 // ---------------------------------------------------------------------------
-function EpisodeRow({ ep, onSearch, onGrabBest, grabbingBestId, onCancel, onDetails, onMediaInfo, onDeleteFile }) {
+function EpisodeRow({ ep, onSearch, onGrabBest, grabbingBestId, onCancel, onDetails, onMediaInfo, onDeleteFile, onEditTracks }) {
   const rowClass = ep.state === 'missing' ? 'missing' : ep.state === 'downloading' ? 'downloading' : '';
   const canAct = ep.id != null;
   let status, action;
@@ -331,7 +350,7 @@ function EpisodeRow({ ep, onSearch, onGrabBest, grabbingBestId, onCancel, onDeta
     // synthetic fallback (shown before real episode data has loaded) has no
     // real sizeBytes/path/quality-tier-name behind it for Media Info to show.
     action = canAct
-      ? <EpisodeActionsMenu ep={ep} onMediaInfo={onMediaInfo} onDeleteFile={onDeleteFile} />
+      ? <EpisodeActionsMenu ep={ep} onMediaInfo={onMediaInfo} onDeleteFile={onDeleteFile} onEditTracks={onEditTracks} />
       : <button className="ep-action" aria-label="Options" data-tooltip="Episode options" disabled style={{ opacity: 0.4 }}>{icons.dots}</button>;
   } else if (ep.state === 'missing') {
     status = <span className="ep-status status-missing">{icons.alert}Missing</span>;
@@ -964,6 +983,103 @@ function DeleteEpisodeFileModal({ ep, onClose, onDeleted }) {
 }
 
 // ---------------------------------------------------------------------------
+// Edit Tracks modal — opened from EpisodeActionsMenu's Edit Tracks item
+// (gated by canEditTracks above). Lets the user choose which real audio
+// track and which real subtitle track (or none at all) an .mkv file's
+// player should default to, and writes that choice into the file's own
+// header via mkvpropedit (PATCH /api/episodes/:id/tracks — see
+// server/lib/mkvpropedit.js and server/routes/episodes.js's
+// handleEditEpisodeTracks) rather than recording a preference Kitsune
+// itself would have to remember and reapply — any player opening the file
+// afterward honors the new default on its own, no Kitsune involved. Radio
+// selection is pre-seeded from whichever track ffprobe currently reports as
+// `default: true` for each type (server/lib/ffprobe.js); tracks are shown
+// in probe order, which is exactly the 1-based track number mkvpropedit's
+// own track:a<N>/track:s<N> selectors expect, so the position sent back is
+// literally "which radio button" with no extra bookkeeping.
+// ---------------------------------------------------------------------------
+function EditTracksModal({ ep, onClose, onSaved }) {
+  const audioTracks = (ep.mediaStreams && ep.mediaStreams.audio) || [];
+  const subtitleTracks = (ep.mediaStreams && ep.mediaStreams.subtitles) || [];
+  const initialAudioDefault = audioTracks.findIndex((t) => t.default);
+  const initialSubtitleDefault = subtitleTracks.findIndex((t) => t.default);
+  // No audio track flagged default on a real file still needs *some* choice
+  // pre-selected (falls back to the first track) — a subtitle default of
+  // "none selected" is a perfectly normal, common real state, so that one
+  // has no such fallback.
+  const [audioIndex, setAudioIndex] = useState(
+    initialAudioDefault >= 0 ? initialAudioDefault + 1 : (audioTracks.length ? 1 : null)
+  );
+  const [subtitleIndex, setSubtitleIndex] = useState(initialSubtitleDefault >= 0 ? initialSubtitleDefault + 1 : null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const code = `S${String(ep.seasonNumber ?? 0).padStart(2, '0')}E${String(ep.num).padStart(2, '0')}`;
+
+  async function handleSave() {
+    setSaving(true);
+    setError('');
+    const body = {};
+    if (audioTracks.length) body.audioTrackIndex = audioIndex;
+    if (subtitleTracks.length) body.subtitleTrackIndex = subtitleIndex;
+    try {
+      const res = await fetch(`/api/episodes/${ep.id}/tracks`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const responseBody = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(responseBody.error || `HTTP ${res.status}`);
+      onSaved(responseBody);
+    } catch (err) {
+      setSaving(false);
+      setError(err.message || "Couldn't update default tracks — try again.");
+    }
+  }
+
+  return (
+    <div className="modal-overlay open" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal-box">
+        <div className="modal-header">
+          <h2>Edit Tracks — {code}</h2>
+          <button className="modal-close" type="button" aria-label="Close" data-tooltip="Close" onClick={onClose}>{icons.x}</button>
+        </div>
+        <div className="modal-body">
+          {audioTracks.length > 0 && (
+            <div className="edit-tracks-group">
+              <p className="episode-detail-label">Default Audio Track</p>
+              {audioTracks.map((t, i) => (
+                <label className="edit-tracks-option" key={`audio-${i}`}>
+                  <input type="radio" name="edit-tracks-audio" checked={audioIndex === i + 1} onChange={() => setAudioIndex(i + 1)} />
+                  {t.language} · {t.codec} · {t.channels}
+                </label>
+              ))}
+            </div>
+          )}
+          {subtitleTracks.length > 0 && (
+            <div className="edit-tracks-group">
+              <p className="episode-detail-label">Default Subtitle Track</p>
+              <label className="edit-tracks-option">
+                <input type="radio" name="edit-tracks-subtitle" checked={subtitleIndex === null} onChange={() => setSubtitleIndex(null)} />
+                None
+              </label>
+              {subtitleTracks.map((t, i) => (
+                <label className="edit-tracks-option" key={`subtitle-${i}`}>
+                  <input type="radio" name="edit-tracks-subtitle" checked={subtitleIndex === i + 1} onChange={() => setSubtitleIndex(i + 1)} />
+                  {t.language} · {t.codec}{t.forced ? ' · Forced' : ''}
+                </label>
+              ))}
+            </div>
+          )}
+          <p className={`form-error${error ? '' : ' is-collapsed'}`}>{error}</p>
+        </div>
+        <div className="modal-footer">
+          <button type="button" onClick={onClose}>Cancel</button>
+          <button className="btn-accent" type="button" disabled={saving} onClick={handleSave}>{saving ? 'Saving…' : 'Save'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 export default function SeriesPage() {
@@ -980,6 +1096,7 @@ export default function SeriesPage() {
   const [renamingSeason, setRenamingSeason] = useState(false);
   const [mediaInfoEp, setMediaInfoEp] = useState(null);
   const [deletingFileEp, setDeletingFileEp] = useState(null);
+  const [editTracksEp, setEditTracksEp] = useState(null);
   const [qualityGroupByName, setQualityGroupByName] = useState(() => new Map());
   const [refreshingEpisodes, setRefreshingEpisodes] = useState(false);
   const [refreshError, setRefreshError] = useState('');
@@ -1281,6 +1398,13 @@ export default function SeriesPage() {
     if (body && body.seriesEps != null) setSeries((prev) => ({ ...prev, eps: body.seriesEps, pct: body.seriesPct }));
     loadRealEpisodesRef.current();
   }
+  function handleEditTracks(ep) {
+    setEditTracksEp(ep);
+  }
+  function handleTracksSaved() {
+    setEditTracksEp(null);
+    loadRealEpisodesRef.current();
+  }
 
   function handleMonitorToggle(e) {
     const checked = e.target.checked;
@@ -1341,9 +1465,9 @@ export default function SeriesPage() {
       ));
     }
     activeGroup = realGroups.find((g) => g.seasonNumber === activeSeasonNumber) || realGroups[0];
-    episodeList = (activeGroup ? activeGroup.rows : []).map((ep) => <EpisodeRow key={ep.id} ep={ep} onSearch={handleSearch} onGrabBest={handleGrabBest} grabbingBestId={grabbingBestId} onCancel={handleCancel} onDetails={handleDetails} onMediaInfo={handleMediaInfo} onDeleteFile={handleDeleteFile} />);
+    episodeList = (activeGroup ? activeGroup.rows : []).map((ep) => <EpisodeRow key={ep.id} ep={ep} onSearch={handleSearch} onGrabBest={handleGrabBest} grabbingBestId={grabbingBestId} onCancel={handleCancel} onDetails={handleDetails} onMediaInfo={handleMediaInfo} onDeleteFile={handleDeleteFile} onEditTracks={handleEditTracks} />);
   } else {
-    episodeList = buildGenericEpisodes(series).map((ep, i) => <EpisodeRow key={i} ep={ep} onSearch={handleSearch} onGrabBest={handleGrabBest} grabbingBestId={grabbingBestId} onCancel={handleCancel} onDetails={handleDetails} onMediaInfo={handleMediaInfo} onDeleteFile={handleDeleteFile} />);
+    episodeList = buildGenericEpisodes(series).map((ep, i) => <EpisodeRow key={i} ep={ep} onSearch={handleSearch} onGrabBest={handleGrabBest} grabbingBestId={grabbingBestId} onCancel={handleCancel} onDetails={handleDetails} onMediaInfo={handleMediaInfo} onDeleteFile={handleDeleteFile} onEditTracks={handleEditTracks} />);
   }
   // Only a real, TVDB-backed, non-Specials season can be renamed — the
   // generic synthetic fallback has no real episode rows behind it for PUT
@@ -1497,6 +1621,9 @@ export default function SeriesPage() {
       )}
       {deletingFileEp && (
         <DeleteEpisodeFileModal ep={deletingFileEp} onClose={() => setDeletingFileEp(null)} onDeleted={handleFileDeleted} />
+      )}
+      {editTracksEp && (
+        <EditTracksModal ep={editTracksEp} onClose={() => setEditTracksEp(null)} onSaved={handleTracksSaved} />
       )}
       {editOpen && (
         <EditSeriesModal

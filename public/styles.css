@@ -2073,6 +2073,31 @@ input[type="range"].size-slider::-moz-range-track {
   cursor: pointer;
 }
 
+/* Edit Tracks modal (SeriesPage.jsx's EditTracksModal) — a vertical list of
+   radio options per track type, same "labeled group of selectable rows"
+   shape as .quality-checklist just above, just a column of radios instead
+   of a wrapped row of checkboxes since only one track per type can ever be
+   the default. */
+.edit-tracks-group { margin: 0 0 16px; }
+.edit-tracks-group:last-child { margin-bottom: 0; }
+.edit-tracks-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+.edit-tracks-option input[type="radio"] {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
 /* ---------- Episode details modal (public/js/lib/episode-details-modal.js) ---------- */
 
 .episode-detail-row {

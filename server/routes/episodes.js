@@ -11,6 +11,7 @@ const { walkVideoFiles, guessQualityTierName, guessSeasonEpisode, resolutionGrou
 const { probeMediaStreams } = require('../lib/ffprobe');
 const { episodeFileNameFor, getMediaManagementSettings } = require('../lib/episode-paths');
 const { applyPermissions } = require('../lib/permissions');
+const { applyDefaultTrackFlags } = require('../lib/mkvpropedit');
 
 // ---------------------------------------------------------------------------
 // Episode persistence — real per-episode titles/air dates
@@ -176,6 +177,9 @@ async function handleSeriesEpisodesApi(req, res, urlPath) {
 
   const deleteFileMatch = req.method === 'DELETE' && urlPath.match(/^\/api\/episodes\/(\d+)\/file$/);
   if (deleteFileMatch) return handleDeleteEpisodeFile(req, res, deleteFileMatch);
+
+  const editTracksMatch = req.method === 'PATCH' && urlPath.match(/^\/api\/episodes\/(\d+)\/tracks$/);
+  if (editTracksMatch) return handleEditEpisodeTracks(req, res, editTracksMatch);
 
   const renamePreviewMatch = req.method === 'GET' && urlPath.match(/^\/api\/series\/(\d+)\/rename-preview$/);
   if (renamePreviewMatch) return handleRenamePreview(req, res, renamePreviewMatch);
@@ -368,6 +372,112 @@ async function handleDeleteEpisodeFile(req, res, match) {
     seriesEps: series ? series.eps : undefined,
     seriesPct: series ? series.pct : undefined,
   });
+  return true;
+}
+
+// PATCH /api/episodes/:id/tracks — the Series page's "Edit Tracks" modal
+// Save button. Body: { audioTrackIndex?: number|null, subtitleTrackIndex?:
+// number|null } — a key that's present (even as null) means "make this
+// type's default flag exactly this," a key that's simply absent means
+// "leave this type's tracks alone entirely." A number is the 1-based
+// position of that track within its own type (1st audio track, 2nd, ... —
+// same order probeMediaStreams' own audio/subtitles arrays already use,
+// see mediaStreams below); null clears every track of that type's default
+// flag (a real, legitimate Matroska state — most useful for subtitles).
+//
+// Only supports real .mkv files with already-probed track data: there's no
+// mkvpropedit equivalent for other containers (see mkvpropedit.js's own
+// header comment), and without a real probe on file there's no trustworthy
+// answer for "how many tracks does this type even have" to validate the
+// requested index against.
+async function handleEditEpisodeTracks(req, res, match) {
+  // Same session gate as Rename Files/Delete File above — this writes to a
+  // real file on disk too.
+  const user = await getSessionUser(req);
+  if (!user) {
+    sendJson(res, 401, { error: 'Not signed in.' });
+    return true;
+  }
+  const id = Number(match[1]);
+  const episode = await db.prepare('SELECT * FROM episodes WHERE id = ?').get(id);
+  if (!episode) {
+    sendJson(res, 404, { error: 'Episode not found' });
+    return true;
+  }
+  if (!episode.downloaded || !episode.path) {
+    sendJson(res, 400, { error: 'This episode has no file to edit.' });
+    return true;
+  }
+  if (path.extname(episode.path).toLowerCase() !== '.mkv') {
+    sendJson(res, 400, { error: 'Editing default tracks is only supported for .mkv files.' });
+    return true;
+  }
+
+  let mediaStreams = null;
+  if (episode.media_streams) {
+    try { mediaStreams = JSON.parse(episode.media_streams); } catch { /* falls through to the null check below */ }
+  }
+  if (!mediaStreams) {
+    sendJson(res, 400, { error: "This episode's audio/subtitle tracks haven't been probed yet — try Rescan for local files first." });
+    return true;
+  }
+
+  let body;
+  try {
+    body = await readJsonBody(req);
+  } catch {
+    sendJson(res, 400, { error: 'Invalid JSON body' });
+    return true;
+  }
+
+  const edits = {};
+  for (const [type, field, list] of [
+    ['audio', 'audioTrackIndex', mediaStreams.audio || []],
+    ['subtitle', 'subtitleTrackIndex', mediaStreams.subtitles || []],
+  ]) {
+    if (!(field in body)) continue; // this type wasn't touched — leave it alone
+    const count = list.length;
+    if (count === 0) {
+      sendJson(res, 400, { error: `This file has no ${type} tracks.` });
+      return true;
+    }
+    const requested = body[field];
+    if (requested === null) {
+      edits[type] = { count, defaultIndex: null };
+      continue;
+    }
+    const n = Number(requested);
+    if (!Number.isInteger(n) || n < 1 || n > count) {
+      sendJson(res, 400, { error: `${field} must be null or a number from 1 to ${count}.` });
+      return true;
+    }
+    edits[type] = { count, defaultIndex: n };
+  }
+
+  if (Object.keys(edits).length === 0) {
+    sendJson(res, 400, { error: 'Nothing to change — provide audioTrackIndex and/or subtitleTrackIndex.' });
+    return true;
+  }
+
+  const result = await applyDefaultTrackFlags(episode.path, edits);
+  if (!result.ok) {
+    sendJson(res, 500, { error: result.error });
+    return true;
+  }
+
+  // Re-probes rather than locally flipping the flags this request just sent
+  // — same "trust the real file over our own hopeful bookkeeping" rule
+  // every other real-vs-simulated boundary in this app already follows
+  // (see ffprobe.js's own header comment). One more ffprobe call, same cost
+  // a rescan already pays, and it's what confirms the edit actually took
+  // rather than just assuming it did.
+  const freshStreams = await probeMediaStreams(episode.path);
+  if (freshStreams) {
+    await db.prepare('UPDATE episodes SET media_streams = ? WHERE id = ?').run(JSON.stringify(freshStreams), id);
+  }
+
+  logInfo('EpisodeService', `Updated default tracks for episode ${id} (S${episode.season_number}E${episode.num}): ${Object.keys(edits).join(', ')}`);
+  sendJson(res, 200, { id, mediaStreams: freshStreams || mediaStreams });
   return true;
 }
 
