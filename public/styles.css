@@ -1346,14 +1346,19 @@ select {
 
 .format-header, .format-row { grid-template-columns: 1fr 130px 140px 32px 32px; }
 .quality-header, .quality-row { grid-template-columns: 170px 1fr 110px 110px 110px; }
-/* Interval column widened from 140px to 185px, plus a bit more gap than
-   the shared 10px every other settings-style row uses — a real <select>
-   (see TaskList.jsx's field-select, now used by every row on this page,
-   not just the two real tasks) needs room for both its text ("Every 15
-   minutes", "Every 1 week") and its own native dropdown arrow, and 140px
-   with only 10px before Last Run made the two sit right on top of each
-   other. */
-.task-header, .task-row { grid-template-columns: 1fr 185px 140px 140px 100px; gap: 16px; }
+/* Interval column widened from 140px to 200px, with 28px of gap instead
+   of the shared 10px every other settings-style row uses (a first pass at
+   185px/16px still read as cramped — see the PR/chat history). A filled
+   control like a real <select> (TaskList.jsx's field-select, now used by
+   every row on this page, not just the two real tasks) needs noticeably
+   more surrounding whitespace than two plain text columns do to not look
+   like it's crowding its neighbor — its own background/border already
+   draws the eye right up to its edge, so the same gap that reads as fine
+   between Last Run and Next Run (plain text on both sides) still reads as
+   tight right after a bordered box. Widening the column also gives its
+   own text ("Every 15 minutes", "Every 1 week") plus its native dropdown
+   arrow more breathing room internally, not just after it. */
+.task-header, .task-row { grid-template-columns: 1fr 200px 140px 140px 100px; gap: 28px; }
 .backup-header, .backup-row { grid-template-columns: 90px 1fr 90px 150px 130px 32px; }
 .health-row { grid-template-columns: 150px 1fr; }
 .event-header, .event-row { grid-template-columns: 90px 100px 1fr; }
