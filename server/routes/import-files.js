@@ -185,9 +185,44 @@ async function handleImportFilesApi(req, res, urlPath) {
   const unmatched = [];
   const matchedEpisodeIds = new Set();
 
-  for (const file of files) {
-    const guess = guessSeasonEpisode(file.name, file.seasonHint);
+  // Guessed once up front (not inline in the matching loop below) so this
+  // season-level check can run before any file is actually matched.
+  const fileGuesses = files.map((file) => ({ file, guess: guessSeasonEpisode(file.name, file.seasonHint) }));
 
+  // A season whose files use cumulative (absolute) numbering can still have
+  // ONE early episode whose absolute number happens to also be a valid
+  // *direct* season:num pair in some other episode of that same season —
+  // pure coincidence of how many episodes precede it. Real confirmed case:
+  // Mushoku Tensei: Jobless Reincarnation's Season 01 has exactly 23
+  // episodes, so Season 02's files are numbered absolutely from 24-47 —
+  // unambiguous for every one of them except the very first (absolute 24),
+  // which *also* happens to equal Season 02's own real episode 24
+  // ("Succession"). The direct lookup below is tried first by default and
+  // "succeeded" on that coincidence, silently matching Season 2 Episode 1's
+  // real file ("... - 024 - The Brokenhearted Mage ...") to Episode 24
+  // instead — leaving Episode 1 stuck showing missing despite its file
+  // being right there on disk the whole time. Detecting, per season, that
+  // its files' numbers already run past what that season could possibly
+  // hold on its own (25-47 have no valid direct interpretation at all) is
+  // enough to know the *whole* folder is absolute-numbered — including the
+  // one number small enough to also look like a direct hit.
+  const seasonMaxNum = new Map();
+  for (const e of episodeRows) {
+    seasonMaxNum.set(e.season_number, Math.max(seasonMaxNum.get(e.season_number) || 0, e.num));
+  }
+  const seasonMaxGuessed = new Map();
+  for (const { guess } of fileGuesses) {
+    if (guess.episode == null) continue;
+    const season = guess.season ?? 1;
+    seasonMaxGuessed.set(season, Math.max(seasonMaxGuessed.get(season) || 0, guess.episode));
+  }
+  const absoluteNumberedSeasons = new Set(
+    [...seasonMaxGuessed.entries()]
+      .filter(([season, maxGuessed]) => maxGuessed > (seasonMaxNum.get(season) || 0))
+      .map(([season]) => season)
+  );
+
+  for (const { file, guess } of fileGuesses) {
     if (guess.episode == null) {
       unmatched.push({ fileName: file.name, reason: "Couldn't find an episode number in this filename." });
       continue;
@@ -206,21 +241,33 @@ async function handleImportFilesApi(req, res, urlPath) {
     const season = guess.season ?? 1;
     const assumedSeason = guess.season == null;
 
-    let episode = episodeByKey.get(`${season}:${guess.episode}`);
+    // See absoluteEpisodeIndex's own comment above, and
+    // absoluteNumberedSeasons' above that. Trusted immediately, ahead of
+    // the direct lookup, only for a season already proven (by one of its
+    // OTHER files) to be numbered absolutely — everywhere else the direct
+    // season:num lookup still goes first exactly as before. Either way, an
+    // absolute match still has to agree with a real season signal when the
+    // file has one (guess.season set) — a coincidental number collision
+    // landing in a different season than the file is really sitting in
+    // still can't silently mismatch it.
+    let episode;
     let viaAbsoluteNumber = false;
-    if (!episode) {
-      // See absoluteEpisodeIndex's own comment above. Only trusted when it
-      // doesn't contradict a real season signal — a real "Season N"
-      // folder/SxxExx tag (guess.season set) has to agree with which season
-      // the absolute number actually falls in, so a coincidental number
-      // collision landing in a different season than the file is really
-      // sitting in doesn't silently mismatch it. No real season signal at
-      // all (assumedSeason) has nothing to contradict, so any absolute match
-      // is accepted as-is.
+    if (absoluteNumberedSeasons.has(season)) {
       const absoluteMatch = absoluteEpisodeIndex.get(guess.episode);
       if (absoluteMatch && (guess.season == null || absoluteMatch.season_number === guess.season)) {
         episode = absoluteMatch;
         viaAbsoluteNumber = true;
+      } else {
+        episode = episodeByKey.get(`${season}:${guess.episode}`);
+      }
+    } else {
+      episode = episodeByKey.get(`${season}:${guess.episode}`);
+      if (!episode) {
+        const absoluteMatch = absoluteEpisodeIndex.get(guess.episode);
+        if (absoluteMatch && (guess.season == null || absoluteMatch.season_number === guess.season)) {
+          episode = absoluteMatch;
+          viaAbsoluteNumber = true;
+        }
       }
     }
     if (!episode) {
