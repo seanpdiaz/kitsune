@@ -3,10 +3,13 @@
 // Recompute background job (see server/lib/disk-usage.js and the Library
 // dashboard's Disk usage stat card) and the Apply Permissions job (see
 // server/lib/permissions.js). Every other row that page shows (RSS Sync,
-// Check for Finished Downloads, Backup, etc.) is still decorative
-// placeholder data in frontend/pages/system-tasks/TaskList.jsx — there's
-// nothing real behind those yet, so this route only covers the jobs that
-// actually are.
+// Check for Finished Downloads, Backup, etc.) still doesn't run a real
+// background job — "Run Now" still just fakes a "Just now" timestamp
+// client-side, and Last Run/Next Run stay decorative text — but its
+// interval IS real now too: see the /api/system-tasks/schedule routes
+// below and server/lib/decorative-task-intervals.js, which persist
+// whatever the user picks for each of those seven rows even though nothing
+// yet actually runs on that schedule.
 // ---------------------------------------------------------------------------
 const { sendJson, readJsonBody } = require('../lib/http');
 const { logInfo, logWarn } = require('../logger');
@@ -16,6 +19,7 @@ const {
   setIntervalHours: setPermissionsIntervalHours,
   runNow: runPermissionsNow,
 } = require('../lib/permissions');
+const { getIntervals: getDecorativeIntervals, setIntervalMinutes: setDecorativeIntervalMinutes } = require('../lib/decorative-task-intervals');
 
 async function handleSystemTasksApi(req, res, urlPath) {
   // GET /api/system-tasks — every real task, one array. Started as "an
@@ -108,6 +112,45 @@ async function handleSystemTasksApi(req, res, urlPath) {
       logWarn('SystemTasks', `Requested Apply Permissions interval ${hours}h was clamped to ${applied}h`);
     }
     sendJson(res, 200, { ok: true, task: await getPermissionsTaskInfo() });
+    return true;
+  }
+
+  // GET /api/system-tasks/schedule — the seven still-decorative rows'
+  // current intervals, one map keyed by id (see TaskList.jsx's TASKS_DATA
+  // for what each id means). Fetched once by TaskList, not per-row.
+  if (req.method === 'GET' && urlPath === '/api/system-tasks/schedule') {
+    sendJson(res, 200, await getDecorativeIntervals());
+    return true;
+  }
+
+  // PATCH /api/system-tasks/schedule/:id — a decorative row's interval
+  // dropdown. Persisted (survives a restart) even though nothing actually
+  // runs on it yet — see decorative-task-intervals.js's own header comment
+  // for why that's still worth doing.
+  const scheduleMatch = req.method === 'PATCH' && urlPath.match(/^\/api\/system-tasks\/schedule\/([a-z-]+)$/);
+  if (scheduleMatch) {
+    const id = scheduleMatch[1];
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch {
+      sendJson(res, 400, { error: 'Invalid JSON body' });
+      return true;
+    }
+    const minutes = Number(body.intervalMinutes);
+    if (!Number.isFinite(minutes) || minutes <= 0) {
+      sendJson(res, 400, { error: 'intervalMinutes must be a positive number' });
+      return true;
+    }
+    const applied = await setDecorativeIntervalMinutes(id, minutes);
+    if (applied == null) {
+      sendJson(res, 404, { error: `Unknown task id "${id}"` });
+      return true;
+    }
+    if (applied !== Math.round(minutes)) {
+      logWarn('SystemTasks', `Requested ${id} interval ${minutes}m was clamped to ${applied}m`);
+    }
+    sendJson(res, 200, { ok: true, id, intervalMinutes: applied });
     return true;
   }
 
