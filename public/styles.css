@@ -1101,7 +1101,12 @@ select {
      buttons (Search + Grab best match, see .ep-action-group below) side by
      side — every other state still only ever shows one button/menu in this
      column, just with a little extra breathing room now. */
-  grid-template-columns: 44px 1fr 84px 80px 76px 110px 68px;
+  /* Quality column widened from 76px to 96px: real quality-tier names
+     like "Bluray-1080p"/"WEBDL-2160p" (11-12 chars, hyphenated) were
+     wrapping onto a second line at the hyphen, which made a row's height
+     differ from other rows in the same table whenever one episode had a
+     longer quality string than its neighbors (see .ep-date below too). */
+  grid-template-columns: 44px 1fr 84px 80px 96px 110px 68px;
   gap: 8px;
   align-items: center;
   padding: 10px 12px;
@@ -1142,7 +1147,11 @@ select {
    makes it inherit .settings-title's own color with no static underline). */
 .queue-series-link:hover { text-decoration: underline; }
 
-.ep-date { color: var(--text-secondary); font-size: 12px; }
+/* nowrap + ellipsis is a general safeguard on top of the widened Quality
+   column above: it guarantees this shared class (Air Date + Quality) can
+   never wrap to a second line and break row-height consistency, even for
+   a future or user-renamed quality tier name longer than we've sized for. */
+.ep-date { color: var(--text-secondary); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .audio-tag {
   font-size: 10.5px;
   font-family: var(--font-mono);
