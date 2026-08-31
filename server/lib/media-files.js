@@ -241,10 +241,51 @@ function guessSeasonEpisode(filename, seasonHint) {
   m = /\bE(?:P)?\.?\s?(\d{1,3})\b/i.exec(normalized);
   if (m) return { season: seasonHint ?? null, episode: Number(m[1]), confident: seasonHint != null };
 
+  // Kitsune's OWN Anime naming format ({Series Title} - {absolute:000} -
+  // {Episode Title} [{Quality Full}]..., see episode-paths.js's mm-2) puts
+  // the number between two " - " separators. Tried BEFORE the two bare-
+  // trailing-number patterns below on purpose — confirmed real bug: a
+  // recap/clip-show episode titled literally "Turning Point 1" (Mushoku
+  // Tensei: Jobless Reincarnation season 1 episode 8, real file "Mushoku
+  // Tensei Jobless Reincarnation - 008 - Turning Point 1 [WEBDL-1080p].mkv")
+  // has its own episode NUMBER embedded correctly ("008"), but its TITLE
+  // also happens to end in a bare digit right before the quality bracket —
+  // exactly the shape the bracket-adjacent patterns below are looking for.
+  // With those tried first, "1" (from "Turning Point 1 [") was winning over
+  // the real "008", silently importing this file as episode 1 instead of 8
+  // — and the same thing happened to "Turning Point 2" (real episode 21)
+  // matching as episode 2, leaving episodes 8 and 21 themselves stuck
+  // showing as missing even though their real files were on disk the whole
+  // time. Requiring a real title-looking word (not another number/bracket)
+  // right after the second " - " is what keeps this from matching a
+  // coincidental "-NNN-" inside a title that itself contains a hyphen (e.g.
+  // "Re:ZERO -Starting Life in Another World-" — that hyphen isn't
+  // immediately followed by a digit, so it can't match this pattern).
+  m = /-\s*(\d{1,4})(?:v\d)?\s+-\s+\S/.exec(normalized);
+  if (m) return { season: seasonHint ?? null, episode: Number(m[1]), confident: seasonHint != null };
+
+  // Same idea without a leading hyphen — a lone episode number followed by
+  // " - " and a real episode title, with no show name/hyphen before it at
+  // all. Confirmed real case: a "Nobunaga-sensei no Osanazuma" release with
+  // files named exactly "01 - It Is Good That My Wife Came.mkv" through
+  // "12 - My Wife Is Not Going Home.mkv" inside a "Season 01" folder — the
+  // bracket-adjacent patterns below don't match this shape at all (nothing
+  // ever closes with a bracket/paren), so this was always reachable either
+  // way; it just now also runs ahead of them for consistency with the
+  // hyphen-prefixed version above.
+  m = /(?:^|\s)(\d{1,3})(?:v\d)?\s*-\s*\S/.exec(normalized);
+  if (m) return { season: seasonHint ?? null, episode: Number(m[1]), confident: seasonHint != null };
+
   // Common anime convention: "Series Name - 05 [1080p][hash]" — a lone
   // 1-3 digit number set off by " - " and followed by a bracket/paren or
   // the end of the name, so a bare number anywhere else in a longer title
-  // (a year, a resolution digit) doesn't match.
+  // (a year, a resolution digit) doesn't match. Tried only after both
+  // "NUMBER - TITLE" patterns above have already had their shot, since a
+  // release with a real episode title needs those tried first (see the
+  // Turning Point comment above) — a plain "Series - 05 [1080p]" release
+  // with no episode title never matches either of those (no second " - "
+  // followed by real title text exists in it at all), so it still reaches
+  // here exactly as before.
   m = /-\s*(\d{1,3})(?:v\d)?\s*(?=\[|\(|$)/.exec(normalized);
   if (m) return { season: seasonHint ?? null, episode: Number(m[1]), confident: seasonHint != null };
 
@@ -258,45 +299,6 @@ function guessSeasonEpisode(filename, seasonHint) {
   // being misread as the episode number — tried last, only once every more
   // specific pattern above has already failed to match.
   m = /\s(\d{1,3})(?:v\d)?\s*(?=\[|\(|$)/.exec(normalized);
-  if (m) return { season: seasonHint ?? null, episode: Number(m[1]), confident: seasonHint != null };
-
-  // Kitsune's OWN Anime naming format ({Series Title} - {absolute:000} -
-  // {Episode Title} [{Quality Full}]..., see episode-paths.js's mm-2) puts
-  // the number between two " - " separators instead of directly before the
-  // bracket the two patterns above expect — confirmed real bug: a file
-  // Kitsune itself just renamed to that format (e.g. "Chainsmoker Cat - 001
-  // - I'm Yani Neko, Nya [WEBDL-1080p].mkv") came back completely
-  // unparseable (episode: null) on the very next Rescan, silently flipping
-  // an already-matched, already-downloaded episode back to "missing" for no
-  // reason other than Kitsune having renamed its own file. Tried last,
-  // after every bracket-adjacent pattern above has already failed to match
-  // — a plain "Series - 05 [1080p]" release with no episode title still
-  // matches one of those first and never reaches this one. The lookahead
-  // requires a real title-looking word (not another number/bracket) right
-  // after the second " - ", which is what actually distinguishes this from
-  // a coincidental "-NNN-" inside a title that itself contains a hyphen
-  // (e.g. "Re:ZERO -Starting Life in Another World-" — that hyphen isn't
-  // immediately followed by a digit, so it can't match this pattern at all).
-  m = /-\s*(\d{1,4})(?:v\d)?\s+-\s+\S/.exec(normalized);
-  if (m) return { season: seasonHint ?? null, episode: Number(m[1]), confident: seasonHint != null };
-
-  // A lone episode number followed by " - " and a real episode title, with
-  // no bracket/paren ever closing it out and no show name in the filename
-  // at all — confirmed real case: a "Nobunaga-sensei no Osanazuma" release
-  // with files named exactly "01 - It Is Good That My Wife Came.mkv"
-  // through "12 - My Wife Is Not Going Home.mkv" inside a "Season 01"
-  // folder. Every pattern above requires the number to sit right before a
-  // bracket/paren/end (guessResolutionGroup-tagged releases) or between two
-  // separate " - " runs (Kitsune's own naming format) — neither shape
-  // exists here, so all five came back unmatched despite the folder-level
-  // series match (findExistingSeriesFolder, episodes.js) working fine and
-  // the season hint being available. Tried last, since anchoring on "number
-  // right at the start of the name, or right after whitespace, followed by
-  // ' - ' and more text" is the least specific shape here — a number that
-  // only incidentally precedes " - " elsewhere in a longer title (a part
-  // number, an in-title year) could false-positive, so every more
-  // specific/anchored pattern above already had first shot at it.
-  m = /(?:^|\s)(\d{1,3})(?:v\d)?\s*-\s*\S/.exec(normalized);
   if (m) return { season: seasonHint ?? null, episode: Number(m[1]), confident: seasonHint != null };
 
   return { season: seasonHint ?? null, episode: null, confident: false };
