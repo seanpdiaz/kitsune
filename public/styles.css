@@ -1359,6 +1359,25 @@ select {
    own text ("Every 15 minutes", "Every 1 week") plus its native dropdown
    arrow more breathing room internally, not just after it. */
 .task-header, .task-row { grid-template-columns: 1fr 200px 140px 140px 100px; gap: 28px; }
+/* Interval/Last Run/Next Run headers centered over their columns rather
+   than left-aligned like Name — Name's left edge lines up with the page's
+   own left margin (same as every other list page's first column), but
+   these three are narrow, self-contained value columns with real
+   whitespace on both sides, and a left-aligned label just sat awkwardly
+   close to Name instead of sitting over the value below it. Last Run/Next
+   Run's own row text is centered to match (nth-child(3)/(4) below) so the
+   header and its value actually line up; Interval's column holds a
+   full-width <select> instead, which already fills the same centered
+   header's column on its own, so only the header needs it there. */
+.task-header > span:nth-child(2),
+.task-header > span:nth-child(3),
+.task-header > span:nth-child(4) {
+  text-align: center;
+}
+.task-row > span.settings-meta:nth-child(3),
+.task-row > span.settings-meta:nth-child(4) {
+  text-align: center;
+}
 .backup-header, .backup-row { grid-template-columns: 90px 1fr 90px 150px 130px 32px; }
 .health-row { grid-template-columns: 150px 1fr; }
 .event-header, .event-row { grid-template-columns: 90px 100px 1fr; }
