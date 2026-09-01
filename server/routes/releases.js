@@ -38,7 +38,7 @@
 const db = require('../db');
 const { sendJson } = require('../lib/http');
 const { logWarn } = require('../logger');
-const { getQualityProfile, rankReleaseCandidates } = require('../lib/quality');
+const { getQualityProfile, rankReleaseCandidates, getQualityOrder } = require('../lib/quality');
 const nyaaSearch = require('../lib/nyaa-search');
 const prowlarrSearch = require('../lib/prowlarr-search');
 
@@ -69,6 +69,24 @@ function buildReleaseCacheKey({ scope, episodeId, seriesId, seasonNumber }) {
   if (scope === 'season') return `season:${seriesId}:${seasonNumber}`;
   if (scope === 'series') return `series:${seriesId}`;
   return `episode:${episodeId}`;
+}
+
+// Adds a numeric `qualityRank` to each release before it's ever sent to the
+// client — this tier's position in Settings > Quality's own worst-to-best
+// order (see quality.js's getQualityOrder), -1 for a quality string that
+// isn't a currently-known tier at all. Exists purely so the release picker
+// modal's Quality column header (release-picker-modal.js) can sort
+// meaningfully: a plain string comparison on `quality` itself would be
+// alphabetical nonsense ("Bluray-1080p" < "HDTV-720p" despite being a much
+// better tier), and duplicating Settings > Quality's tier order as a second,
+// hardcoded list client-side would just be one more thing that could drift
+// out of sync the moment a user reorders their tiers. Applied only to the
+// response, never to what gets cached (see cacheReleases below) — the cache
+// exists purely so POST /api/queue's grab can look a release back up by its
+// original index, and doesn't care about this extra display-only field.
+async function withQualityRank(releases) {
+  const order = await getQualityOrder();
+  return releases.map((r) => ({ ...r, qualityRank: order.indexOf(r.quality) }));
 }
 
 // Every enabled real indexer row, normalized to { type, config } — 'nyaa'
@@ -310,7 +328,7 @@ async function handleReleasesApi(req, res, urlPath) {
 
     const cacheKey = buildReleaseCacheKey({ scope: scopeParam, seriesId, seasonNumber });
     cacheReleases(cacheKey, releases);
-    sendJson(res, 200, { releases, notice, episodeCount, targetLabel });
+    sendJson(res, 200, { releases: await withQualityRank(releases), notice, episodeCount, targetLabel });
     return true;
   }
 
@@ -336,7 +354,7 @@ async function handleReleasesApi(req, res, urlPath) {
   const { releases, notice } = await searchForEpisode(series, episodeArg);
 
   cacheReleases(buildReleaseCacheKey({ scope: 'episode', episodeId }), releases);
-  sendJson(res, 200, { releases, notice });
+  sendJson(res, 200, { releases: await withQualityRank(releases), notice });
   return true;
 }
 

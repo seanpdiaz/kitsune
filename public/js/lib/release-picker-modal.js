@@ -27,7 +27,9 @@ function initReleasePickerModal() {
         <p class="release-picker-notice is-collapsed" id="releasePickerNotice"></p>
         <div class="release-list-wrap">
           <div class="release-header">
-            <span>Release</span><span>Indexer</span><span>Quality</span>
+            <button type="button" class="release-sort-btn" data-sort-key="title">Release</button>
+            <button type="button" class="release-sort-btn" data-sort-key="indexer">Indexer</button>
+            <button type="button" class="release-sort-btn" data-sort-key="qualityRank">Quality</button>
             <button type="button" class="release-sort-btn" data-sort-key="sizeBytes">Size</button>
             <button type="button" class="release-sort-btn" data-sort-key="seeders">Seeders</button>
             <span></span>
@@ -55,45 +57,67 @@ function initReleasePickerModal() {
   // returned, no re-fetch. Persists across searches on this page (not reset
   // in open() below) since a user who wants releases seeders-first for one
   // episode almost certainly wants that for the next one too. `key` is
-  // whichever field the clicked header represents ('seeders' or the
-  // sizeBytes release field itself, reused directly as the key so
-  // compareReleases doesn't need a second lookup table) or null for the
-  // server's own best-first order (server/lib/quality.js's
-  // rankReleaseCandidates) — the state new releases always start in.
+  // whichever field the clicked header represents — a real release object
+  // field for every column except Quality, which sorts by `qualityRank`
+  // (a numeric tier position server/routes/releases.js adds to each release
+  // specifically for this — see its own comment for why a plain string
+  // compare on `quality` itself would be alphabetical nonsense) — or null
+  // for the server's own best-first order (server/lib/quality.js's
+  // rankReleaseCandidates), the state new releases always start in.
+  //
+  // Every column has its own default first-click direction and label (see
+  // SORT_COLUMNS below) rather than one hardcoded 'desc'/two-value label
+  // lookup — Release/Indexer are plain text, where A-first reads as the
+  // natural first sort; Quality/Size/Seeders are all "biggest/best is more
+  // useful up top" numeric columns, matching the desc-first behavior Size/
+  // Seeders already had before Release/Indexer/Quality could sort at all.
+  const SORT_COLUMNS = {
+    title: { label: 'Release', type: 'string', defaultDir: 'asc' },
+    indexer: { label: 'Indexer', type: 'string', defaultDir: 'asc' },
+    qualityRank: { label: 'Quality', type: 'number', defaultDir: 'desc' },
+    sizeBytes: { label: 'Size', type: 'number', defaultDir: 'desc' },
+    seeders: { label: 'Seeders', type: 'number', defaultDir: 'desc' },
+  };
   const sortState = { key: null, dir: null };
   const sortButtons = Array.from(modal.querySelectorAll('.release-sort-btn'));
 
   function compareReleases(a, b) {
-    const av = Number(a[sortState.key]) || 0;
-    const bv = Number(b[sortState.key]) || 0;
-    return sortState.dir === 'asc' ? av - bv : bv - av;
+    const { type } = SORT_COLUMNS[sortState.key];
+    const cmp = type === 'string'
+      ? String(a[sortState.key] || '').localeCompare(String(b[sortState.key] || ''))
+      : (Number(a[sortState.key]) || 0) - (Number(b[sortState.key]) || 0);
+    return sortState.dir === 'asc' ? cmp : -cmp;
   }
 
   // Reflects sortState on the header buttons themselves: an arrow on
   // whichever column is active (pointing the way it's currently sorting),
   // no arrow on the other one, and neither once a column's been clicked
-  // back past 'asc' to the server's own order (see the click handler below).
+  // back past its second direction to the server's own order (see the click
+  // handler below).
   function updateSortHeader() {
     sortButtons.forEach((btn) => {
-      const active = btn.dataset.sortKey === sortState.key;
+      const key = btn.dataset.sortKey;
+      const active = key === sortState.key;
       btn.classList.toggle('active', active);
       const arrow = active ? (sortState.dir === 'asc' ? icons.arrowUp : icons.arrowDown) : '';
-      btn.innerHTML = `${btn.dataset.sortKey === 'sizeBytes' ? 'Size' : 'Seeders'}${arrow}`;
+      btn.innerHTML = `${SORT_COLUMNS[key].label}${arrow}`;
     });
   }
 
-  // Three clicks on the same column cycle desc → asc → off (back to the
-  // server's best-first order); a click on the other column always starts
-  // it fresh at desc — most-seeders/largest-first being the generally more
-  // useful first look at either column.
+  // Three clicks on the same column cycle its default direction → the
+  // opposite → off (back to the server's best-first order); a click on a
+  // different column always starts that column fresh at its own default —
+  // see SORT_COLUMNS above for what each column's default actually is.
   sortButtons.forEach((btn) => {
     btn.addEventListener('click', () => {
       const key = btn.dataset.sortKey;
+      const { defaultDir } = SORT_COLUMNS[key];
+      const oppositeDir = defaultDir === 'asc' ? 'desc' : 'asc';
       if (sortState.key !== key) {
         sortState.key = key;
-        sortState.dir = 'desc';
-      } else if (sortState.dir === 'desc') {
-        sortState.dir = 'asc';
+        sortState.dir = defaultDir;
+      } else if (sortState.dir === defaultDir) {
+        sortState.dir = oppositeDir;
       } else {
         sortState.key = null;
         sortState.dir = null;
