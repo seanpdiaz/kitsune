@@ -29,6 +29,7 @@ const fs = require('fs');
 const path = require('path');
 const { buildEpisodeFilePath } = require('./episode-paths');
 const { applyPermissions } = require('./permissions');
+const { verifyRootFolderForPath } = require('./root-folder-guard');
 
 async function importEpisodeFile(series, episode, quality, sourcePath) {
   // sourcePath passed through as opts so buildEpisodeFilePath can preserve
@@ -36,6 +37,22 @@ async function importEpisodeFile(series, episode, quality, sourcePath) {
   // honor the Rename Episodes toggle (keep the original filename verbatim
   // when it's off) — see episode-paths.js.
   const destPath = await buildEpisodeFilePath(series, episode, quality, { sourcePath });
+
+  // Confirm destPath's root folder is actually the mounted volume the user
+  // configured before touching the filesystem at all — see
+  // root-folder-guard.js's header comment for why this has to happen here,
+  // before mkdir, rather than being inferred from whether the mkdir/link/
+  // copy calls below throw: they won't, even when the real mount is down,
+  // because an unmounted mount point is just an empty, perfectly writable
+  // local directory as far as fs calls can tell.
+  const mountCheck = await verifyRootFolderForPath(destPath);
+  if (mountCheck.verified === false) {
+    return {
+      ok: false,
+      error: `Root folder "${mountCheck.rootFolderPath}" doesn't look mounted right now (its identity marker is missing) — refusing to import into what might be an empty mount point instead of the real Library location`,
+    };
+  }
+
   // episode-paths.js always lays a real import out as root/seasonFolder/
   // fileName (see buildEpisodeFilePath/seriesFolderNameFor/
   // seasonFolderNameFor) — two directory levels above the file, both
@@ -91,6 +108,21 @@ async function importEpisodeFile(series, episode, quality, sourcePath) {
     // genuine copy failure is reported as an actual error.
     try {
       await fs.promises.copyFile(sourcePath, destPath);
+      // A hardlink can't land at the wrong size (it's the same inode as the
+      // source, by definition) but a real byte-for-byte copy can be cut
+      // short by a full disk or a mount dropping mid-write — and unlike the
+      // mount check above, that failure mode doesn't throw either; copyFile
+      // just stops copying. Confirmed here before this is ever allowed to
+      // count as a real import, rather than after the fact if someone
+      // notices the episode won't play.
+      const destStat = await fs.promises.stat(destPath);
+      if (destStat.size !== stat.size) {
+        await fs.promises.unlink(destPath).catch(() => {});
+        return {
+          ok: false,
+          error: `Copied file size (${destStat.size} bytes) didn't match the source (${stat.size} bytes) at "${destPath}" — removed the incomplete copy instead of leaving a corrupt file in the Library`,
+        };
+      }
       await applyPermissions({ filePath: destPath, dirPaths: importDirPaths });
       return { ok: true, path: destPath, sizeBytes: stat.size, method: 'copy' };
     } catch (copyErr) {
