@@ -143,7 +143,9 @@ function applyConfigUpdate(current, body) {
   const next = { ...current };
   if (body.enabled !== undefined) next.enabled = !!body.enabled;
   if (body.providerName !== undefined) next.providerName = cleanString(body.providerName, 40);
-  if (body.issuer !== undefined) next.issuer = cleanString(body.issuer);
+  // Stored in normalized form (see oidc.normalizeIssuer), so a pasted
+  // discovery URL is saved as the issuer it belongs to.
+  if (body.issuer !== undefined) next.issuer = oidc.normalizeIssuer(cleanString(body.issuer));
   if (body.clientId !== undefined) next.clientId = cleanString(body.clientId);
   if (typeof body.clientSecret === 'string' && body.clientSecret !== '') next.clientSecret = body.clientSecret;
   if (body.clearClientSecret === true) next.clientSecret = '';

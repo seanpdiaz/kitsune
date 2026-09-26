@@ -52,8 +52,16 @@ const HMAC_ALGS = { HS256: 'sha256', HS384: 'sha384', HS512: 'sha512' };
 // is ".../application/o/<slug>/" (with the slash) and it's easy to paste
 // either form into Settings — both should work, while anything else about
 // the URL still has to match exactly.
+//
+// Pasting the discovery URL itself (".../.well-known/openid-configuration")
+// is an easy mistake — every provider's admin page shows it right next to
+// the issuer — so that suffix is stripped too rather than producing a
+// doubled ".well-known/openid-configuration/.well-known/..." request.
 function normalizeIssuer(issuer) {
-  return String(issuer || '').trim().replace(/\/+$/, '');
+  return String(issuer || '')
+    .trim()
+    .replace(/\/\.well-known\/openid-configuration\/?$/i, '')
+    .replace(/\/+$/, '');
 }
 
 function base64url(buf) {
@@ -74,6 +82,18 @@ function safeEqual(a, b) {
   return ab.length === bb.length && crypto.timingSafeEqual(ab, bb);
 }
 
+// Node's TLS error codes for "I don't trust whoever signed this
+// certificate" — almost always a private/self-signed CA that Node's
+// built-in trust store doesn't know about.
+const UNTRUSTED_CERT_CODES = new Set([
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'UNABLE_TO_GET_ISSUER_CERT',
+  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'CERT_UNTRUSTED',
+]);
+
 async function fetchJson(url, options = {}) {
   let res;
   try {
@@ -84,7 +104,15 @@ async function fetchJson(url, options = {}) {
       headers: { Accept: 'application/json', ...(options.headers || {}) },
     });
   } catch (err) {
-    const cause = err && err.cause ? ` (${err.cause.code || err.cause.message})` : '';
+    const code = err && err.cause ? err.cause.code : null;
+    if (code && UNTRUSTED_CERT_CODES.has(code)) {
+      throw new Error(
+        `Could not reach ${url}: its HTTPS certificate isn't trusted by this server (${code}). `
+        + 'If your provider uses a private CA, start Kitsune with NODE_EXTRA_CA_CERTS pointing at a PEM file '
+        + 'containing your root CA (and intermediate, if the provider doesn\'t send it), then restart.'
+      );
+    }
+    const cause = err && err.cause ? ` (${code || err.cause.message})` : '';
     throw new Error(`Could not reach ${url}: ${err.message}${cause}`);
   }
   const text = await res.text();
