@@ -981,7 +981,32 @@ async function completeRealDownload(row, torrent, client, files) {
         filePath = imported.path;
         sizeBytes = imported.sizeBytes;
       } else {
-        importNote = `Could not import the real file for "${row.release_title}" (${episodeLabel}) — ${imported.error}. Recorded a placeholder path instead.`;
+        // Real, confirmed bug: this used to swallow every importEpisodeFile
+        // failure — source file genuinely missing, a destination root
+        // folder that isn't actually mounted right now (see
+        // lib/root-folder-guard.js), a disk-full/permission-denied
+        // hardlink-or-copy, a truncated copy — into `importNote` and fell
+        // through to recording a fabricated placeholder path as if the
+        // episode had imported successfully (episodes.downloaded = 1
+        // below). That's exactly how a download that genuinely finished
+        // but couldn't reach real storage got reported to the user as a
+        // completed import with no real file anywhere, and — because the
+        // queue row was then deleted same as a real success — with no
+        // record left pointing back at the still-perfectly-good source
+        // file sitting on the download client, either.
+        //
+        // Thrown instead: this propagates out of completeRealDownload to
+        // realTick's own try/catch below, which routes it into the exact
+        // same bounded import_attempts retry (up to MAX_IMPORT_ATTEMPTS,
+        // ~MAX_IMPORT_ATTEMPTS*REAL_TICK_MS of wall-clock time) — then—
+        // failRealDownload/blocklist machinery every other real download
+        // failure already uses. A transient hiccup (a NAS share
+        // reconnecting, a momentary lock) now has a real window to recover
+        // on its own with zero user action and zero re-download, since
+        // nothing here deletes the source file or the torrent — only a
+        // failure that's still happening after every retry gives up and
+        // surfaces as a real, visible failure instead of a silent lie.
+        throw new Error(`Could not import the real file for "${row.release_title}" (${episodeLabel}) — ${imported.error}`);
       }
     }
   }

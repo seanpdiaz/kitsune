@@ -6,6 +6,8 @@
 // detection on POST /api/series.
 // ---------------------------------------------------------------------------
 const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
 const db = require('../db');
 const { logWarn } = require('../logger');
 // ---------------------------------------------------------------------------
@@ -59,6 +61,75 @@ async function pathExists(targetPath) {
   } catch {
     return false;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Root folder identity marker — a small hidden file written into a root
+// folder the moment it's added (see routes/root-folders.js), so later code
+// can tell "this directory exists and is writable" (true even for an
+// unmounted NFS/SMB mount point, which reverts to an empty *local* directory
+// at the same path rather than erroring — the actual, confirmed shape of a
+// real report: an import "succeeded" by hardlinking/copying a real episode
+// file into a directory that merely happened to sit where the real Library
+// mount used to be) apart from "this is genuinely the same mounted volume
+// verified at add-time." See server/lib/root-folder-guard.js, which uses
+// these two functions to gate a real import behind that check.
+// ---------------------------------------------------------------------------
+const ROOT_FOLDER_MARKER_FILENAME = '.kitsune-root.json';
+
+async function writeRootFolderMarker(dirPath) {
+  const id = crypto.randomUUID();
+  await fs.promises.writeFile(
+    path.join(dirPath, ROOT_FOLDER_MARKER_FILENAME),
+    JSON.stringify({ id, createdAt: new Date().toISOString() }, null, 2)
+  );
+  return id;
+}
+
+// Returns the marker's id, or null if it's missing/unreadable/corrupt — any
+// of which mean "can't confirm this is the same mounted volume," never
+// distinguished further here (the caller only ever needs the yes/no).
+async function readRootFolderMarker(dirPath) {
+  try {
+    const raw = await fs.promises.readFile(path.join(dirPath, ROOT_FOLDER_MARKER_FILENAME), 'utf8');
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed.id === 'string' ? parsed.id : null;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Bounded-concurrency map — runs `fn` over `items` with at most `limit` in
+// flight at once, preserving input order in the result array.
+//
+// Real, confirmed bug this fixes: a raw Promise.all fan-out over every
+// subfolder in a root folder (routes/root-folders.js's Library Import scan)
+// queues one full recursive filesystem walk per subfolder onto Node's
+// libuv threadpool all at once — hundreds of them on a real library. That
+// threadpool defaults to just 4 threads, and it's not exclusive to this
+// scan: server.js's own static file handler serves every page asset
+// (`fs.readFile`) through that identical pool. So while an unbounded scan
+// is saturating all 4 slots, every other request that also needs real
+// disk I/O — including the browser just trying to load the next page —
+// queues up behind it and the whole UI looks frozen, even though the
+// actual JS event loop was never blocked by synchronous code. Bounding
+// concurrency here keeps one big scan from starving everything else the
+// server is doing at the same time; the scan itself takes about the same
+// wall-clock time either way; only how much of the threadpool it's allowed
+// to occupy at once changes.
+// ---------------------------------------------------------------------------
+async function mapWithConcurrency(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
 }
 
 function formatBytes(bytes) {
@@ -124,4 +195,4 @@ async function computeRootFolderStats(dirPath) {
   return { free, unmapped, freeBytes, totalBytes, usedBytes };
 }
 
-module.exports = { stripReleaseNoise, normalizeFolderName, guessTitleFromFolderName, formatBytes, computeRootFolderStats, pathExists };
+module.exports = { stripReleaseNoise, normalizeFolderName, guessTitleFromFolderName, formatBytes, computeRootFolderStats, pathExists, writeRootFolderMarker, readRootFolderMarker, ROOT_FOLDER_MARKER_FILENAME, mapWithConcurrency };
