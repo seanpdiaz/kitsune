@@ -46,6 +46,21 @@ if [ -z "${DEPLOY_TARGET:-}" ]; then
   exit 1
 fi
 
+# Stamps build-info.json with this exact commit/branch before syncing —
+# see scripts/write-build-info.js's own header comment for the full
+# reasoning. This has to happen here, locally, rather than relying on the
+# remote's own `npm install && npm run build` (see the instructions this
+# script's header comment already gives for that) to do it: the remote
+# target has no .git directory at all (deliberately excluded — see
+# deploy-exclude.txt), so write-build-info.js can't generate a real stamp
+# there. Running it here, where .git actually exists, means build-info.json
+# ships as an ordinary synced file (deploy-exclude.txt does NOT list it —
+# unlike public/dist/, this one file needs to actually reach the remote)
+# and the remote's later `npm run build` finds it already correct and
+# leaves it alone (see write-build-info.js's own no-op-without-.git path).
+echo "Stamping build-info.json..."
+node "$SCRIPT_DIR/write-build-info.js"
+
 echo "Deploying to $DEPLOY_TARGET ..."
 rsync -avz --delete \
   --exclude-from="$SCRIPT_DIR/deploy-exclude.txt" \
