@@ -27,7 +27,7 @@ const db = require('./server/db');
 const { logDebug, logInfo, logWarn, logError } = require('./server/logger');
 const { sendJson } = require('./server/lib/http');
 
-const { handleAuthApi } = require('./server/routes/auth');
+const { handleAuthApi, handleBasicAuthChallenge } = require('./server/routes/auth');
 const { handleUserPrefsApi } = require('./server/routes/user-prefs');
 const { handleTagsApi } = require('./server/routes/tags');
 const { handleSettingsItemsApi } = require('./server/routes/settings-items');
@@ -143,6 +143,20 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (urlPath === '/') urlPath = '/index.html';
+
+  // Settings > General's Authentication Method set to "Basic (browser
+  // popup)" means every *.html page load — the only place a real browser
+  // ever gets the chance to show its native credential prompt — goes
+  // through a real HTTP Basic Auth challenge first (see
+  // handleBasicAuthChallenge's own comment in server/routes/auth.js for
+  // exactly what it does and doesn't gate, and why). A `true` return means
+  // it already sent the full response itself (a 401 challenge); anything
+  // else (auth method isn't 'basic', already signed in, or a Basic header
+  // just got verified and a fresh session cookie is now riding along on
+  // this same response) falls through to serve the page exactly as before.
+  if (path.extname(urlPath) === '.html' && (await handleBasicAuthChallenge(req, res))) {
+    return;
+  }
 
   const filePath = path.join(PUBLIC_DIR, urlPath);
 
