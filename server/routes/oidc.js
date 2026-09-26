@@ -67,7 +67,13 @@ const DEFAULT_CONFIG = {
   autoCreateUsers: true,
   linkExistingByUsername: false,
   publicUrl: '',
+  // TLS trust for requests to the provider — see server/lib/oidc.js's
+  // "TLS trust" section.
+  caCertificate: '',
+  skipTlsVerify: false,
 };
+
+const MAX_CA_PEM_LENGTH = 64 * 1024;
 
 db.init(async () => {
   await db.exec(`
@@ -104,6 +110,24 @@ function isUsable(cfg) {
   return !!(cfg.enabled && cfg.issuer && cfg.clientId);
 }
 
+function tlsFor(cfg) {
+  return { caCertificate: cfg.caCertificate, skipVerify: !!cfg.skipTlsVerify };
+}
+
+function warnIfInsecure(cfg, what) {
+  if (cfg.skipTlsVerify) {
+    logWarn('Auth', `${what}: certificate verification for ${displayName(cfg)} is OFF (Settings > Security). Anyone who can intercept this traffic could sign in as any user.`);
+  }
+}
+
+function caSummary(pem) {
+  try {
+    return oidc.parseCaBundle(pem).map(({ subject, validTo, ca }) => ({ subject, validTo, ca }));
+  } catch {
+    return [];
+  }
+}
+
 function displayName(cfg) {
   return cfg.providerName || 'single sign-on';
 }
@@ -128,7 +152,7 @@ function redirectUriFor(req, cfg) {
 
 function publicConfig(cfg, req) {
   const { clientSecret, ...rest } = cfg;
-  return { ...rest, hasClientSecret: !!clientSecret, redirectUri: redirectUriFor(req, cfg) };
+  return { ...rest, hasClientSecret: !!clientSecret, redirectUri: redirectUriFor(req, cfg), caSummary: caSummary(cfg.caCertificate) };
 }
 
 function cleanString(value, max = 500) {
@@ -160,11 +184,29 @@ function applyConfigUpdate(current, body) {
   if (body.autoCreateUsers !== undefined) next.autoCreateUsers = !!body.autoCreateUsers;
   if (body.linkExistingByUsername !== undefined) next.linkExistingByUsername = !!body.linkExistingByUsername;
   if (body.publicUrl !== undefined) next.publicUrl = cleanString(body.publicUrl);
+  if (body.skipTlsVerify !== undefined) next.skipTlsVerify = !!body.skipTlsVerify;
+  if (body.caCertificate !== undefined) next.caCertificate = validateCaPem(body.caCertificate);
 
   if (next.issuer && !/^https?:\/\/[^/]/i.test(next.issuer)) throw new UserFacingError('Issuer URL must start with https:// (or http://).');
   if (next.publicUrl && !/^https?:\/\/[^/]/i.test(next.publicUrl)) throw new UserFacingError('Public URL must start with https:// (or http://), e.g. https://kitsune.example.com');
   if (next.enabled && (!next.issuer || !next.clientId)) throw new UserFacingError('Issuer URL and Client ID are required to turn on single sign-on.');
   return next;
+}
+
+// Trusted CA field: '' clears it; anything else has to contain at least one
+// readable PEM certificate.
+function validateCaPem(value) {
+  const pem = String(value == null ? '' : value).trim();
+  if (!pem) return '';
+  if (pem.length > MAX_CA_PEM_LENGTH) throw new UserFacingError('Trusted CA certificate is too large — paste just the root (and intermediate) CA certificates.');
+  let certs;
+  try {
+    certs = oidc.parseCaBundle(pem);
+  } catch (err) {
+    throw new UserFacingError(err.message);
+  }
+  if (certs.length === 0) throw new UserFacingError('Trusted CA certificate must be PEM text starting with -----BEGIN CERTIFICATE-----.');
+  return certs.map((c) => c.pem).join('\n');
 }
 
 // ---------------------------------------------------------------------------
@@ -280,9 +322,10 @@ async function handleLogin(req, res) {
     failToLogin(res, 'Single sign-on is not turned on.');
     return;
   }
+  warnIfInsecure(cfg, 'SSO sign-in');
   let doc;
   try {
-    doc = await oidc.discover(cfg.issuer);
+    doc = await oidc.discover(cfg.issuer, { tls: tlsFor(cfg) });
   } catch (err) {
     logError('Auth', `SSO sign-in could not start: ${err.message}`);
     failToLogin(res, `Couldn't reach ${displayName(cfg)}: ${err.message}`);
@@ -352,23 +395,26 @@ async function handleCallback(req, res) {
   }
 
   try {
-    const doc = await oidc.discover(cfg.issuer);
+    const tls = tlsFor(cfg);
+    const doc = await oidc.discover(cfg.issuer, { tls });
     const tokens = await oidc.exchangeCode(doc, {
       clientId: cfg.clientId,
       clientSecret: cfg.clientSecret,
       code,
       redirectUri: entry.redirectUri,
       codeVerifier: entry.codeVerifier,
+      tls,
     });
     const idClaims = await oidc.verifyIdToken(doc, tokens.id_token, {
       clientId: cfg.clientId,
       clientSecret: cfg.clientSecret,
       nonce: entry.nonce,
+      tls,
     });
 
     let userinfo = {};
     try {
-      userinfo = await oidc.fetchUserinfo(doc, tokens.access_token, idClaims.sub);
+      userinfo = await oidc.fetchUserinfo(doc, tokens.access_token, idClaims.sub, tls);
     } catch (err) {
       if (err.code === 'SUB_MISMATCH') throw err;
       logWarn('Auth', `Couldn't load UserInfo from ${provider}, using ID token claims only: ${err.message}`);
@@ -427,20 +473,41 @@ async function handleOidcApi(req, res, urlPath) {
       throw err;
     }
     await saveConfig(next);
+    oidc.clearCaches();
     logInfo('Auth', `Single sign-on settings saved (${next.enabled ? 'on' : 'off'})`);
+    warnIfInsecure(next, 'Single sign-on settings saved');
     sendJson(res, 200, publicConfig(next, req));
     return true;
   }
 
+  // POST /api/auth/oidc/test — checks discovery + JWKS using the form's
+  // current (possibly unsaved) issuer and TLS settings, so a Trusted CA or
+  // issuer can be tried before saving.
   if (req.method === 'POST' && urlPath === '/api/auth/oidc/test') {
     if (!(await requireAdmin(req, res))) return true;
     let body;
-    try { body = await readJsonBody(req); } catch { body = {}; }
-    const issuer = cleanString((body && body.issuer) || (await loadConfig()).issuer);
+    try { body = (await readJsonBody(req)) || {}; } catch { body = {}; }
+    const saved = await loadConfig();
+    const issuer = oidc.normalizeIssuer(cleanString(body.issuer !== undefined ? body.issuer : saved.issuer));
     if (!issuer) { sendJson(res, 400, { ok: false, error: 'Enter an Issuer URL first.' }); return true; }
+    let trial;
     try {
-      const doc = await oidc.discover(issuer, { force: true });
-      const jwks = await oidc.loadJwks(doc.jwks_uri, true);
+      trial = {
+        ...saved,
+        caCertificate: body.caCertificate !== undefined ? validateCaPem(body.caCertificate) : saved.caCertificate,
+        skipTlsVerify: body.skipTlsVerify !== undefined ? !!body.skipTlsVerify : saved.skipTlsVerify,
+      };
+    } catch (err) {
+      sendJson(res, 200, { ok: false, error: err.message });
+      return true;
+    }
+    warnIfInsecure(trial, 'Provider test');
+    // Whatever this fetches was fetched with the trial TLS settings, so it
+    // must not linger in the cache for real sign-ins under the saved ones.
+    try {
+      const tls = tlsFor(trial);
+      const doc = await oidc.discover(issuer, { force: true, tls });
+      const jwks = await oidc.loadJwks(doc.jwks_uri, true, tls);
       sendJson(res, 200, {
         ok: true,
         issuer: doc.issuer,
@@ -449,9 +516,12 @@ async function handleOidcApi(req, res, urlPath) {
         userinfoEndpoint: doc.userinfo_endpoint || null,
         signingAlgs: doc.id_token_signing_alg_values_supported || [],
         keyCount: jwks.keys.length,
+        insecure: !!trial.skipTlsVerify,
       });
     } catch (err) {
       sendJson(res, 200, { ok: false, error: err.message });
+    } finally {
+      oidc.clearCaches();
     }
     return true;
   }

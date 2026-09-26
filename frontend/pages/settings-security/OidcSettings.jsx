@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { SettingsCard, FormRow, ToggleField, TextField } from '../../components/SettingsFormFields.jsx';
 
 // Settings > Security's Single Sign-On card — the admin side of
@@ -13,6 +13,7 @@ const CALLBACK_PATH = '/api/auth/oidc/callback';
 const EDITABLE_KEYS = [
   'enabled', 'providerName', 'issuer', 'clientId', 'scopes', 'usernameClaim',
   'groupsClaim', 'adminGroup', 'autoCreateUsers', 'linkExistingByUsername', 'publicUrl',
+  'caCertificate', 'skipTlsVerify',
 ];
 
 function editable(cfg) {
@@ -36,6 +37,7 @@ export default function OidcSettings() {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
   const [copied, setCopied] = useState(false);
+  const caFileRef = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -117,7 +119,7 @@ export default function OidcSettings() {
       const res = await fetch('/api/auth/oidc/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ issuer: form.issuer }),
+        body: JSON.stringify({ issuer: form.issuer, caCertificate: form.caCertificate, skipTlsVerify: form.skipTlsVerify }),
       });
       setTestResult(await res.json());
     } catch {
@@ -125,6 +127,16 @@ export default function OidcSettings() {
     } finally {
       setTesting(false);
     }
+  }
+
+  function handleCaFile(file) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const text = String(reader.result || '').trim();
+      // Appends, so a root and an intermediate can be loaded one after the other.
+      set('caCertificate')(form.caCertificate ? `${form.caCertificate.trim()}\n${text}` : text);
+    };
+    reader.readAsText(file);
   }
 
   async function handleCopy() {
@@ -204,11 +216,52 @@ export default function OidcSettings() {
         <TextField id="oidc-public-url" placeholder={window.location.origin} value={form.publicUrl} onChange={set('publicUrl')} />
       </FormRow>
 
+      <div className={`form-row ${detailClass}`}>
+        <div className="field-label">
+          <p className="name">Trusted CA Certificate</p>
+          <p className="desc">
+            For a provider behind a private CA: paste its root CA (and intermediate, if the provider doesn't send it) in PEM format.
+            Used only for single sign-on requests.
+          </p>
+          {saved.caSummary && saved.caSummary.length > 0 && (
+            <p className="desc" style={{ marginTop: 6 }}>
+              Saved: {saved.caSummary.map((c) => `${c.subject} (expires ${new Date(c.validTo).toLocaleDateString()})`).join('; ')}
+            </p>
+          )}
+        </div>
+        <div className="field-control wide" style={{ flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+          <textarea
+            className="field-textarea" spellCheck={false} placeholder={'-----BEGIN CERTIFICATE-----\n…\n-----END CERTIFICATE-----'}
+            value={form.caCertificate} onChange={(e) => set('caCertificate')(e.target.value)}
+          />
+          <div style={{ display: 'flex', gap: 6 }}>
+            {form.caCertificate && <button type="button" onClick={() => set('caCertificate')('')}>Clear</button>}
+            <button type="button" onClick={() => caFileRef.current?.click()}>Load from File</button>
+          </div>
+          <input
+            ref={caFileRef} type="file" accept=".pem,.crt,.cer,.txt" style={{ display: 'none' }}
+            onChange={(e) => { const file = e.target.files[0]; e.target.value = ''; if (file) handleCaFile(file); }}
+          />
+        </div>
+      </div>
+      <FormRow
+        name="Skip Certificate Verification"
+        desc="Insecure. Accepts any certificate from the provider, so anyone who can intercept this traffic could sign in as any user, including admins. Use the Trusted CA Certificate field instead whenever possible."
+        className={detailClass}
+      >
+        <ToggleField id="oidc-skip-tls-verify" checked={form.skipTlsVerify} onChange={set('skipTlsVerify')} />
+      </FormRow>
+      {form.enabled && form.skipTlsVerify && (
+        <p className="settings-warning">
+          Certificate verification is off for single sign-on. Kitsune can't tell your real provider apart from an impostor on the network. Turn this off once a Trusted CA Certificate is in place.
+        </p>
+      )}
+
       {testResult && (
         testResult.ok ? (
           <p className="form-error" style={{ color: 'var(--success)', marginTop: 12 }}>
             Provider found: {testResult.issuer} ({testResult.keyCount} signing key{testResult.keyCount === 1 ? '' : 's'}
-            {testResult.signingAlgs.length ? `, ${testResult.signingAlgs.join('/')}` : ''}).
+            {testResult.signingAlgs.length ? `, ${testResult.signingAlgs.join('/')}` : ''}){testResult.insecure ? ' — certificate not verified' : ''}.
           </p>
         ) : (
           <p className="form-error" style={{ marginTop: 12 }}>{testResult.error}</p>

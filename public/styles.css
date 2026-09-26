@@ -1749,6 +1749,35 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 }
 .field-input:focus, .field-select:focus { outline: none; border-color: var(--border-strong); }
 
+/* Multi-line PEM input (Settings > Security's Trusted CA Certificate) —
+   same surface as .field-input, monospace since it's certificate text. */
+.field-textarea {
+  width: 100%;
+  min-height: 96px;
+  padding: 8px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-primary);
+  resize: vertical;
+}
+.field-textarea:focus { outline: none; border-color: var(--border-strong); }
+
+/* Warning callout for settings that weaken security (e.g. skipping
+   certificate verification for single sign-on). */
+.settings-warning {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--danger);
+  background: var(--danger-bg);
+  border-radius: var(--radius-sm);
+}
+
 .format-preview {
   font-family: var(--font-mono);
   font-size: 11px;

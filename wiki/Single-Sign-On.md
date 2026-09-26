@@ -31,10 +31,19 @@ Configured in **Settings > Security > Single Sign-On (OIDC)** (admins only).
    - **Admin Group:** `kitsune-admins` (or leave empty — see below)
 5. Click **Test Provider**, then **Save**. Sign out and use the new button.
 
-Because Kitsune fetches the provider's discovery document, keys and tokens itself, the
-Kitsune server must trust the provider's TLS certificate. With a private CA, add the root
-to Node's trust store, e.g. `NODE_EXTRA_CA_CERTS=/path/to/root-ca.pem` in the
-environment Kitsune runs in.
+### Private CA (home-lab certificates)
+
+Kitsune fetches the provider's discovery document, keys and tokens itself, so it has to
+trust the provider's HTTPS certificate. If the provider uses a private CA, paste the root
+CA — plus the intermediate, if the provider doesn't send it — into **Trusted CA
+Certificate** (or use **Load from File**). It's used only for single sign-on requests,
+full certificate and hostname checks stay on, and **Test Provider** tries it before you
+save. `NODE_EXTRA_CA_CERTS` also still works if you'd rather trust the CA process-wide.
+
+**Skip Certificate Verification** turns certificate checks off for single sign-on
+entirely. Don't leave it on: Kitsune trusts the signing keys it downloads from the
+provider, so anyone who can intercept that traffic could sign in as any user, including
+admins. While it's on, the card shows a warning and every sign-in logs one.
 
 ## Accounts
 
@@ -64,12 +73,15 @@ environment Kitsune runs in.
   secret), and ID token verification — signature against the provider's JWKS
   (RS/PS/ES/EdDSA) or the client secret (HS*), then `iss`, `aud`, `azp`, `exp`, `iat`,
   `nonce`. `alg: none` is always rejected. UserInfo claims are merged in only when their
-  `sub` matches the ID token. Built on `node:crypto` and `fetch`, no new dependencies.
+  `sub` matches the ID token. Built on `node:crypto` and `node:https` (for the per-request
+  Trusted CA / skip-verification options), no new dependencies.
 - `server/routes/oidc.js` — the routes (`/api/auth/oidc/status`, `/login`, `/callback`,
   and admin-only `/config` and `/test`), the config, and account provisioning. A successful
   sign-in creates the same `sessions` row and cookie a password sign-in does.
 - In-flight sign-ins are kept in memory for 10 minutes, keyed by a short-lived
   `kitsune_oidc` cookie, so the callback only completes in the browser that started it.
+- Discovery and key caches are cleared whenever the settings are saved, and after every
+  Test Provider run, so nothing fetched under different trust settings is reused.
 - The config is stored in `app_settings` under the `oidc` section. The generic
   `/api/app-settings/:section` route refuses to serve that section, and the admin-only
   config endpoint never returns the client secret, only whether one is set.
