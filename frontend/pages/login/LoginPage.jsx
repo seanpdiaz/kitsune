@@ -10,7 +10,7 @@ import { useEffect, useState } from 'react';
 // while already signed in), this redirects straight through to `next` (or
 // index.html) instead of showing the form at all.
 //
-// When single sign-on is turned on (Settings > General — see server/routes/
+// When single sign-on is turned on (Settings > Security — see server/routes/
 // oidc.js), the login phase also shows a "Sign in with <provider>" button
 // above the normal form. A failed SSO sign-in comes back here with
 // ?sso_error=<message>, shown above the form.

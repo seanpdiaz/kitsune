@@ -1,6 +1,6 @@
 // ---------------------------------------------------------------------------
 // Single sign-on through OpenID Connect — "Sign in with <provider>" on the
-// login page, configured in Settings > General. The protocol itself lives in
+// login page, configured in Settings > Security. The protocol itself lives in
 // server/lib/oidc.js; this file owns the routes, the config, and turning a
 // verified provider identity into a Kitsune account + normal session (the
 // exact same `sessions` row and cookie a password sign-in gets — see
@@ -233,12 +233,12 @@ async function provisionUser(cfg, claims) {
   if (!row) {
     const username = usernameFrom(claims, cfg.usernameClaim);
     if (!username) {
-      throw new UserFacingError(`${provider} didn't send a username (no "${cfg.usernameClaim}", "preferred_username" or "email" claim). Check the scopes in Settings > General.`);
+      throw new UserFacingError(`${provider} didn't send a username (no "${cfg.usernameClaim}", "preferred_username" or "email" claim). Check the scopes in Settings > Security.`);
     }
     const existing = await db.prepare('SELECT * FROM users WHERE username = ?').get(username);
     if (existing) {
       if (!cfg.linkExistingByUsername || existing.oidc_subject) {
-        throw new UserFacingError(`A Kitsune account named "${username}" already exists and isn't linked to ${provider}. An admin can turn on "Link existing accounts by username" in Settings > General.`);
+        throw new UserFacingError(`A Kitsune account named "${username}" already exists and isn't linked to ${provider}. An admin can turn on "Link existing accounts by username" in Settings > Security.`);
       }
       await db.prepare('UPDATE users SET oidc_subject = ? WHERE id = ?').run(subject, existing.id);
       logInfo('Auth', `Linked existing account "${username}" to its ${provider} identity`);

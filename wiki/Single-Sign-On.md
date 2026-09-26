@@ -5,7 +5,7 @@ Keycloak, Google and so on. When it's on, the login page shows a **Sign in with
 &lt;provider&gt;** button above the normal username/password form. Password sign-in keeps
 working, so you can still get in if the provider is down.
 
-Configured in **Settings > General > Single Sign-On (OIDC)** (admins only).
+Configured in **Settings > Security > Single Sign-On (OIDC)** (admins only).
 
 ## Setting it up with Authentik
 

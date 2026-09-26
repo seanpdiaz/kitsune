@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// /api/ssl — real cert/key file upload for Settings > General's "Enable
+// /api/ssl — real cert/key file upload for Settings > Security's "Enable
 // SSL" toggle, which previously had no way to actually supply a
 // certificate at all. Uploaded bytes are written to fixed paths under
 // data/ssl/ (cert.pem / key.pem); the *original* filename, upload time, and

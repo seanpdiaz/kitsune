@@ -67,7 +67,7 @@ db.init(async () => {
 
   // Own idempotent CREATE TABLE for app_settings, same convention disk-
   // usage.js/permissions.js/refresh-series-task.js already use — this file
-  // now reads Settings > General's Authentication Method out of that same
+  // now reads Settings > Security's Authentication Method out of that same
   // table (see isAuthDisabled below) and doesn't want to depend on require()
   // order against routes/app-settings.js (which owns it) to make sure the
   // table exists first.
@@ -107,15 +107,15 @@ async function adminCount() {
   return (await db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin'").get()).n;
 }
 
-// Settings > General's Authentication Method (frontend/pages/settings-
-// general/GeneralPage.jsx's authMethodSelect, persisted through the generic
+// Settings > Security's Authentication Method (frontend/pages/settings-
+// security/SecurityPage.jsx's authMethodSelect, persisted through the generic
 // /api/app-settings/general section — see server/routes/app-settings.js)
 // used to be purely cosmetic: it only toggled whether that settings page
 // showed its own Username/Password rows, and nothing server-side ever read
 // it — every request still hit the real login gate regardless of what was
 // picked. This is the read side of actually honoring it — falls back to
 // 'forms' (the same default the settings page itself uses — see
-// GeneralPage.jsx's DEFAULTS) for a value that's missing, unparseable, or
+// SecurityPage.jsx's DEFAULTS) for a value that's missing, unparseable, or
 // not one of the three real options, so an unrecognized value behaves like
 // the safest/strictest choice rather than silently disabling auth.
 async function getAuthMethod() {

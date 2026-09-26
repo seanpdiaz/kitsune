@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { SettingsCard, FormRow, ToggleField, TextField } from '../../components/SettingsFormFields.jsx';
 
-// Settings > General's Single Sign-On card — the admin side of
+// Settings > Security's Single Sign-On card — the admin side of
 // server/routes/oidc.js. Unlike the rest of this page it doesn't go through
 // useSettingsForm's autosave: the config lives behind admin-only endpoints
 // (the client secret must never come back from the server), and a

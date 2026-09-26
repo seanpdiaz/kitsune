@@ -62,6 +62,7 @@ export default defineConfig({
         'settings-quality': resolve(process.cwd(), 'frontend/pages/settings-quality/main.jsx'),
         'settings-media-management': resolve(process.cwd(), 'frontend/pages/settings-media-management/main.jsx'),
         'settings-general': resolve(process.cwd(), 'frontend/pages/settings-general/main.jsx'),
+        'settings-security': resolve(process.cwd(), 'frontend/pages/settings-security/main.jsx'),
         'settings-ui': resolve(process.cwd(), 'frontend/pages/settings-ui/main.jsx'),
         'library-add-new': resolve(process.cwd(), 'frontend/pages/library-add-new/main.jsx'),
         'library-import': resolve(process.cwd(), 'frontend/pages/library-import/main.jsx'),

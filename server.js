@@ -167,7 +167,7 @@ const server = http.createServer(async (req, res) => {
 
   if (urlPath === '/') urlPath = '/index.html';
 
-  // Settings > General's Authentication Method set to "Basic (browser
+  // Settings > Security's Authentication Method set to "Basic (browser
   // popup)" means every *.html page load — the only place a real browser
   // ever gets the chance to show its native credential prompt — goes
   // through a real HTTP Basic Auth challenge first (see

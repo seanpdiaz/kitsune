@@ -63,6 +63,9 @@ const NAV_SECTIONS = [
       { href: 'settings-metadata.html', label: 'Metadata' },
       { href: 'settings-tags.html', label: 'Tags' },
       { href: 'settings-general.html', label: 'General' },
+      // Admin-only for the same reason as Users below — sign-in and SSO
+      // settings (the SSO config API itself requires admin too).
+      { href: 'settings-security.html', label: 'Security', adminOnly: true },
       { href: 'settings-ui.html', label: 'UI' },
       // Admin-only (see requireAdmin in server/routes/auth.js — the page
       // itself and its /api/users endpoints both enforce this too, this is
