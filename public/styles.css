@@ -2049,6 +2049,22 @@ input[type="range"].size-slider::-moz-range-track {
 .auth-page .field-input { width: 100%; }
 .auth-submit { width: 100%; justify-content: center; margin-top: 20px; }
 
+/* Single sign-on (server/routes/oidc.js): the provider button sits above the
+   password form, which becomes the secondary option below an "or" rule. */
+.auth-sso { margin-top: 18px; }
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.auth-divider::before,
+.auth-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
 /* Modal */
 .modal-overlay {
   display: none;

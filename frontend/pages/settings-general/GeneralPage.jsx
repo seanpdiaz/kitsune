@@ -3,6 +3,7 @@ import { useSettingsForm } from '../../lib/useSettingsForm.js';
 import { SettingsCard, FormRow, ToggleField, TextField, NumberField, SelectField } from '../../components/SettingsFormFields.jsx';
 import { icons } from '../../lib/icons.jsx';
 import { formatBytes } from '../../../public/js/lib/format.js';
+import OidcSettings from './OidcSettings.jsx';
 
 // React port of settings-general.html's page logic — see README's "React
 // migration" section, Batch 8. The Authentication card's Username/Password
@@ -172,6 +173,8 @@ export default function GeneralPage() {
           <TextField id="general-6" type="password" value={v['general-6']} onChange={(val) => setField('general-6', val)} />
         </FormRow>
       </SettingsCard>
+
+      <OidcSettings />
 
       <SettingsCard title="Proxy">
         <FormRow name="Use Proxy">

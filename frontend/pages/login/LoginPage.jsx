@@ -9,9 +9,22 @@ import { useEffect, useState } from 'react';
 // If a session cookie's already valid (someone lands on login.html directly
 // while already signed in), this redirects straight through to `next` (or
 // index.html) instead of showing the form at all.
+//
+// When single sign-on is turned on (Settings > General — see server/routes/
+// oidc.js), the login phase also shows a "Sign in with <provider>" button
+// above the normal form. A failed SSO sign-in comes back here with
+// ?sso_error=<message>, shown above the form.
 
+// `next` comes straight from the query string, so only one of this app's
+// own pages is accepted — anything else (another site, javascript:, //host)
+// falls back to the Library. Same rule as server/routes/oidc.js's safeNext.
 function nextTarget() {
-  return new URLSearchParams(window.location.search).get('next') || 'index.html';
+  const next = new URLSearchParams(window.location.search).get('next') || '';
+  return /^[A-Za-z0-9_-]+\.html(\?[A-Za-z0-9_.~%&=+-]*)?$/.test(next) ? next : 'index.html';
+}
+
+function ssoErrorFromUrl() {
+  return new URLSearchParams(window.location.search).get('sso_error') || '';
 }
 
 export default function LoginPage() {
@@ -19,20 +32,26 @@ export default function LoginPage() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [error, setError] = useState('');
+  const [error, setError] = useState(ssoErrorFromUrl);
   const [submitting, setSubmitting] = useState(false);
+  const [sso, setSso] = useState({ enabled: false, providerName: '' });
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch('/api/auth/state');
-        const state = await res.json();
+        const [stateRes, ssoRes] = await Promise.all([
+          fetch('/api/auth/state'),
+          fetch('/api/auth/oidc/status').catch(() => null),
+        ]);
+        const state = await stateRes.json();
+        const ssoStatus = ssoRes && ssoRes.ok ? await ssoRes.json() : null;
         if (cancelled) return;
         if (state.user) {
           window.location.href = nextTarget();
           return;
         }
+        if (ssoStatus) setSso(ssoStatus);
         setPhase(state.needsSetup ? 'setup' : 'login');
       } catch {
         if (!cancelled) setPhase('login');
@@ -93,6 +112,15 @@ export default function LoginPage() {
             : 'Sign in with your Kitsune account.'}
         </p>
 
+        {phase === 'login' && sso.enabled && (
+          <>
+            <a className="btn-accent auth-submit auth-sso" href={`/api/auth/oidc/login?next=${encodeURIComponent(nextTarget())}`}>
+              Sign in with {sso.providerName}
+            </a>
+            <div className="auth-divider"><span>or use a Kitsune password</span></div>
+          </>
+        )}
+
         <form onSubmit={handleSubmit}>
           <label className="auth-label" htmlFor="authUsername">Username</label>
           <input
@@ -119,7 +147,7 @@ export default function LoginPage() {
 
           {error && <p className="form-error">{error}</p>}
 
-          <button className="btn-accent auth-submit" type="submit" disabled={submitting}>
+          <button className={`${phase === 'login' && sso.enabled ? '' : 'btn-accent '}auth-submit`} type="submit" disabled={submitting}>
             {submitting ? 'Please wait…' : phase === 'setup' ? 'Create account' : 'Sign in'}
           </button>
         </form>

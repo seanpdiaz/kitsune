@@ -20,10 +20,20 @@ db.init(async () => {
 // /api/app-settings/:section — field/toggle-style settings sections
 // ---------------------------------------------------------------------------
 
+const PRIVATE_SECTIONS = new Set(['oidc']);
+
 async function handleAppSettingsApi(req, res, urlPath) {
   const match = urlPath.match(/^\/api\/app-settings\/([a-z-]+)$/);
   if (!match) return false;
   const [, section] = match;
+
+  // Sections that hold secrets and have their own admin-only routes — never
+  // served or overwritten through this generic endpoint. 'oidc' is Single
+  // Sign-On's config, client secret included (see routes/oidc.js).
+  if (PRIVATE_SECTIONS.has(section)) {
+    sendJson(res, 404, { error: 'Not found' });
+    return true;
+  }
 
   // GET /api/app-settings/:section — the saved { key: value } object for this
   // page, or {} if nothing's been saved yet (fresh install / first visit).

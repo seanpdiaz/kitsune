@@ -2,6 +2,9 @@
 
 ## Real accounts, sign-in, and roles — the Library stays shared
 
+> Accounts can also sign in through an OpenID Connect provider — see
+> [Single Sign-On (OIDC)](Single-Sign-On).
+
 Kitsune server accounts, requested as the foundation for a broader "metadata providers"
 rework (letting each person link their own MyAnimeList/AniList/etc. account and, longer
 term, sync watched status back and forth with it — not built yet, this is groundwork for

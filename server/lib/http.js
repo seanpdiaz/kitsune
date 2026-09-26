@@ -35,9 +35,10 @@ function readJsonBody(req) {
 // file). No cookie-parsing dependency in this "zero backend dependencies"
 // project, so this is a small hand-rolled parser/serializer rather than
 // reaching for one. HttpOnly + SameSite=Lax on every cookie this app sets
-// (just the one session cookie, currently) — no Secure flag, since a
-// self-hosted app like this one is commonly reached over plain HTTP on a
-// LAN (same assumption Sonarr/Radarr's own default auth makes).
+// (the session cookie, plus routes/oidc.js's short-lived sign-in cookie) —
+// no Secure flag, since a self-hosted app like this one is commonly reached
+// over plain HTTP on a LAN (same assumption Sonarr/Radarr's own default auth
+// makes).
 // ---------------------------------------------------------------------------
 function parseCookies(req) {
   const header = req.headers.cookie;
@@ -56,11 +57,20 @@ function parseCookies(req) {
 function setCookie(res, name, value, { maxAgeSeconds } = {}) {
   const parts = [`${name}=${encodeURIComponent(value)}`, 'Path=/', 'HttpOnly', 'SameSite=Lax'];
   if (maxAgeSeconds != null) parts.push(`Max-Age=${maxAgeSeconds}`);
-  res.setHeader('Set-Cookie', parts.join('; '));
+  appendSetCookie(res, parts.join('; '));
 }
 
 function clearCookie(res, name) {
-  res.setHeader('Set-Cookie', `${name}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+  appendSetCookie(res, `${name}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+}
+
+// Appends rather than replaces, so one response can set more than one
+// cookie — the OIDC callback (routes/oidc.js) clears its short-lived
+// sign-in cookie and sets the real session cookie on the same redirect.
+function appendSetCookie(res, cookie) {
+  const existing = res.getHeader('Set-Cookie');
+  if (!existing) res.setHeader('Set-Cookie', cookie);
+  else res.setHeader('Set-Cookie', [].concat(existing, cookie));
 }
 
 module.exports = { sendJson, readJsonBody, parseCookies, setCookie, clearCookie };

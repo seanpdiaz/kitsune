@@ -144,7 +144,9 @@ function EditUserModal({ item, currentUser, onClose, onSaved, onRemoved }) {
               <option value="admin">Admin</option>
             </select>
           ))}
-          {fieldRow('New password', 'Leave blank to keep the current password.', (
+          {fieldRow('New password', item.authSource === 'oidc'
+            ? 'This account signs in with single sign-on. Setting a password also lets it sign in with one.'
+            : 'Leave blank to keep the current password.', (
             <input className="field-input" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} />
           ))}
           {error && <p className="form-error">{error}</p>}
@@ -227,6 +229,14 @@ export default function UsersPage({ addBtnContainer }) {
             <p className="settings-title">
               {item.username}
               {currentUser && currentUser.id === item.id && <span className="count-badge" style={{ marginLeft: 8 }}>You</span>}
+              {item.ssoLinked && (
+                <span
+                  className="count-badge" style={{ marginLeft: 8 }}
+                  data-tooltip={item.authSource === 'oidc' ? 'Signs in with single sign-on' : 'Signs in with a password or single sign-on'}
+                >
+                  SSO
+                </span>
+              )}
             </p>
             <span className={`status-pill ${item.role === 'admin' ? 'status-info' : 'status-pending'}`}>
               {item.role === 'admin' ? 'Admin' : 'Standard'}

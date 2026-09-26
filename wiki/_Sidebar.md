@@ -18,6 +18,7 @@
 
 **Accounts**
 - [User Accounts](User-Accounts)
+- [Single Sign-On (OIDC)](Single-Sign-On)
 
 **Downloading**
 - [Grab / Download Pipeline](Grab-Download-Pipeline)

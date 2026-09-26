@@ -31,9 +31,30 @@ db.init(async () => {
       username TEXT NOT NULL UNIQUE,
       password_hash TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'standard',
-      created_at TEXT NOT NULL
+      created_at TEXT NOT NULL,
+      auth_source TEXT NOT NULL DEFAULT 'local',
+      oidc_subject TEXT
     )
   `);
+
+  // Single sign-on columns (see routes/oidc.js), added in place for
+  // databases created before OIDC support:
+  //   auth_source  — 'local' (username/password, the original and still
+  //                  default kind) or 'oidc' (created by a first SSO
+  //                  sign-in; has no usable password — password_hash is '',
+  //                  which verifyPassword always rejects).
+  //   oidc_subject — "<issuer>|<sub>" of the provider identity this account
+  //                  is linked to, or NULL. A local account can carry one
+  //                  too (linked by username — see routes/oidc.js), in which
+  //                  case both sign-in methods work for it.
+  const userColumns = await db.tableColumns('users');
+  if (!userColumns.includes('auth_source')) {
+    await db.exec("ALTER TABLE users ADD COLUMN auth_source TEXT NOT NULL DEFAULT 'local'");
+  }
+  if (!userColumns.includes('oidc_subject')) {
+    await db.exec('ALTER TABLE users ADD COLUMN oidc_subject TEXT');
+  }
+  await db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_oidc_subject ON users (oidc_subject)');
 
   await db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
@@ -63,8 +84,19 @@ db.init(async () => {
 // one property this project's usual generic rowToItem() (settings-items.js)
 // doesn't give us, which is exactly why Users has its own route file instead
 // of just being another settings_items section.
+//
+// authSource: 'local' | 'oidc' (see the column comment above). ssoLinked is
+// true for any account tied to a provider identity — every 'oidc' account,
+// plus local accounts that were linked by username.
 function rowToUser(row) {
-  return { id: row.id, username: row.username, role: row.role, createdAt: row.created_at };
+  return {
+    id: row.id,
+    username: row.username,
+    role: row.role,
+    createdAt: row.created_at,
+    authSource: row.auth_source === 'oidc' ? 'oidc' : 'local',
+    ssoLinked: !!row.oidc_subject,
+  };
 }
 
 async function userCount() {
@@ -319,6 +351,12 @@ async function handleAuthApi(req, res, urlPath) {
     let body;
     try { body = await readJsonBody(req); } catch { sendJson(res, 400, { error: 'Invalid JSON body' }); return true; }
     const row = await db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
+    // An SSO-created account has no password to confirm with, and its
+    // username comes from the provider — nothing here for it to change.
+    if (row.auth_source === 'oidc') {
+      sendJson(res, 400, { error: 'This account signs in through single sign-on — manage it with your identity provider.' });
+      return true;
+    }
     if (!(await verifyPassword(String(body.currentPassword || ''), row.password_hash))) {
       sendJson(res, 400, { error: 'Current password is incorrect.' });
       return true;
@@ -414,6 +452,10 @@ async function handleAuthApi(req, res, urlPath) {
         return true;
       }
       updates.password_hash = await hashPassword(String(body.password));
+      // An SSO-created account that's given a password becomes a regular
+      // local account that's still linked to its SSO identity — both sign-in
+      // methods work, and My Account can manage the password from then on.
+      if (existing.auth_source === 'oidc') updates.auth_source = 'local';
     }
     if (Object.keys(updates).length > 0) {
       const setClause = Object.keys(updates).map((k) => `${k} = ?`).join(', ');
@@ -450,4 +492,15 @@ async function handleAuthApi(req, res, urlPath) {
   return false;
 }
 
-module.exports = { handleAuthApi, getSessionUser, handleBasicAuthChallenge };
+module.exports = {
+  handleAuthApi,
+  getSessionUser,
+  handleBasicAuthChallenge,
+  // For routes/oidc.js, which signs people in through the same sessions.
+  SESSION_COOKIE,
+  SESSION_MAX_AGE_SECONDS,
+  createSession,
+  rowToUser,
+  requireAdmin,
+  adminCount,
+};

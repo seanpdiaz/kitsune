@@ -28,6 +28,7 @@ const { logDebug, logInfo, logWarn, logError } = require('./server/logger');
 const { sendJson } = require('./server/lib/http');
 
 const { handleAuthApi, handleBasicAuthChallenge } = require('./server/routes/auth');
+const { handleOidcApi } = require('./server/routes/oidc');
 const { handleUserPrefsApi } = require('./server/routes/user-prefs');
 const { handleTagsApi } = require('./server/routes/tags');
 const { handleSettingsItemsApi } = require('./server/routes/settings-items');
@@ -119,6 +120,7 @@ const server = http.createServer(async (req, res) => {
     try {
       const handled =
         (await handleAuthApi(req, res, urlPath)) ||
+        (await handleOidcApi(req, res, urlPath)) ||
         (await handleUserPrefsApi(req, res, urlPath)) ||
         (await handleTagsApi(req, res, urlPath)) ||
         (await handleSettingsItemsApi(req, res, urlPath)) ||

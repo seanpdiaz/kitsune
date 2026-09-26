@@ -57,6 +57,31 @@ export default function AccountPage() {
 
   if (!user) return <p className="settings-empty">Loading…</p>;
 
+  // Accounts created by a single sign-on sign-in have no password and take
+  // their username from the identity provider (see server/routes/oidc.js),
+  // so there's nothing to edit here — PATCH /api/auth/me refuses them too.
+  if (user.authSource === 'oidc') {
+    return (
+      <div className="settings-card" style={{ maxWidth: 480 }}>
+        <div className="form-row" style={{ borderTop: 'none', paddingTop: 0 }}>
+          <div className="field-label"><p className="name">Username</p></div>
+          <div className="field-control"><span className="settings-meta">{user.username}</span></div>
+        </div>
+        <div className="form-row">
+          <div className="field-label"><p className="name">Role</p></div>
+          <div className="field-control">
+            <span className={`status-pill ${user.role === 'admin' ? 'status-info' : 'status-pending'}`}>
+              {user.role === 'admin' ? 'Admin' : 'Standard'}
+            </span>
+          </div>
+        </div>
+        <p className="card-desc" style={{ margin: '14px 0 0' }}>
+          You sign in with single sign-on, so your username and password are managed by your identity provider.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="settings-card" style={{ maxWidth: 480 }}>
       <form onSubmit={handleSubmit}>
