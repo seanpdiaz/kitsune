@@ -45,6 +45,12 @@ const { applyDefaultTrackFlags, checkMkvpropeditAvailability } = require('../lib
 // detail page doesn't re-hit TVDB on every visit.
 // ---------------------------------------------------------------------------
 
+// size_bytes is BIGINT, not INTEGER — a real episode file easily exceeds
+// 2^31-1 bytes (2 GB), which Postgres's plain INTEGER can't hold. SQLite
+// never caught this: its INTEGER column is always 64-bit regardless of the
+// declared name, so this was invisible until a real Postgres migration hit
+// a real episode over 2 GB and failed with "value out of range for type
+// integer".
 db.init(async () => {
   await db.exec(`
     CREATE TABLE IF NOT EXISTS episodes (
@@ -63,7 +69,7 @@ db.init(async () => {
       url TEXT,
       downloaded INTEGER NOT NULL DEFAULT 0,
       quality TEXT,
-      size_bytes INTEGER,
+      size_bytes BIGINT,
       path TEXT,
       UNIQUE(series_id, season_number, num)
     )
@@ -75,7 +81,7 @@ db.init(async () => {
   for (const [col, def] of [
   ['title_japanese', 'TEXT'], ['title_romanji', 'TEXT'], ['score', 'REAL'],
   ['filler', 'INTEGER NOT NULL DEFAULT 0'], ['recap', 'INTEGER NOT NULL DEFAULT 0'], ['url', 'TEXT'],
-  ['downloaded', 'INTEGER NOT NULL DEFAULT 0'], ['quality', 'TEXT'], ['size_bytes', 'INTEGER'],
+  ['downloaded', 'INTEGER NOT NULL DEFAULT 0'], ['quality', 'TEXT'], ['size_bytes', 'BIGINT'],
   // path: added alongside the episode details modal (see README) — the
   // modal needs somewhere to read a file's on-disk location from. Real for
   // anything that went through Library Import (see import-files.js, which
@@ -134,6 +140,7 @@ db.init(async () => {
   episodeColumns = await db.tableColumns('episodes');
   if (!episodeColumns.includes('season_number')) {
     logInfo('Database', 'Migrating episodes table: adding season tracking (rebuilding for corrected uniqueness constraint)');
+    // size_bytes is BIGINT here too — see the main CREATE TABLE above.
     await db.exec(`
       ALTER TABLE episodes RENAME TO episodes_old;
       CREATE TABLE episodes (
@@ -152,7 +159,7 @@ db.init(async () => {
         url TEXT,
         downloaded INTEGER NOT NULL DEFAULT 0,
         quality TEXT,
-        size_bytes INTEGER,
+        size_bytes BIGINT,
         path TEXT,
         UNIQUE(series_id, season_number, num)
       );

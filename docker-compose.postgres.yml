@@ -1,0 +1,50 @@
+# ---------------------------------------------------------------------------
+# Standalone Postgres service for Kitsune's DB_CLIENT=postgres mode.
+#
+# This is deliberately separate from Kitsune's own eventual single
+# all-in-one container (see wiki/Persistence-and-Logging.md and the
+# project's finalized architecture decisions) — Postgres is its own stateful
+# service, run as a normal sidecar container in your home lab, the same way
+# any other self-hosted app's database would be. Kitsune itself just points
+# at it over the network via DB_HOST/DB_PORT in .env.
+#
+# Usage:
+#   docker compose -f docker-compose.postgres.yml up -d
+#
+# Then, once it's healthy, set in Kitsune's .env (see .env.example):
+#   DB_CLIENT=postgres
+#   DB_HOST=<this host's address on diaz.lan>
+#   DB_PORT=5432
+#   DB_NAME=kitsune
+#   DB_USER=kitsune
+#   DB_PASSWORD=<same value as POSTGRES_PASSWORD below
+#   DB_SSL=            (leave unset — plain LAN Postgres, no TLS needed)
+#
+# Then run scripts/migrate-sqlite-to-postgres.js once to bring your existing
+# SQLite data (data/kitsune.db) over, and start Kitsune normally.
+# ---------------------------------------------------------------------------
+services:
+  kitsune-postgres:
+    image: postgres:16
+    container_name: kitsune-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: kitsune
+      POSTGRES_USER: kitsune
+      # Change this before first start — it's baked into the data volume on
+      # initial creation, not re-read on every restart.
+      POSTGRES_PASSWORD: cisco123
+    ports:
+      # Bind to the LAN interface, not 0.0.0.0, if this host is reachable
+      # beyond diaz.lan — adjust to taste for your own network setup.
+      - '5432:5432'
+    volumes:
+      - kitsune-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U kitsune -d kitsune']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  kitsune-postgres-data:

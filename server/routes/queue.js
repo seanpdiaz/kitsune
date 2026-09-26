@@ -30,6 +30,9 @@ const { probeMediaStreams } = require('../lib/ffprobe');
 const { computeInfoHash } = require('../lib/bencode');
 const { describeFetchError } = require('../lib/prowlarr-search');
 
+// size_bytes is BIGINT, not INTEGER — see episodes.js's episodes table
+// for why (a real file over 2 GB overflows Postgres's INTEGER; SQLite
+// never noticed, since its INTEGER is always 64-bit regardless of name).
 db.init(async () => {
   await db.exec(`
     CREATE TABLE IF NOT EXISTS queue (
@@ -38,7 +41,7 @@ db.init(async () => {
       episode_id INTEGER NOT NULL,
       release_title TEXT NOT NULL,
       quality TEXT,
-      size_bytes INTEGER,
+      size_bytes BIGINT,
       indexer TEXT,
       protocol TEXT,
       status TEXT NOT NULL DEFAULT 'downloading',
