@@ -130,7 +130,11 @@ function tlsAgentOptions(tls) {
   if (!tls) return {};
   if (tls.skipVerify) return { rejectUnauthorized: false };
   const extra = parseCaBundle(tls.caCertificate).map((c) => c.pem);
-  return extra.length ? { ca: [...require('tls').rootCertificates, ...extra] } : {};
+  // allowPartialTrustChain: a pasted intermediate is trusted on its own,
+  // without also needing the root above it — the admin explicitly chose to
+  // trust that CA. (Node 22.9+; ignored by older versions, which then need
+  // the root too.)
+  return extra.length ? { ca: [...require('tls').rootCertificates, ...extra], allowPartialTrustChain: true } : {};
 }
 
 function untrustedCertMessage(url, code, tls) {
@@ -138,6 +142,62 @@ function untrustedCertMessage(url, code, tls) {
     ? 'The Trusted CA certificate in Settings > Security doesn\'t cover it — check that it includes the CA that signed the provider\'s certificate (and the intermediate, if the provider doesn\'t send it).'
     : 'If your provider uses a private CA, paste your root CA (and intermediate, if the provider doesn\'t send it) into Trusted CA Certificate in Settings > Security.';
   return `Could not reach ${url}: its HTTPS certificate isn't trusted (${code}). ${hint}`;
+}
+
+// When a provider's certificate isn't trusted, look at the chain it
+// actually sends (a second connection with verification off, used only to
+// read certificate names — nothing from it is trusted or used) and say
+// which CA is missing. By far the most common cause behind a reverse proxy
+// is a server that sends only its own certificate, not the intermediate
+// that signed it, while only the root was pasted into Trusted CA.
+function subjectCN(dn) {
+  const text = String(dn || '');
+  const m = text.match(/CN=([^\n,]+)/);
+  return m ? m[1].trim() : text.replace(/\n/g, ', ');
+}
+
+function describeChain(url) {
+  return new Promise((resolve) => {
+    let target;
+    try { target = new URL(url); } catch { resolve(null); return; }
+    const socket = require('tls').connect({
+      host: target.hostname,
+      port: Number(target.port) || 443,
+      servername: target.hostname,
+      rejectUnauthorized: false,
+      timeout: FETCH_TIMEOUT_MS,
+    }, () => {
+      const chain = [];
+      let cert = socket.getPeerCertificate(true);
+      const seen = new Set();
+      while (cert && cert.subject && !seen.has(cert.fingerprint256)) {
+        seen.add(cert.fingerprint256);
+        chain.push({ subject: cert.subject.CN || JSON.stringify(cert.subject), issuer: cert.issuer.CN || JSON.stringify(cert.issuer) });
+        cert = cert.issuerCertificate;
+      }
+      socket.destroy();
+      resolve(chain);
+    });
+    socket.on('error', () => resolve(null));
+    socket.on('timeout', () => { socket.destroy(); resolve(null); });
+  });
+}
+
+async function explainUntrusted(url, code, tls) {
+  const chain = await describeChain(url);
+  let trusted = [];
+  try { trusted = parseCaBundle(tls && tls.caCertificate).map((c) => subjectCN(c.subject)); } catch { trusted = []; }
+  const base = `Could not reach ${url}: its HTTPS certificate isn't trusted (${code}).`;
+  if (!chain || chain.length === 0) return untrustedCertMessage(url, code, tls);
+
+  const sent = chain.map((c) => `"${c.subject}" (issued by "${c.issuer}")`).join(' → ');
+  const known = new Set([...chain.map((c) => c.subject), ...trusted]);
+  const missing = chain.map((c) => c.issuer).find((issuer) => !known.has(issuer));
+  const pasted = trusted.length ? `Trusted CA has: ${trusted.map((t) => `"${t}"`).join(', ')}.` : 'No Trusted CA certificate is saved.';
+  const fix = missing
+    ? `Add the certificate for "${missing}" to Trusted CA Certificate in Settings > Security${trusted.length ? ' (alongside what\'s there)' : ''}.`
+    : 'Every CA in the chain is present, so check that the Trusted CA certificates are the same ones that signed it (not an older or reissued copy).';
+  return `${base} The server sent: ${sent}. ${pasted} ${fix}`;
 }
 
 function request(url, { method = 'GET', headers = {}, body, tls }, redirectsLeft = MAX_REDIRECTS) {
@@ -182,7 +242,7 @@ async function fetchJson(url, options = {}) {
   try {
     res = await request(url, { ...options, headers: { Accept: 'application/json', ...(options.headers || {}) } });
   } catch (err) {
-    if (err && UNTRUSTED_CERT_CODES.has(err.code)) throw new Error(untrustedCertMessage(url, err.code, options.tls));
+    if (err && UNTRUSTED_CERT_CODES.has(err.code)) throw new Error(await explainUntrusted(url, err.code, options.tls));
     throw new Error(`Could not reach ${url}: ${err.message}${err.code ? ` (${err.code})` : ''}`);
   }
   let body;
