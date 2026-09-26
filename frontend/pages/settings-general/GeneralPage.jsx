@@ -192,8 +192,8 @@ export default function GeneralPage() {
       </SettingsCard>
 
       <SettingsCard title="Updates">
-        <FormRow name="Branch">
-          <SelectField id="general-12" value={v['general-12']} onChange={(val) => setField('general-12', val)} options={['main', 'develop']} />
+        <FormRow name="Branch" desc="Which branch to check GitHub for updates against.">
+          <SelectField id="general-12" value={v['general-12']} onChange={(val) => setField('general-12', val)} options={['main', 'development']} />
         </FormRow>
         <FormRow name="Automatic">
           <ToggleField id="general-13" checked={v['general-13']} onChange={(val) => setField('general-13', val)} />

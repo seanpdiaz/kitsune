@@ -1,16 +1,24 @@
 // ---------------------------------------------------------------------------
-// Persisted interval settings for System > Tasks' seven still-decorative
-// rows (RSS Sync, Check for Finished Downloads, Refresh Series, Update
-// Metadata Cache, Backup, Application Update Check, Housekeeping — see
-// system-tasks.js's own header comment and TaskList.jsx's TASKS_DATA). None
-// of these run a real background job yet — "Run Now" still just fakes a
-// "Just now" timestamp client-side, and Last Run/Next Run stay decorative
-// text — but the user should still be able to set and keep a real
-// preferred interval for each, the same way the two genuinely-scheduled
-// rows (Disk Usage Recompute, Apply Permissions — see disk-usage.js and
-// permissions.js) already let them. This module is exactly that: the
-// persisted half of "editable timing" without pretending there's a real
-// recurring job driving any of these seven yet.
+// Persisted interval settings for System > Tasks' five still-decorative
+// rows (RSS Sync, Check for Finished Downloads, Update Metadata Cache,
+// Backup, Housekeeping — see system-tasks.js's own header comment and
+// TaskList.jsx's TASKS_DATA). None of these run a real background job yet —
+// "Run Now" still just fakes a "Just now" timestamp client-side, and Last
+// Run/Next Run stay decorative text — but the user should still be able to
+// set and keep a real preferred interval for each, the same way the four
+// genuinely-scheduled rows (Disk Usage Recompute, Apply Permissions,
+// Refresh Series, Application Update Check — see disk-usage.js,
+// permissions.js, refresh-series-task.js, and update-check.js) already let
+// them. This module is exactly that: the persisted half of "editable
+// timing" without pretending there's a real recurring job driving any of
+// these five yet.
+//
+// Refresh Series and Application Update Check both used to be among these
+// rows (their persisted intervals lived under the 'refresh-series'/
+// 'update-check' keys below, in minutes) until each got its own real
+// scheduled job — see refresh-series-task.js's and update-check.js's own
+// loadPersistedIntervalHours for how each already-persisted choice gets
+// carried over as that task's first real interval instead of discarded.
 // ---------------------------------------------------------------------------
 const db = require('../db');
 
@@ -41,10 +49,8 @@ const MAX_INTERVAL_MINUTES = 10080; // 1 week — same outer bound as Disk Usage
 const DEFAULT_INTERVAL_MINUTES = {
   'rss-sync': 15,
   'check-downloads': 1,
-  'refresh-series': 720, // 12h
   'metadata-cache': 720, // 12h
   'backup': 10080, // 7 days
-  'update-check': 360, // 6h
   'housekeeping': 1440, // 24h
 };
 
@@ -69,8 +75,8 @@ async function saveOverrides(overrides) {
 // GET /api/system-tasks/schedule — every decorative row's current interval
 // in one map, keyed by id: a persisted override if the user ever changed
 // it, that row's real-world default otherwise. Called once by TaskList.jsx
-// rather than per-row, same "one request, not seven" shape GET
-// /api/system-tasks already uses for the two real rows.
+// rather than per-row, same "one request, not six" shape GET
+// /api/system-tasks already uses for the three real rows.
 async function getIntervals() {
   const overrides = await loadOverrides();
   const result = {};

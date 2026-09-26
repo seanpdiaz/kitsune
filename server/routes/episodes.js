@@ -982,6 +982,12 @@ async function resolveAndCacheEpisodesForSeries(series) {
 // tracks independently of TVDB. Also naturally picks up any newly-aired
 // episode TVDB has added since the last fetch, as a side effect of the same
 // upsert.
+//
+// Also exported (see module.exports below) and reused as-is by the System >
+// Tasks "Refresh Series" background job (server/lib/refresh-series-task.js),
+// which just calls this once per series in the library on a timer instead
+// of once for whichever series a person happens to click "Refresh" on — same
+// per-series work either way.
 async function refreshEpisodesForSeries(series) {
   let tvdbId;
   try {
@@ -1056,4 +1062,4 @@ function warmEpisodesInBackground(series) {
   });
 }
 
-module.exports = { handleSeriesEpisodesApi, warmEpisodesInBackground, findExistingSeriesFolder };
+module.exports = { handleSeriesEpisodesApi, warmEpisodesInBackground, findExistingSeriesFolder, refreshEpisodesForSeries };
