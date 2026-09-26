@@ -270,10 +270,46 @@ async function loadPersistedLastRun() {
 }
 
 async function persistLastRun(lastRunAt) {
+  // Merged (not overwritten) so this doesn't clobber a nextRunAt
+  // persistNextRunAt wrote into the same row — see that function's own
+  // comment for why both live in TASK_CACHE_SECTION.
+  const row = await db.prepare('SELECT data FROM app_settings WHERE section = ?').get(TASK_CACHE_SECTION);
+  const merged = { ...(row ? JSON.parse(row.data) : {}), lastRunAt: lastRunAt.toISOString() };
   await db.prepare(`
     INSERT INTO app_settings (section, data, updated_at) VALUES (?, ?, ?)
     ON CONFLICT(section) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at
-  `).run(TASK_CACHE_SECTION, JSON.stringify({ lastRunAt: lastRunAt.toISOString() }), db.now());
+  `).run(TASK_CACHE_SECTION, JSON.stringify(merged), db.now());
+}
+
+// The other half of "resume the schedule instead of resetting it on every
+// restart" (see startPermissionsScheduler and scheduleNext below) —
+// persisted separately from persistLastRun's write (merged into the same
+// row) since this gets written on every reschedule (a completed run, a
+// changed interval), not only when a run actually completes.
+async function persistNextRunAt(nextRunAtDate) {
+  const row = await db.prepare('SELECT data FROM app_settings WHERE section = ?').get(TASK_CACHE_SECTION);
+  const merged = { ...(row ? JSON.parse(row.data) : {}), nextRunAt: nextRunAtDate.toISOString() };
+  await db.prepare(`
+    INSERT INTO app_settings (section, data, updated_at) VALUES (?, ?, ?)
+    ON CONFLICT(section) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at
+  `).run(TASK_CACHE_SECTION, JSON.stringify(merged), db.now());
+}
+
+// Independent of loadPersistedLastRun on purpose, same reasoning as that
+// function existing separately from persistLastRun — a persisted nextRunAt
+// should be readable regardless of whether a run has ever actually
+// completed yet.
+async function loadPersistedNextRunAt() {
+  const row = await db.prepare('SELECT data FROM app_settings WHERE section = ?').get(TASK_CACHE_SECTION);
+  if (!row) return null;
+  try {
+    const parsed = JSON.parse(row.data);
+    if (!parsed.nextRunAt) return null;
+    const d = new Date(parsed.nextRunAt);
+    return Number.isNaN(d.getTime()) ? null : d;
+  } catch {
+    return null;
+  }
 }
 
 const taskState = { running: false, lastRunAt: null };
@@ -383,27 +419,34 @@ async function refreshPermissionsTask() {
   }
 }
 
-function scheduleNext() {
+async function scheduleNext(explicitNextRunAt) {
   if (timer) clearTimeout(timer);
-  const ms = intervalHours * 60 * 60 * 1000;
-  nextRunAt = new Date(Date.now() + ms);
+  const target = explicitNextRunAt instanceof Date
+    ? explicitNextRunAt
+    : new Date(Date.now() + intervalHours * 60 * 60 * 1000);
+  nextRunAt = target;
+  const ms = Math.max(0, target.getTime() - Date.now());
   timer = setTimeout(async () => {
     await refreshPermissionsTask();
-    scheduleNext();
+    await scheduleNext();
   }, ms);
+  // Persisted so a restart can resume waiting for this exact moment instead
+  // of resetting the countdown to a fresh full interval — see
+  // startPermissionsScheduler below.
+  await persistNextRunAt(target);
 }
 
 // System > Tasks' Run Now button for this row.
 async function runNow() {
   await refreshPermissionsTask();
-  scheduleNext();
+  await scheduleNext();
 }
 
 async function setIntervalHours(hours) {
   const clamped = Math.min(MAX_INTERVAL_HOURS, Math.max(MIN_INTERVAL_HOURS, Math.round(hours)));
   intervalHours = clamped;
   await persistIntervalHours(clamped);
-  scheduleNext();
+  await scheduleNext();
   logInfo('Permissions', `Apply Permissions interval changed to every ${clamped}h`);
   return clamped;
 }
@@ -437,13 +480,31 @@ async function getTaskInfo() {
 // Called once from server.js at startup. Loads the persisted interval and
 // last-run timestamp (so "last run" survives a restart instead of showing
 // "Never" right after one) and arms the recurring timer — but, unlike
-// startDiskUsageScheduler, does NOT run a scan immediately; see this
-// section's own header comment for why.
+// startDiskUsageScheduler, never runs a walk immediately on this branch;
+// see this section's own header comment for why.
+//
+// If a nextRunAt from before this restart is still in the future, that
+// schedule is resumed as-is (see loadPersistedNextRunAt/persistNextRunAt
+// above) rather than reset to a fresh full interval from right now —
+// otherwise a server that gets restarted more often than the interval
+// elapses (routine during dev) could end up never actually reaching a due
+// run at all, each restart pushing it out again before it ever fires. If
+// nothing's persisted yet, or the persisted time has already passed, this
+// still never runs a walk itself — it only arms a fresh full-interval
+// timer, exactly as before; only an explicit Run Now, or the timer itself
+// firing while the server stays up, ever triggers a real chmod/chown walk.
 async function startPermissionsScheduler(defaultIntervalHours) {
   intervalHours = await loadPersistedIntervalHours(defaultIntervalHours);
   taskState.lastRunAt = await loadPersistedLastRun();
-  logInfo('Permissions', `Apply Permissions will run every ${intervalHours}h (next run scheduled from server startup, not run immediately)`);
-  scheduleNext();
+
+  const persistedNextRunAt = await loadPersistedNextRunAt();
+  if (persistedNextRunAt && persistedNextRunAt.getTime() > Date.now()) {
+    logInfo('Permissions', `Apply Permissions next run stays scheduled for ${persistedNextRunAt.toISOString()} (every ${intervalHours}h) instead of restarting the countdown from this restart.`);
+    await scheduleNext(persistedNextRunAt);
+  } else {
+    logInfo('Permissions', `Apply Permissions will run every ${intervalHours}h (next run scheduled from server startup, not run immediately)`);
+    await scheduleNext();
+  }
 }
 
 module.exports = {
