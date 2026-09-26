@@ -45,6 +45,12 @@ const { applyDefaultTrackFlags, checkMkvpropeditAvailability } = require('../lib
 // detail page doesn't re-hit TVDB on every visit.
 // ---------------------------------------------------------------------------
 
+// size_bytes is BIGINT, not INTEGER — a real episode file easily exceeds
+// 2^31-1 bytes (2 GB), which Postgres's plain INTEGER can't hold. SQLite
+// never caught this: its INTEGER column is always 64-bit regardless of the
+// declared name, so this was invisible until a real Postgres migration hit
+// a real episode over 2 GB and failed with "value out of range for type
+// integer".
 db.init(async () => {
   await db.exec(`
     CREATE TABLE IF NOT EXISTS episodes (
@@ -63,7 +69,7 @@ db.init(async () => {
       url TEXT,
       downloaded INTEGER NOT NULL DEFAULT 0,
       quality TEXT,
-      size_bytes INTEGER,
+      size_bytes BIGINT,
       path TEXT,
       UNIQUE(series_id, season_number, num)
     )
@@ -75,7 +81,7 @@ db.init(async () => {
   for (const [col, def] of [
   ['title_japanese', 'TEXT'], ['title_romanji', 'TEXT'], ['score', 'REAL'],
   ['filler', 'INTEGER NOT NULL DEFAULT 0'], ['recap', 'INTEGER NOT NULL DEFAULT 0'], ['url', 'TEXT'],
-  ['downloaded', 'INTEGER NOT NULL DEFAULT 0'], ['quality', 'TEXT'], ['size_bytes', 'INTEGER'],
+  ['downloaded', 'INTEGER NOT NULL DEFAULT 0'], ['quality', 'TEXT'], ['size_bytes', 'BIGINT'],
   // path: added alongside the episode details modal (see README) — the
   // modal needs somewhere to read a file's on-disk location from. Real for
   // anything that went through Library Import (see import-files.js, which
@@ -134,6 +140,7 @@ db.init(async () => {
   episodeColumns = await db.tableColumns('episodes');
   if (!episodeColumns.includes('season_number')) {
     logInfo('Database', 'Migrating episodes table: adding season tracking (rebuilding for corrected uniqueness constraint)');
+    // size_bytes is BIGINT here too — see the main CREATE TABLE above.
     await db.exec(`
       ALTER TABLE episodes RENAME TO episodes_old;
       CREATE TABLE episodes (
@@ -152,7 +159,7 @@ db.init(async () => {
         url TEXT,
         downloaded INTEGER NOT NULL DEFAULT 0,
         quality TEXT,
-        size_bytes INTEGER,
+        size_bytes BIGINT,
         path TEXT,
         UNIQUE(series_id, season_number, num)
       );
@@ -354,7 +361,7 @@ async function handleDeleteEpisodeFile(req, res, match) {
   }
 
   try {
-    fs.unlinkSync(episode.path);
+    await fs.promises.unlink(episode.path);
   } catch (err) {
     if (err.code !== 'ENOENT') {
       logWarn('EpisodeService', `Could not delete file "${episode.path}" for episode ${id}: ${err.code || err.message}`);
@@ -692,7 +699,7 @@ async function handleRenamePreview(req, res, match) {
 }
 
 // POST /api/series/:id/rename — body: { episodeIds: [...] }. Actually
-// renames the real file for each given episode on disk (fs.renameSync,
+// renames the real file for each given episode on disk (fs.promises.rename,
 // same directory — this relabels the filename only, it never restructures
 // season/series folders) using the exact same computation
 // handleRenamePreview above already showed the user, then updates that
@@ -700,7 +707,11 @@ async function handleRenamePreview(req, res, match) {
 // file that moved out from under Kitsune since the preview was fetched) is
 // reported per-episode rather than aborting the whole batch, same "one bad
 // item shouldn't block the rest" rule this app's other bulk actions
-// (Search All, Grab best match for a whole season) already follow.
+// (Search All, Grab best match for a whole season) already follow. The
+// async rename matters more here than a single fs call normally would —
+// this loops over every selected episode (a whole-season batch rename is
+// the common case), so a synchronous renameSync would freeze the entire
+// app once per episode in the batch, back to back.
 async function handleRenameFiles(req, res, match) {
   // Same session gate as the other write paths in this file — see
   // handleRenameSeason's comment for why this was added. This one renames
@@ -746,7 +757,7 @@ async function handleRenameFiles(req, res, match) {
       continue;
     }
     try {
-      fs.renameSync(r.path, newPath);
+      await fs.promises.rename(r.path, newPath);
     } catch (err) {
       results.push({ episodeId, ok: false, error: err.code || err.message });
       continue;
@@ -978,6 +989,12 @@ async function resolveAndCacheEpisodesForSeries(series) {
 // tracks independently of TVDB. Also naturally picks up any newly-aired
 // episode TVDB has added since the last fetch, as a side effect of the same
 // upsert.
+//
+// Also exported (see module.exports below) and reused as-is by the System >
+// Tasks "Refresh Series" background job (server/lib/refresh-series-task.js),
+// which just calls this once per series in the library on a timer instead
+// of once for whichever series a person happens to click "Refresh" on — same
+// per-series work either way.
 async function refreshEpisodesForSeries(series) {
   let tvdbId;
   try {
@@ -1052,4 +1069,4 @@ function warmEpisodesInBackground(series) {
   });
 }
 
-module.exports = { handleSeriesEpisodesApi, warmEpisodesInBackground, findExistingSeriesFolder };
+module.exports = { handleSeriesEpisodesApi, warmEpisodesInBackground, findExistingSeriesFolder, refreshEpisodesForSeries };

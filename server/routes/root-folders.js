@@ -7,10 +7,18 @@ const path = require('path');
 const db = require('../db');
 const { logInfo } = require('../logger');
 const { sendJson, readJsonBody } = require('../lib/http');
-const { normalizeFolderName, guessTitleFromFolderName, computeRootFolderStats, formatBytes } = require('../lib/fs-helpers');
+const { normalizeFolderName, guessTitleFromFolderName, computeRootFolderStats, formatBytes, pathExists, writeRootFolderMarker, mapWithConcurrency } = require('../lib/fs-helpers');
 const { refreshDiskUsage } = require('../lib/disk-usage');
 const { walkVideoFiles, summarizeFiles, guessQualityTierName, guessSeasonEpisode } = require('../lib/media-files');
 const { rowToItem } = require('./settings-items');
+
+// How many subfolders Library Import's scan walks at once — see
+// mapWithConcurrency's own comment in fs-helpers.js for why this needs a
+// cap at all. Kept well under libuv's default 4-thread pool (not right at
+// it) so a scan never fully starves the rest of the app's real disk I/O —
+// most of all server.js's own static file serving, which is what made the
+// UI itself look unresponsive during a big scan.
+const ROOT_FOLDER_SCAN_CONCURRENCY = 3;
 
 async function handleRootFoldersApi(req, res, urlPath) {
   // POST /api/root-folders — add a real root folder. Distinct from the
@@ -35,7 +43,7 @@ async function handleRootFoldersApi(req, res, urlPath) {
     const resolved = path.resolve(folderPath);
     let stat;
     try {
-      stat = fs.statSync(resolved);
+      stat = await fs.promises.stat(resolved);
     } catch (err) {
       sendJson(res, 400, { error: `"${resolved}" doesn't exist or isn't readable (${err.code || err.message})` });
       return true;
@@ -53,10 +61,18 @@ async function handleRootFoldersApi(req, res, urlPath) {
     }
 
     const { free, unmapped } = await computeRootFolderStats(resolved);
+    // Written now, at add-time, while the user is looking straight at this
+    // exact path and clearly means it — the one moment this marker can be
+    // trusted without any ambiguity. See lib/root-folder-guard.js: every
+    // real import destined for this root folder checks this marker is
+    // still readable and matches before writing anything, so a mount that
+    // silently reverts to an empty local directory (NFS/SMB/a Docker
+    // volume dropping) gets caught instead of quietly "succeeding" into it.
+    const markerId = await writeRootFolderMarker(resolved);
     const maxPos = (await db.prepare("SELECT COALESCE(MAX(position), -1) AS m FROM settings_items WHERE section = 'root-folders'").get()).m;
     const created = await db.prepare('INSERT INTO settings_items (section, data, position, created_at) VALUES (?, ?, ?, ?) RETURNING *')
-      .get('root-folders', JSON.stringify({ path: resolved, free, unmapped }), Number(maxPos) + 1, db.now());
-    logInfo('SettingsService', `Root folder added: ${resolved} (${free} free, ${unmapped} unmapped)`);
+      .get('root-folders', JSON.stringify({ path: resolved, free, unmapped, markerId }), Number(maxPos) + 1, db.now());
+    logInfo('SettingsService', `Root folder added: ${resolved} (${free} free, ${unmapped} unmapped, marker ${markerId})`);
     sendJson(res, 201, rowToItem(created));
     // Fire-and-forget: the Disk usage dashboard stat card is otherwise only
     // recomputed on the scheduler's interval (see server/lib/disk-usage.js
@@ -90,7 +106,7 @@ async function handleRootFoldersApi(req, res, urlPath) {
 
     let entries;
     try {
-      entries = fs.readdirSync(folderPath, { withFileTypes: true });
+      entries = await fs.promises.readdir(folderPath, { withFileTypes: true });
     } catch (err) {
       sendJson(res, 502, { error: `Can't read "${folderPath}": ${err.message}` });
       return true;
@@ -105,27 +121,32 @@ async function handleRootFoldersApi(req, res, urlPath) {
     );
 
     // walkVideoFiles is async (see its own comment in lib/media-files.js for
-    // why) — Promise.all here runs every subfolder's walk concurrently
-    // rather than the old .map()'s implicit serial-and-blocking order, so a
-    // big library's first scan both keeps the rest of the app responsive
-    // AND doesn't get any slower for switching off the sync API.
-    const subfolders = (await Promise.all(
-      entries
-        .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
-        .map(async (e) => {
-          const matched = seriesByNormalized.get(normalizeFolderName(e.name)) || null;
-          const files = summarizeFiles(await walkVideoFiles(path.join(folderPath, e.name)));
-          return {
-            name: e.name,
-            path: path.join(folderPath, e.name),
-            guessedTitle: guessTitleFromFolderName(e.name),
-            matchedTitle: matched ? matched.title : null,
-            matchedSeriesId: matched ? matched.id : null,
-            status: matched ? 'existing' : 'unmatched',
-            files,
-          };
-        })
-    )).sort((a, b) => a.name.localeCompare(b.name));
+    // why), but a raw Promise.all across every subfolder at once was a
+    // real, confirmed bug of its own: it fans an unbounded number of real
+    // recursive filesystem walks out onto Node's libuv threadpool, which
+    // defaults to just 4 threads — on a big library (hundreds of unmapped
+    // folders is normal) that starves every other request needing real
+    // disk I/O for as long as the scan runs, including server.js's own
+    // static file serving, which is what made the whole UI look frozen
+    // during a scan even though nothing here blocks the JS event loop
+    // itself. mapWithConcurrency (see fs-helpers.js) walks a bounded
+    // number of subfolders at a time instead — same total wall-clock time
+    // for the scan, but it never occupies the whole threadpool, so the
+    // rest of the app stays responsive while it runs.
+    const dirEntries = entries.filter((e) => e.isDirectory() && !e.name.startsWith('.'));
+    const subfolders = (await mapWithConcurrency(dirEntries, ROOT_FOLDER_SCAN_CONCURRENCY, async (e) => {
+      const matched = seriesByNormalized.get(normalizeFolderName(e.name)) || null;
+      const files = summarizeFiles(await walkVideoFiles(path.join(folderPath, e.name)));
+      return {
+        name: e.name,
+        path: path.join(folderPath, e.name),
+        guessedTitle: guessTitleFromFolderName(e.name),
+        matchedTitle: matched ? matched.title : null,
+        matchedSeriesId: matched ? matched.id : null,
+        status: matched ? 'existing' : 'unmatched',
+        files,
+      };
+    })).sort((a, b) => a.name.localeCompare(b.name));
 
     sendJson(res, 200, { path: folderPath, subfolders });
     return true;
@@ -155,7 +176,7 @@ async function handleRootFoldersApi(req, res, urlPath) {
       sendJson(res, 400, { error: 'Invalid folder name' });
       return true;
     }
-    if (!fs.existsSync(subfolderPath)) {
+    if (!(await pathExists(subfolderPath))) {
       sendJson(res, 404, { error: `"${folderName}" doesn't exist under this root folder` });
       return true;
     }

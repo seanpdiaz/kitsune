@@ -19,7 +19,7 @@ async function handleFsBrowseApi(req, res, urlPath) {
 
   let entries;
   try {
-    entries = fs.readdirSync(target, { withFileTypes: true });
+    entries = await fs.promises.readdir(target, { withFileTypes: true });
   } catch (err) {
     sendJson(res, 400, { error: `Can't read "${target}": ${err.message}` });
     return true;

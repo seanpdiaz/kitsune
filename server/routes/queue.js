@@ -30,6 +30,9 @@ const { probeMediaStreams } = require('../lib/ffprobe');
 const { computeInfoHash } = require('../lib/bencode');
 const { describeFetchError } = require('../lib/prowlarr-search');
 
+// size_bytes is BIGINT, not INTEGER — see episodes.js's episodes table
+// for why (a real file over 2 GB overflows Postgres's INTEGER; SQLite
+// never noticed, since its INTEGER is always 64-bit regardless of name).
 db.init(async () => {
   await db.exec(`
     CREATE TABLE IF NOT EXISTS queue (
@@ -38,7 +41,7 @@ db.init(async () => {
       episode_id INTEGER NOT NULL,
       release_title TEXT NOT NULL,
       quality TEXT,
-      size_bytes INTEGER,
+      size_bytes BIGINT,
       indexer TEXT,
       protocol TEXT,
       status TEXT NOT NULL DEFAULT 'downloading',
@@ -57,6 +60,16 @@ db.init(async () => {
     ['magnet_url', 'TEXT'],
     ['torrent_hash', 'TEXT'],
     ['download_client_id', 'INTEGER'],
+    // Crash/error-resume tracking for completeRealDownload — see that
+    // function's own header comment. import_attempts counts consecutive
+    // failed completion attempts for this row (reset is implicit: the row
+    // is deleted on success, so a fresh grab of the same episode always
+    // starts a new row at 0); last_import_error is the most recent
+    // exception's message, surfaced in the queue UI so a stuck row is
+    // visible instead of silently retrying every realTick with nothing to
+    // show for it.
+    ['import_attempts', 'INTEGER NOT NULL DEFAULT 0'],
+    ['last_import_error', 'TEXT'],
   ]) {
     if (!queueColumns.includes(col)) {
       await db.exec(`ALTER TABLE queue ADD COLUMN ${col} ${def}`);
@@ -82,6 +95,11 @@ function rowToQueueEntry(row) {
     progressPct: row.progress_pct,
     addedAt: row.added_at,
     source: row.source,
+    // Only ever non-zero/non-null while a completed torrent's import keeps
+    // failing (see completeRealDownload/realTick) — surfaced so a row stuck
+    // retrying is visible in the UI instead of silently spinning.
+    importAttempts: row.import_attempts || 0,
+    lastImportError: row.last_import_error || null,
   };
 }
 
@@ -787,9 +805,21 @@ async function realTick() {
 
       if (await rowIsComplete(row, t)) {
         const files = await filesForHash(row.torrent_hash);
-        await completeRealDownload(row, t, client, files);
+        // See completeRealDownload's own header comment and
+        // handleFailedCompletion above — a thrown error here (a probe
+        // hiccup, a DB blip, a genuine bug) must never escape this loop:
+        // escaping would abort the rest of this tick's rows, and with the
+        // queue row still present (completeRealDownload no longer deletes
+        // it up front), the very same row would just throw again on the
+        // next tick anyway. Recording the attempt here is what turns that
+        // into a bounded, visible retry instead of a silent infinite loop.
+        try {
+          await completeRealDownload(row, t, client, files);
+        } catch (err) {
+          await handleFailedCompletion(row, err);
+        }
       } else if (t.state === 'error' || t.state === 'missingFiles') {
-        await failRealDownload(row, t);
+        await failRealDownload(row, t.state === 'missingFiles' ? 'qBittorrent reported missing files' : 'qBittorrent reported an error');
       } else {
         const nextStatus = (t.state === 'pausedDL' || t.state === 'pausedUP') ? 'paused' : 'downloading';
         const nextPct = await rowProgressPct(row, t);
@@ -849,9 +879,25 @@ function pickFileForEpisode(files, episode) {
   return null;
 }
 
+// Real, confirmed bug (crash/error resume): this used to delete the queue
+// row FIRST, before any of the actual import work below ran. That meant an
+// app crash or an uncaught exception ANYWHERE in this function — a probe
+// hiccup, a DB error, a bug in a helper it calls — left the row already
+// gone from the queue with the episode never actually marked downloaded:
+// not in the queue, not downloaded, not failed/blocklisted either, just
+// silently reverted to "missing." If anything then re-searched and re-
+// grabbed the same episode (an RSS sync, a scheduled search), the exact
+// same crash could repeat every time, which is what a real report of a
+// series "looping on the import" turned out to be. Every step below is
+// naturally safe to simply run again from scratch on a retry (importEpisodeFile
+// itself unlinks any stale partial target before hardlinking/copying, and
+// every value here is freshly recomputed, never carried over from a
+// previous attempt), so the fix is just ordering: only delete the row once
+// the episode's real state has actually been durably persisted. Until then,
+// a crash — or any thrown error, see realTick's own catch/retry handling
+// around this call — simply leaves the row exactly where it was, and the
+// next realTick() tries the whole thing again.
 async function completeRealDownload(row, torrent, client, files) {
-  await db.prepare('DELETE FROM queue WHERE id = ?').run(row.id);
-
   // Full row (not just title/path) — episodeFileNameFor/seriesFolderNameFor
   // (see episode-paths.js, called below via importEpisodeFile) need
   // series_type (to choose Standard vs. Anime format) and meta (for the
@@ -938,7 +984,32 @@ async function completeRealDownload(row, torrent, client, files) {
         filePath = imported.path;
         sizeBytes = imported.sizeBytes;
       } else {
-        importNote = `Could not import the real file for "${row.release_title}" (${episodeLabel}) — ${imported.error}. Recorded a placeholder path instead.`;
+        // Real, confirmed bug: this used to swallow every importEpisodeFile
+        // failure — source file genuinely missing, a destination root
+        // folder that isn't actually mounted right now (see
+        // lib/root-folder-guard.js), a disk-full/permission-denied
+        // hardlink-or-copy, a truncated copy — into `importNote` and fell
+        // through to recording a fabricated placeholder path as if the
+        // episode had imported successfully (episodes.downloaded = 1
+        // below). That's exactly how a download that genuinely finished
+        // but couldn't reach real storage got reported to the user as a
+        // completed import with no real file anywhere, and — because the
+        // queue row was then deleted same as a real success — with no
+        // record left pointing back at the still-perfectly-good source
+        // file sitting on the download client, either.
+        //
+        // Thrown instead: this propagates out of completeRealDownload to
+        // realTick's own try/catch below, which routes it into the exact
+        // same bounded import_attempts retry (up to MAX_IMPORT_ATTEMPTS,
+        // ~MAX_IMPORT_ATTEMPTS*REAL_TICK_MS of wall-clock time) — then—
+        // failRealDownload/blocklist machinery every other real download
+        // failure already uses. A transient hiccup (a NAS share
+        // reconnecting, a momentary lock) now has a real window to recover
+        // on its own with zero user action and zero re-download, since
+        // nothing here deletes the source file or the torrent — only a
+        // failure that's still happening after every retry gives up and
+        // surfaces as a real, visible failure instead of a silent lie.
+        throw new Error(`Could not import the real file for "${row.release_title}" (${episodeLabel}) — ${imported.error}`);
       }
     }
   }
@@ -962,18 +1033,30 @@ async function completeRealDownload(row, torrent, client, files) {
     releaseTitle: row.release_title, quality, indexer: row.indexer, sizeBytes,
     message: importNote,
   });
+  // Only removed from the queue now that the episode's real downloaded
+  // state above is durably committed — see this function's own header
+  // comment for why the ordering matters.
+  await db.prepare('DELETE FROM queue WHERE id = ?').run(row.id);
   logInfo('Queue', `Imported "${row.release_title}" — real qBittorrent download complete${importNote ? '' : ', file hardlinked/copied into the Library'}`);
   notifyConnections('import', `${seriesTitle} ${episodeLabel} — ${row.release_title} (${quality})`);
 }
 
-async function failRealDownload(row, torrent) {
+// `reason` is a plain description of why this row is being given up on —
+// either qBittorrent itself reporting a real failure (see its one call site
+// in realTick below), or, since handleFailedCompletion below reuses this
+// same function, a completed-but-repeatedly-unimportable download that's
+// exhausted its retry attempts. Either way the outcome is identical: same
+// history/blocklist/notify shape a failed real Sonarr-style grab already
+// gets, so a permanently stuck import doesn't keep the row in the queue
+// forever with no way for the user to tell it apart from one that's still
+// legitimately in progress.
+async function failRealDownload(row, reason) {
   await db.prepare('DELETE FROM queue WHERE id = ?').run(row.id);
 
   const series = await db.prepare('SELECT title FROM series WHERE id = ?').get(row.series_id);
   const episode = await db.prepare('SELECT season_number, num FROM episodes WHERE id = ?').get(row.episode_id);
   const episodeLabel = episode ? `S${String(episode.season_number).padStart(2, '0')}E${String(episode.num).padStart(2, '0')}` : '';
   const seriesTitle = series ? series.title : 'Unknown series';
-  const reason = torrent.state === 'missingFiles' ? 'qBittorrent reported missing files' : 'qBittorrent reported an error';
 
   await insertHistoryRow({
     seriesId: row.series_id, episodeId: row.episode_id, eventType: 'failed',
@@ -986,6 +1069,39 @@ async function failRealDownload(row, torrent) {
   });
   logWarn('Queue', `Real download failed: "${row.release_title}" (${reason}) — blocklisted`);
   notifyConnections('fail', `${seriesTitle} ${episodeLabel} — ${row.release_title} failed (${reason})`);
+}
+
+// How many times realTick will re-attempt a completed torrent's import
+// before giving up on it entirely via failRealDownload — see
+// handleFailedCompletion below. At the 4s tick interval this is roughly 40
+// seconds of retrying, generous enough to ride out a brief hiccup (a NAS
+// share reconnecting, a momentary file lock) without spinning on a
+// genuinely broken case forever, which is the actual bug a real report
+// described as a series "looping on the import": completeRealDownload used
+// to delete the queue row before doing any real work (see that function's
+// own comment), so a crash or thrown error there could repeat identically,
+// unbounded, on every single tick with no visibility and no way to tell it
+// apart from a healthy download still in progress.
+const MAX_IMPORT_ATTEMPTS = 10;
+
+// Records one failed completion attempt for `row` and either leaves it for
+// the next realTick to retry (still findable by realTick's own query, since
+// this never changes `status` away from 'downloading'/'paused' — a
+// mid-import failure isn't itself a reason to stop treating this as an
+// active download) or, once MAX_IMPORT_ATTEMPTS is reached, gives up on it
+// via failRealDownload the same way a qBittorrent-reported failure already
+// does. import_attempts/last_import_error are surfaced through
+// rowToQueueEntry so the queue UI can show a row that's stuck retrying
+// instead of it looking identical to one downloading normally.
+async function handleFailedCompletion(row, err) {
+  const attempts = (row.import_attempts || 0) + 1;
+  const message = err && err.message ? err.message : String(err);
+  logWarn('Queue', `Import attempt ${attempts}/${MAX_IMPORT_ATTEMPTS} failed for "${row.release_title}" (episode ${row.episode_id}): ${message}`);
+  if (attempts >= MAX_IMPORT_ATTEMPTS) {
+    await failRealDownload(row, `Import kept failing after ${attempts} attempts — ${message}`);
+    return;
+  }
+  await db.prepare('UPDATE queue SET import_attempts = ?, last_import_error = ? WHERE id = ?').run(attempts, message, row.id);
 }
 
 setInterval(() => { realTick().catch((err) => logWarn('Queue', `realTick failed: ${err.message}`)); }, REAL_TICK_MS);

@@ -107,6 +107,15 @@ export default function QueueList() {
 
   return <>{items.map((q) => {
     const pauseDisabled = q.status === 'warning';
+    // A row's torrent can be fully downloaded in qBittorrent while its
+    // import into the Library keeps failing (see server/routes/queue.js's
+    // handleFailedCompletion) — realTick retries this automatically for a
+    // while rather than dropping the row, so `status` itself stays
+    // 'downloading'/'paused' the whole time (see that file's own comment on
+    // why). Shown here as a display-only override — real Sonarr shows the
+    // same "still queued, but something's wrong" idea as a warning
+    // triangle rather than silently pretending nothing happened.
+    const retrying = q.importAttempts > 0;
     return (
       <div className="queue-row" key={q.id}>
         {/* .settings-name (not just a bare div) so this column actually
@@ -132,7 +141,12 @@ export default function QueueList() {
           <div className="progress"><div className={`fill ${q.status === 'warning' ? 'warning' : 'accent'}`} style={{ width: `${q.progressPct}%` }} /></div>
           <span className="progress-label">{q.progressPct}%</span>
         </div>
-        <span className={`status-pill ${QUEUE_STATUS_CLASS[q.status] || 'status-off'}`}>{QUEUE_STATUS_LABEL[q.status] || q.status}</span>
+        <span
+          className={`status-pill ${retrying ? 'status-warn' : (QUEUE_STATUS_CLASS[q.status] || 'status-off')}`}
+          data-tooltip={retrying ? `Import failed, retrying (attempt ${q.importAttempts}) — ${q.lastImportError || 'unknown error'}` : undefined}
+        >
+          {retrying ? 'Import failed' : (QUEUE_STATUS_LABEL[q.status] || q.status)}
+        </span>
         <button
           className="ep-action"
           type="button"

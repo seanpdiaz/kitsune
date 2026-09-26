@@ -103,10 +103,50 @@ async function loadPersistedDiskUsage() {
 }
 
 async function persistDiskUsage(bytes, computedAt) {
+  // Merged with whatever's already in this section (rather than a blind
+  // overwrite) so this doesn't wipe out a nextRunAt persistNextRunAt wrote
+  // (see below) — both functions write into the same CACHE_SECTION row for
+  // unrelated reasons (a completed scan vs. a rescheduled timer) and can
+  // fire in either order around a scan.
+  const row = await db.prepare('SELECT data FROM app_settings WHERE section = ?').get(CACHE_SECTION);
+  const merged = { ...(row ? JSON.parse(row.data) : {}), bytes, computedAt: computedAt.toISOString() };
   await db.prepare(`
     INSERT INTO app_settings (section, data, updated_at) VALUES (?, ?, ?)
     ON CONFLICT(section) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at
-  `).run(CACHE_SECTION, JSON.stringify({ bytes, computedAt: computedAt.toISOString() }), db.now());
+  `).run(CACHE_SECTION, JSON.stringify(merged), db.now());
+}
+
+// The other half of "resume the schedule instead of resetting it on every
+// restart" (see startDiskUsageScheduler and scheduleNext below) — persisted
+// separately from persistDiskUsage's write (merged into the same row, same
+// reasoning as that function's own comment) since this gets written on
+// every reschedule (a completed run, a changed interval), not only on a
+// completed scan.
+async function persistNextRunAt(nextRunAtDate) {
+  const row = await db.prepare('SELECT data FROM app_settings WHERE section = ?').get(CACHE_SECTION);
+  const merged = { ...(row ? JSON.parse(row.data) : {}), nextRunAt: nextRunAtDate.toISOString() };
+  await db.prepare(`
+    INSERT INTO app_settings (section, data, updated_at) VALUES (?, ?, ?)
+    ON CONFLICT(section) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at
+  `).run(CACHE_SECTION, JSON.stringify(merged), db.now());
+}
+
+// Independent of loadPersistedDiskUsage below on purpose — that function
+// returns null for the whole record if bytes/computedAt aren't both valid
+// yet (e.g. the very first scan hasn't finished), but a persisted nextRunAt
+// should still be honored even then, so this reads it on its own rather
+// than being bundled into that stricter check.
+async function loadPersistedNextRunAt() {
+  const row = await db.prepare('SELECT data FROM app_settings WHERE section = ?').get(CACHE_SECTION);
+  if (!row) return null;
+  try {
+    const parsed = JSON.parse(row.data);
+    if (!parsed.nextRunAt) return null;
+    const d = new Date(parsed.nextRunAt);
+    return Number.isNaN(d.getTime()) ? null : d;
+  } catch {
+    return null;
+  }
 }
 
 const state = { bytes: null, computedAt: null, computing: false };
@@ -235,21 +275,31 @@ function getCachedDiskUsage() {
   };
 }
 
-// (Re)arms the background timer for `intervalHours` from right now. Called
-// after every completed run (scheduled or manual) and after the interval is
-// changed — a self-rescheduling setTimeout rather than one long-lived
+// (Re)arms the background timer, either for `intervalHours` from right now
+// (the normal case: called after every completed run, after the interval is
+// changed, and any time no explicit target applies) or for a specific
+// already-decided moment (`explicitNextRunAt` — only startDiskUsageScheduler
+// passes this, to resume a schedule that survived a restart rather than
+// resetting it). A self-rescheduling setTimeout rather than one long-lived
 // setInterval, since a setInterval created with the old interval has no
 // clean way to pick up a new one without being torn down and recreated
 // anyway; doing that recreation here in one place, every time, is simpler
 // than tracking "did the interval change since the last setInterval call."
-function scheduleNext() {
+async function scheduleNext(explicitNextRunAt) {
   if (timer) clearTimeout(timer);
-  const ms = intervalHours * 60 * 60 * 1000;
-  nextRunAt = new Date(Date.now() + ms);
+  const target = explicitNextRunAt instanceof Date
+    ? explicitNextRunAt
+    : new Date(Date.now() + intervalHours * 60 * 60 * 1000);
+  nextRunAt = target;
+  const ms = Math.max(0, target.getTime() - Date.now());
   timer = setTimeout(async () => {
     await refreshDiskUsage();
-    scheduleNext();
+    await scheduleNext();
   }, ms);
+  // Persisted so a restart can resume waiting for this exact moment instead
+  // of resetting the countdown to a fresh full interval — see
+  // startDiskUsageScheduler below.
+  await persistNextRunAt(target);
 }
 
 // System > Tasks' Run Now button (see server/routes/system-tasks.js) — runs
@@ -259,7 +309,7 @@ function scheduleNext() {
 // again almost immediately afterward.
 async function runNow() {
   await refreshDiskUsage();
-  scheduleNext();
+  await scheduleNext();
 }
 
 // Validates and applies a new interval: clamps to [MIN_INTERVAL_HOURS,
@@ -271,7 +321,7 @@ async function setIntervalHours(hours) {
   const clamped = Math.min(MAX_INTERVAL_HOURS, Math.max(MIN_INTERVAL_HOURS, Math.round(hours)));
   intervalHours = clamped;
   await persistIntervalHours(clamped);
-  scheduleNext();
+  await scheduleNext();
   logInfo('DiskUsage', `Recompute interval changed to every ${clamped}h`);
   return clamped;
 }
@@ -299,12 +349,23 @@ function getTaskInfo() {
 // ever changed it), loads whatever the last completed scan found (see
 // loadPersistedDiskUsage/persistDiskUsage above) so the dashboard has a real
 // number to show immediately instead of "Calculating…" on every restart,
-// kicks off a fresh scan anyway (without awaiting it — the server starts
-// accepting requests right away, and the Library grid page already knows to
-// keep showing the previous number, marked as refreshing, while
+// and arms the recurring timer.
+//
+// Whether a scan also runs right now depends on the persisted nextRunAt
+// (see loadPersistedNextRunAt/persistNextRunAt above): if it's still in the
+// future, that schedule survives the restart as-is — a real scan already
+// ran recently enough that another one isn't due yet, so this just resumes
+// waiting for that same moment instead of resetting the countdown. Without
+// this, restarting the server (routine during dev, or any deploy) kept
+// re-triggering a full disk scan every single time no matter how recently
+// the last one actually finished. Only when nothing's due yet (first ever
+// startup) or the persisted time has already passed (the server was down
+// through when it should have run) does this fall back to the original
+// behavior: scan now, without awaiting it — the server starts accepting
+// requests right away, and the Library grid page already knows to keep
+// showing the previous number, marked as refreshing, while
 // `diskUsageComputing` is true rather than blanking it out — see
-// DiskUsageStat in frontend/pages/library-grid/LibraryGridPage.jsx), and
-// arms the recurring timer.
+// DiskUsageStat in frontend/pages/library-grid/LibraryGridPage.jsx.
 async function startDiskUsageScheduler(defaultIntervalHours) {
   intervalHours = await loadPersistedIntervalHours(defaultIntervalHours);
   const persisted = await loadPersistedDiskUsage();
@@ -313,9 +374,16 @@ async function startDiskUsageScheduler(defaultIntervalHours) {
     state.computedAt = persisted.computedAt;
     logInfo('DiskUsage', `Loaded persisted disk usage from last run: ${formatBytes(state.bytes)} as of ${state.computedAt.toISOString()}`);
   }
-  logInfo('DiskUsage', `Disk usage will be recomputed every ${intervalHours}h (plus once now at startup)`);
-  refreshDiskUsage().catch((err) => logWarn('DiskUsage', `Startup scan failed: ${err.stack || err}`));
-  scheduleNext();
+
+  const persistedNextRunAt = await loadPersistedNextRunAt();
+  if (persistedNextRunAt && persistedNextRunAt.getTime() > Date.now()) {
+    logInfo('DiskUsage', `Next scan stays scheduled for ${persistedNextRunAt.toISOString()} (every ${intervalHours}h) — not due yet, so not scanning again just because the server restarted.`);
+    await scheduleNext(persistedNextRunAt);
+  } else {
+    logInfo('DiskUsage', `Disk usage will be recomputed every ${intervalHours}h (plus once now at startup)`);
+    refreshDiskUsage().catch((err) => logWarn('DiskUsage', `Startup scan failed: ${err.stack || err}`));
+    await scheduleNext();
+  }
 }
 
 module.exports = { refreshDiskUsage, getCachedDiskUsage, startDiskUsageScheduler, getTaskInfo, setIntervalHours, runNow };

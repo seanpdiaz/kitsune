@@ -9,6 +9,7 @@
 const db = require('../db');
 const { sendJson } = require('../lib/http');
 
+// size_bytes is BIGINT, not INTEGER — see episodes.js's episodes table for why.
 db.init(async () => {
   await db.exec(`
     CREATE TABLE IF NOT EXISTS history (
@@ -19,7 +20,7 @@ db.init(async () => {
       release_title TEXT,
       quality TEXT,
       indexer TEXT,
-      size_bytes INTEGER,
+      size_bytes BIGINT,
       message TEXT,
       created_at TEXT NOT NULL
     )
