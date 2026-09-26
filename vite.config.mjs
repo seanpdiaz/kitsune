@@ -42,6 +42,7 @@ export default defineConfig({
       input: {
         'system-tasks': resolve(process.cwd(), 'frontend/pages/system-tasks/main.jsx'),
         'system-status': resolve(process.cwd(), 'frontend/pages/system-status/main.jsx'),
+        'system-updates': resolve(process.cwd(), 'frontend/pages/system-updates/main.jsx'),
         'system-backup': resolve(process.cwd(), 'frontend/pages/system-backup/main.jsx'),
         'system-events': resolve(process.cwd(), 'frontend/pages/system-events/main.jsx'),
         'system-logs': resolve(process.cwd(), 'frontend/pages/system-logs/main.jsx'),

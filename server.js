@@ -49,12 +49,15 @@ const { handleReleasesApi } = require('./server/routes/releases');
 const { handleWantedApi } = require('./server/routes/wanted');
 const { handleSystemApi } = require('./server/routes/system');
 const { handleSystemTasksApi } = require('./server/routes/system-tasks');
+const { handleSystemUpdatesApi } = require('./server/routes/system-updates');
 const { handleImportFilesApi } = require('./server/routes/import-files');
 const { handleBackupsApi } = require('./server/routes/backups');
 const { handleSslApi } = require('./server/routes/ssl');
 const { handleIndexersApi } = require('./server/routes/indexers');
 const { startDiskUsageScheduler } = require('./server/lib/disk-usage');
 const { startPermissionsScheduler } = require('./server/lib/permissions');
+const { startRefreshSeriesScheduler } = require('./server/lib/refresh-series-task');
+const { startUpdateCheckScheduler } = require('./server/lib/update-check');
 
 // Default for how often the Library dashboard's Disk usage stat card
 // recomputes (a real recursive directory walk — expensive, so it runs on a
@@ -74,6 +77,23 @@ const DISK_USAGE_REFRESH_HOURS = Number(process.env.DISK_USAGE_REFRESH_HOURS) ||
 // Permissions toggle or arrived outside Kitsune, not to fight a constant
 // battle against something actively changing them.
 const APPLY_PERMISSIONS_INTERVAL_HOURS = Number(process.env.APPLY_PERMISSIONS_INTERVAL_HOURS) || 24;
+
+// Same fallback-only-until-someone-customizes-it role as the two intervals
+// above, for System > Tasks' Refresh Series row (see server/lib/refresh-
+// series-task.js) — re-fetches every series' episode metadata from
+// TheTVDB, which is what fills in "TBA" rows on a currently airing show
+// once TheTVDB actually has the real data. Defaults to 12h, matching what
+// this row's interval already defaulted to back when it was still one of
+// the decorative rows (see decorative-task-intervals.js).
+const REFRESH_SERIES_INTERVAL_HOURS = Number(process.env.REFRESH_SERIES_INTERVAL_HOURS) || 12;
+
+// Same fallback-only-until-someone-customizes-it role as the three
+// intervals above, for System > Tasks' Application Update Check row (see
+// server/lib/update-check.js) — compares this build against GitHub, no
+// apply-update action yet. Defaults to 6h, matching what this row's
+// interval already defaulted to back when it was still one of the
+// decorative rows (see decorative-task-intervals.js).
+const UPDATE_CHECK_INTERVAL_HOURS = Number(process.env.UPDATE_CHECK_INTERVAL_HOURS) || 6;
 
 // ---------------------------------------------------------------------------
 // Server
@@ -120,6 +140,7 @@ const server = http.createServer(async (req, res) => {
         (await handleWantedApi(req, res, urlPath)) ||
         (await handleSystemApi(req, res, urlPath)) ||
         (await handleSystemTasksApi(req, res, urlPath)) ||
+        (await handleSystemUpdatesApi(req, res, urlPath)) ||
         (await handleImportFilesApi(req, res, urlPath)) ||
         (await handleBackupsApi(req, res, urlPath)) ||
         (await handleSslApi(req, res, urlPath)) ||
@@ -219,6 +240,19 @@ const server = http.createServer(async (req, res) => {
     // startPermissionsScheduler's own comment in permissions.js.
     startPermissionsScheduler(APPLY_PERMISSIONS_INTERVAL_HOURS).catch((err) => {
       logError('Server', `Apply Permissions scheduler failed to start: ${err && err.stack ? err.stack : err}`);
+    });
+    // Also not awaited, same reasoning — see startRefreshSeriesScheduler's
+    // own comment in refresh-series-task.js for why this one does run once
+    // immediately at startup, like Disk Usage and unlike Apply Permissions.
+    startRefreshSeriesScheduler(REFRESH_SERIES_INTERVAL_HOURS).catch((err) => {
+      logError('Server', `Refresh Series scheduler failed to start: ${err && err.stack ? err.stack : err}`);
+    });
+    // Also not awaited, same reasoning — see startUpdateCheckScheduler's own
+    // comment in update-check.js; a GitHub API check is cheap and read-only,
+    // same "fine to run once at startup" reasoning Disk Usage and Refresh
+    // Series already follow.
+    startUpdateCheckScheduler(UPDATE_CHECK_INTERVAL_HOURS).catch((err) => {
+      logError('Server', `Application Update Check scheduler failed to start: ${err && err.stack ? err.stack : err}`);
     });
   });
 })();

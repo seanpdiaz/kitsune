@@ -5,18 +5,19 @@ import { useEffect, useRef, useState } from 'react';
 // README's "React migration" section and vite.config.mjs). Originally a
 // faithful port of public/js/pages/system-tasks.js's logic (now gone,
 // superseded by this) with one real row (Disk Usage Recompute) alongside
-// the same seven decorative placeholder rows that page always had.
+// the same several decorative placeholder rows that page always had.
 //
 // RealRow now takes its task's id/endpoints as props instead of having
-// Disk Usage Recompute's hardcoded in, so Apply Permissions (see
-// server/lib/permissions.js and server/routes/system-tasks.js) could join
-// it as a second genuinely real row without copy-pasting the whole
-// polling/flash/interval-dropdown component a second time — both rows
-// share identical behavior (interval dropdown, Run Now, poll-while-running,
-// completion flash) because both back onto the exact same GET/POST/PATCH
-// shape on the server side.
+// Disk Usage Recompute's hardcoded in, so Apply Permissions, Refresh
+// Series, and Application Update Check (see server/lib/permissions.js,
+// server/lib/refresh-series-task.js, server/lib/update-check.js, and
+// server/routes/system-tasks.js) could each join it as another genuinely
+// real row without copy-pasting the whole polling/flash/interval-dropdown
+// component every time — all four rows share identical behavior (interval
+// dropdown, Run Now, poll-while-running, completion flash) because they
+// all back onto the exact same GET/POST/PATCH shape on the server side.
 //
-// The other seven rows (FakeRow) are still decorative in every other way —
+// The other five rows (FakeRow) are still decorative in every other way —
 // Run Now still just fakes a "Just now" timestamp, Last Run/Next Run stay
 // canned text — but their interval is a real, persisted setting now too
 // (see server/lib/decorative-task-intervals.js), so the user can actually
@@ -29,13 +30,12 @@ const TASKS_DATA = [
   // persists each row's interval under — matches that module's
   // DEFAULT_INTERVAL_MINUTES exactly, so `defaultIntervalMinutes` here is
   // just what to show before GET /api/system-tasks/schedule answers once
-  // on mount, not a second source of truth.
+  // on mount, not a second source of truth. Refresh Series used to be
+  // listed here too — it's a real row now (see RealRow below).
   { id: 1, taskId: 'rss-sync', name: 'RSS Sync', defaultIntervalMinutes: 15, lastRun: '4 minutes ago', nextRun: 'in 11 minutes' },
   { id: 2, taskId: 'check-downloads', name: 'Check for Finished Downloads', defaultIntervalMinutes: 1, lastRun: '38 seconds ago', nextRun: 'in 22 seconds' },
-  { id: 3, taskId: 'refresh-series', name: 'Refresh Series', defaultIntervalMinutes: 720, lastRun: '3 hours ago', nextRun: 'in 9 hours' },
   { id: 4, taskId: 'metadata-cache', name: 'Update Metadata Cache', defaultIntervalMinutes: 720, lastRun: '5 hours ago', nextRun: 'in 7 hours' },
   { id: 5, taskId: 'backup', name: 'Backup', defaultIntervalMinutes: 10080, lastRun: '2 days ago', nextRun: 'in 5 days' },
-  { id: 6, taskId: 'update-check', name: 'Application Update Check', defaultIntervalMinutes: 360, lastRun: '1 hour ago', nextRun: 'in 5 hours' },
   { id: 7, taskId: 'housekeeping', name: 'Housekeeping', defaultIntervalMinutes: 1440, lastRun: '14 hours ago', nextRun: 'in 10 hours' },
 ];
 
@@ -171,12 +171,16 @@ function RealRow({ taskId, runPath, patchPath }) {
   // the HTML string for a single render() call and therefore couldn't
   // replay on a later one), a React class held in state stays applied
   // across every re-render until something removes it — so this clears it
-  // back off 1.6s later, exactly matching the animation's own duration,
-  // rather than leaving a class the animation has already finished playing
-  // permanently sitting in the DOM.
+  // back off 2.4s later, exactly matching the animation's own duration on
+  // this page (see styles.css's .task-row.row-flash-success override —
+  // slower than the shared .row-flash-success's default 1.6s, since a real
+  // task run takes long enough that the original pace read as too quick to
+  // register as "done" rather than a stray blip), rather than leaving a
+  // class the animation has already finished playing permanently sitting
+  // in the DOM.
   function scheduleFlash() {
     setFlashing(true);
-    setTimeout(() => setFlashing(false), 1600);
+    setTimeout(() => setFlashing(false), 2400);
   }
 
   // Re-checks /api/system-tasks every 2s for as long as the task reports
@@ -203,6 +207,16 @@ function RealRow({ taskId, runPath, patchPath }) {
       if (cancelled || !fresh) return;
       wasRunningRef.current = fresh.running;
       setTask(fresh);
+      // The row can mount while a run is already in progress — most easily
+      // hit right after a restart, since Refresh Series (unlike the local
+      // Disk Usage scan) kicks off at startup and can take a while against
+      // a real library over the network, well within the time it takes to
+      // open System > Tasks and see it. handleRunNow starting its own poll
+      // loop isn't enough to cover this case: nothing here was watching
+      // before the click, so without this the row would keep showing
+      // "Running…" (and the progress track animation) forever once the
+      // real run finishes, since nothing would ever poll again to notice.
+      if (fresh.running) pollUntilDone();
     });
     return () => {
       cancelled = true;
@@ -253,8 +267,16 @@ function RealRow({ taskId, runPath, patchPath }) {
   // Disk Usage Recompute's task object simply has no `enabled` field, so
   // this is false for it and the row renders exactly as it always has.
   const isDisabled = task.enabled === false;
-  const lastRun = task.lastRunAt ? relativeTime(task.lastRunAt) : 'Never';
-  const nextRun = task.running ? 'Running…' : (task.nextRunAt ? relativeTime(task.nextRunAt) : '—');
+  // Last Run/Next Run both go blank while disabled rather than showing
+  // real values: a past lastRunAt/nextRunAt still exists on the server
+  // (the scheduler keeps ticking and persisting them even while disabled —
+  // see permissions.js's own getTaskInfo/scheduleNext), but showing "in 22
+  // hours" next to "Set Permissions is turned off..." reads as "this will
+  // still run then," which isn't true — nothing runs until it's turned
+  // back on. Blanking both while disabled is clearer than picking apart
+  // which of the two numbers is the misleading one.
+  const lastRun = isDisabled ? '—' : (task.lastRunAt ? relativeTime(task.lastRunAt) : 'Never');
+  const nextRun = isDisabled ? '—' : (task.running ? 'Running…' : (task.nextRunAt ? relativeTime(task.nextRunAt) : '—'));
 
   return (
     <div className={`task-row${flashing ? ' row-flash-success' : ''}`}>
@@ -269,7 +291,8 @@ function RealRow({ taskId, runPath, patchPath }) {
       <span className="settings-meta">
         <select
           className="field-select"
-          disabled={task.running || changingInterval}
+          disabled={task.running || changingInterval || isDisabled}
+          title={isDisabled ? task.disabledReason : undefined}
           value={task.intervalHours}
           onChange={handleIntervalChange}
         >
@@ -342,6 +365,8 @@ export default function TaskList() {
       ))}
       <RealRow taskId="disk-usage" runPath="/api/system-tasks/disk-usage/run" patchPath="/api/system-tasks/disk-usage" />
       <RealRow taskId="apply-permissions" runPath="/api/system-tasks/apply-permissions/run" patchPath="/api/system-tasks/apply-permissions" />
+      <RealRow taskId="refresh-series" runPath="/api/system-tasks/refresh-series/run" patchPath="/api/system-tasks/refresh-series" />
+      <RealRow taskId="update-check" runPath="/api/system-tasks/update-check/run" patchPath="/api/system-tasks/update-check" />
     </>
   );
 }

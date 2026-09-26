@@ -1,15 +1,20 @@
 // ---------------------------------------------------------------------------
 // /api/system-tasks — backs the real rows on System > Tasks: the Disk Usage
 // Recompute background job (see server/lib/disk-usage.js and the Library
-// dashboard's Disk usage stat card) and the Apply Permissions job (see
-// server/lib/permissions.js). Every other row that page shows (RSS Sync,
-// Check for Finished Downloads, Backup, etc.) still doesn't run a real
-// background job — "Run Now" still just fakes a "Just now" timestamp
-// client-side, and Last Run/Next Run stay decorative text — but its
-// interval IS real now too: see the /api/system-tasks/schedule routes
-// below and server/lib/decorative-task-intervals.js, which persist
-// whatever the user picks for each of those seven rows even though nothing
-// yet actually runs on that schedule.
+// dashboard's Disk usage stat card), the Apply Permissions job (see
+// server/lib/permissions.js), and the Refresh Series job (see
+// server/lib/refresh-series-task.js — re-fetches every series' episode
+// metadata from TheTVDB, which is what fills in "TBA" rows on a currently
+// airing show once TheTVDB actually has the real data), and the
+// Application Update Check job (see server/lib/update-check.js — compares
+// this build against GitHub, no apply-update action yet). Every other row
+// that page shows (RSS Sync, Check for Finished Downloads, Backup, etc.)
+// still doesn't run a real background job — "Run Now" still just fakes a
+// "Just now" timestamp client-side, and Last Run/Next Run stay decorative
+// text — but its interval IS real now too: see the /api/system-tasks/
+// schedule routes below and server/lib/decorative-task-intervals.js, which
+// persist whatever the user picks for each of those remaining rows even
+// though nothing yet actually runs on that schedule.
 // ---------------------------------------------------------------------------
 const { sendJson, readJsonBody } = require('../lib/http');
 const { logInfo, logWarn } = require('../logger');
@@ -19,6 +24,16 @@ const {
   setIntervalHours: setPermissionsIntervalHours,
   runNow: runPermissionsNow,
 } = require('../lib/permissions');
+const {
+  getTaskInfo: getRefreshSeriesTaskInfo,
+  setIntervalHours: setRefreshSeriesIntervalHours,
+  runNow: runRefreshSeriesNow,
+} = require('../lib/refresh-series-task');
+const {
+  getTaskInfo: getUpdateCheckTaskInfo,
+  setIntervalHours: setUpdateCheckIntervalHours,
+  runNow: runUpdateCheckNow,
+} = require('../lib/update-check');
 const { getIntervals: getDecorativeIntervals, setIntervalMinutes: setDecorativeIntervalMinutes } = require('../lib/decorative-task-intervals');
 
 async function handleSystemTasksApi(req, res, urlPath) {
@@ -28,7 +43,7 @@ async function handleSystemTasksApi(req, res, urlPath) {
   // finds its own row by `id`, so the order here doesn't matter and a
   // third task is just another entry.
   if (req.method === 'GET' && urlPath === '/api/system-tasks') {
-    sendJson(res, 200, [getTaskInfo(), await getPermissionsTaskInfo()]);
+    sendJson(res, 200, [getTaskInfo(), await getPermissionsTaskInfo(), getRefreshSeriesTaskInfo(), getUpdateCheckTaskInfo()]);
     return true;
   }
 
@@ -115,7 +130,75 @@ async function handleSystemTasksApi(req, res, urlPath) {
     return true;
   }
 
-  // GET /api/system-tasks/schedule — the seven still-decorative rows'
+  // POST /api/system-tasks/refresh-series/run — same "fire-and-forget,
+  // respond with the running state, let the frontend poll" shape as the
+  // other two Run Now handlers above; walking every series' TVDB fetch can
+  // take a while on a real-sized library.
+  if (req.method === 'POST' && urlPath === '/api/system-tasks/refresh-series/run') {
+    logInfo('SystemTasks', 'Refresh Series triggered manually (Run Now)');
+    runRefreshSeriesNow().catch((err) => logWarn('SystemTasks', `Run Now failed: ${err.stack || err}`));
+    sendJson(res, 200, { ok: true, task: getRefreshSeriesTaskInfo() });
+    return true;
+  }
+
+  // PATCH /api/system-tasks/refresh-series — System > Tasks' interval
+  // dropdown for this row.
+  if (req.method === 'PATCH' && urlPath === '/api/system-tasks/refresh-series') {
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch {
+      sendJson(res, 400, { error: 'Invalid JSON body' });
+      return true;
+    }
+    const hours = Number(body.intervalHours);
+    if (!Number.isFinite(hours) || hours <= 0) {
+      sendJson(res, 400, { error: 'intervalHours must be a positive number' });
+      return true;
+    }
+    const applied = await setRefreshSeriesIntervalHours(hours);
+    if (applied !== hours) {
+      logWarn('SystemTasks', `Requested Refresh Series interval ${hours}h was clamped to ${applied}h`);
+    }
+    sendJson(res, 200, { ok: true, task: getRefreshSeriesTaskInfo() });
+    return true;
+  }
+
+  // POST /api/system-tasks/update-check/run — same "fire-and-forget,
+  // respond with the running state, let the frontend poll" shape as the
+  // other three Run Now handlers above; a GitHub API round trip is
+  // normally fast, but this still doesn't hold the response open on it.
+  if (req.method === 'POST' && urlPath === '/api/system-tasks/update-check/run') {
+    logInfo('SystemTasks', 'Application Update Check triggered manually (Run Now)');
+    runUpdateCheckNow().catch((err) => logWarn('SystemTasks', `Run Now failed: ${err.stack || err}`));
+    sendJson(res, 200, { ok: true, task: getUpdateCheckTaskInfo() });
+    return true;
+  }
+
+  // PATCH /api/system-tasks/update-check — System > Tasks' interval
+  // dropdown for this row.
+  if (req.method === 'PATCH' && urlPath === '/api/system-tasks/update-check') {
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch {
+      sendJson(res, 400, { error: 'Invalid JSON body' });
+      return true;
+    }
+    const hours = Number(body.intervalHours);
+    if (!Number.isFinite(hours) || hours <= 0) {
+      sendJson(res, 400, { error: 'intervalHours must be a positive number' });
+      return true;
+    }
+    const applied = await setUpdateCheckIntervalHours(hours);
+    if (applied !== hours) {
+      logWarn('SystemTasks', `Requested Application Update Check interval ${hours}h was clamped to ${applied}h`);
+    }
+    sendJson(res, 200, { ok: true, task: getUpdateCheckTaskInfo() });
+    return true;
+  }
+
+  // GET /api/system-tasks/schedule — the five still-decorative rows'
   // current intervals, one map keyed by id (see TaskList.jsx's TASKS_DATA
   // for what each id means). Fetched once by TaskList, not per-row.
   if (req.method === 'GET' && urlPath === '/api/system-tasks/schedule') {

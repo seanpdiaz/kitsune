@@ -1473,6 +1473,35 @@ select {
   100% { background: var(--surface-1); border-color: var(--border); }
 }
 
+/* System > Tasks' own completion flash reads faster than it should now
+   that a real run (Refresh Series in particular, walking a whole library)
+   actually takes long enough for someone to be watching for it to finish —
+   three pulses at the shared 0.5333s-per-pulse pace feels like a blip
+   rather than a "this is done" moment. Scoped to .task-row specifically
+   (higher specificity than .row-flash-success alone) rather than slowing
+   the shared row-flash-success-anim keyframes everywhere: Connections and
+   Download Clients' own test-connection flashes (see ConnectionManager.jsx/
+   DownloadClients.jsx) are quick, low-stakes confirmations happening right
+   next to the button that triggered them, and were never reported as too
+   fast — only this page's was. TaskList.jsx's own scheduleFlash clears the
+   class after 2.4s (unchanged 3-pulse count, just 0.8s per pulse instead of
+   0.5333s) to match this override exactly. */
+.task-row.row-flash-success {
+  animation-duration: 0.8s;
+}
+
+/* System > Updates' own Update Status card gets the identical "running"
+   progress bar and slow completion flash System > Tasks' real rows already
+   use (see .task-row's own progress-track comment above and
+   .task-row.row-flash-success's own comment on why 0.8s/pulse instead of
+   the shared 0.5333s) — same visual language for "a real check is in
+   flight" / "it just finished" wherever that happens in the app, just
+   applied to a settings-card instead of a task-row since Check Now here
+   isn't a row in a list. See UpdatesInfo.jsx's own pollUntilDone/
+   scheduleFlash, ported from TaskList.jsx's RealRow almost unchanged. */
+.update-status-card { position: relative; overflow: hidden; }
+.update-status-card.row-flash-success { animation-duration: 0.8s; }
+
 /* Same three-pulse flash, red instead of green, for "this just failed" —
    the counterpart to .row-flash-success above, applied the same one-shot
    way (see ConnectionManager.jsx / DownloadClients.jsx's `flash` state:
