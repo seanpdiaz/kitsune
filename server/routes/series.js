@@ -6,6 +6,7 @@ const { normalizeFolderName, pathExists } = require('../lib/fs-helpers');
 const { sanitizeForPath } = require('../lib/episode-paths');
 const { recomputeSeriesEpisodeStats } = require('../lib/series-stats');
 const { warmEpisodesInBackground } = require('./episodes');
+const { fetchMalContentFlags, isHentaiMetadata } = require('../lib/mal');
 
 // ---------------------------------------------------------------------------
 // Library persistence (the `series` table)
@@ -320,6 +321,14 @@ const SERIES_SEED = [
     // detail page still lists every special exactly as before; this only
     // changes whether they're counted.
     ['ignore_specials', 'INTEGER NOT NULL DEFAULT 0'],
+    // Whether this series is hentai (MAL "Hentai" genre or "rx" rating — see
+    // isHentaiMetadata in server/lib/mal.js). Backs the per-user "Show
+    // hentai in Library" preference on My Account, which hides these from
+    // the Library page. Deliberately nullable: NULL means "not checked yet"
+    // (a series added before this column existed), which
+    // backfillHentaiFlags below resolves once, rather than a 0 that would
+    // silently claim "checked, not hentai" for something nobody looked at.
+    ['is_hentai', 'INTEGER'],
   ]) {
     if (!seriesColumns.includes(col)) {
       await db.exec(`ALTER TABLE series ADD COLUMN ${col} ${def}`);
@@ -345,7 +354,57 @@ const SERIES_SEED = [
       logInfo('Database', `series table is empty — skipping demo seed (APP_ENV=${db.APP_ENV})`);
     }
   }
+
+  await backfillHentaiFlags();
 });
+
+// The genre list lives inside series.meta for seeded/older rows — "2019 ·
+// Action, Fantasy · TV · 24 min eps" — so a whole-word match on it is the
+// best answer available without a metadata lookup.
+function metaSaysHentai(meta) {
+  return /(^|[\s·,])hentai([\s·,]|$)/i.test(String(meta || ''));
+}
+
+// Resolves is_hentai for every series still NULL (added before the column
+// existed). Anything that didn't come from MAL is answered right away from
+// its meta string. MAL-added series need a real lookup — POST /api/series
+// never stored their genres — so those go out to the MAL API one at a time
+// in the background (not awaited: a slow or unreachable MAL shouldn't hold
+// up server startup). A lookup that fails just leaves that row NULL to be
+// retried on the next start; the Library treats NULL as "not hentai" in the
+// meantime.
+async function backfillHentaiFlags() {
+  const pending = await db.prepare('SELECT id, title, meta, external_id, external_source FROM series WHERE is_hentai IS NULL').all();
+  if (pending.length === 0) return;
+  const malRows = [];
+  for (const row of pending) {
+    if (row.external_source === 'mal' && row.external_id) {
+      malRows.push(row);
+    } else {
+      await db.prepare('UPDATE series SET is_hentai = ? WHERE id = ?').run(metaSaysHentai(row.meta) ? 1 : 0, row.id);
+    }
+  }
+  if (malRows.length === 0) return;
+  (async () => {
+    let resolved = 0;
+    for (const row of malRows) {
+      const flags = await fetchMalContentFlags(row.external_id);
+      if (flags) {
+        const hentai = isHentaiMetadata(flags) || metaSaysHentai(row.meta);
+        await db.prepare('UPDATE series SET is_hentai = ? WHERE id = ?').run(hentai ? 1 : 0, row.id);
+        resolved++;
+      }
+      // Gentle pacing — this is a one-time catch-up, not a race, and MAL
+      // rate-limits bursts.
+      await new Promise((r) => setTimeout(r, 400));
+    }
+    if (resolved < malRows.length) {
+      logWarn('SeriesService', `Hentai flag backfill: checked ${resolved} of ${malRows.length} MAL series; the rest will be retried on next start`);
+    } else {
+      logInfo('SeriesService', `Hentai flag backfill: checked ${resolved} MAL series`);
+    }
+  })().catch(() => {});
+}
 
 async function tagIdsForSeries(seriesId) {
   return (await db.prepare('SELECT tag_id FROM series_tags WHERE series_id = ? ORDER BY tag_id ASC').all(seriesId)).map((r) => r.tag_id);
@@ -376,6 +435,7 @@ async function rowToSeries(row) {
     seriesType: row.series_type,
     path: row.path,
     ignoreSpecials: !!row.ignore_specials,
+    isHentai: !!row.is_hentai,
     tagIds: await tagIdsForSeries(row.id),
   };
 }
@@ -410,6 +470,10 @@ async function handleSeriesApi(req, res, urlPath) {
       return true;
     }
     const meta = body.year ? `${body.year} · TV` : (body.meta || null);
+    // From the search result's genres/rating (see AddNewPage's addSeries) —
+    // TVDB results carry no rating and essentially never a Hentai genre, so
+    // those just come out 0.
+    const isHentai = isHentaiMetadata({ genres: body.genres, rating: body.rating }) || metaSaysHentai(meta) ? 1 : 0;
     const externalId = body.id !== undefined && body.id !== null && body.id !== '' ? String(body.id) : null;
     const externalSource = body.source ? String(body.source) : null;
     // See the alt_titles migration comment above for why these matter — kept
@@ -474,10 +538,10 @@ async function handleSeriesApi(req, res, urlPath) {
     const ignoreSpecials = await resolveIgnoreSpecials(body.ignoreSpecials);
 
     const created = await db.prepare(`
-      INSERT INTO series (title, badge, fill, pct, eps, monitored, status, air_status, next_air_days, added_days_ago, poster, meta, overview, external_id, external_source, alt_titles, path, quality_profile, ignore_specials, created_at)
-      VALUES (?, NULL, 'accent', 0, '0 / 0', 1, ?, ?, NULL, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO series (title, badge, fill, pct, eps, monitored, status, air_status, next_air_days, added_days_ago, poster, meta, overview, external_id, external_source, alt_titles, path, quality_profile, ignore_specials, is_hentai, created_at)
+      VALUES (?, NULL, 'accent', 0, '0 / 0', 1, ?, ?, NULL, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       RETURNING *
-    `).get(title, status, airStatus, body.poster || null, meta, body.overview || null, externalId, externalSource, altTitlesJson, defaultPath, qualityProfile, ignoreSpecials, db.now());
+    `).get(title, status, airStatus, body.poster || null, meta, body.overview || null, externalId, externalSource, altTitlesJson, defaultPath, qualityProfile, ignoreSpecials, isHentai, db.now());
     logInfo('SeriesService', `Series added: ${title}${externalSource ? ` (${externalSource}#${externalId})` : ''}`);
     sendJson(res, 201, await rowToSeries(created));
     // Start warming the episode cache immediately instead of waiting for

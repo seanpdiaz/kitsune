@@ -350,6 +350,10 @@ export default function AddNewPage() {
         id: match.id,
         source: match.source,
         status: match.status,
+        // Lets the server flag hentai titles at add time (series.is_hentai),
+        // which the "Show hentai in Library" preference on My Account uses.
+        genres: match.genres || [],
+        rating: match.rating || null,
         altTitles: [match.titleNative, match.altTitleJapanese, ...(match.altTitleSynonyms || [])].filter(Boolean),
         // Whatever's currently selected in the toolbar above — server-side
         // (POST /api/series' resolveRootFolder) still falls back to the
