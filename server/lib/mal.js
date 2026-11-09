@@ -196,4 +196,35 @@ async function fetchMalContentFlags(malId) {
   }
 }
 
-module.exports = { fetchMalSearchOnce, fetchMalContentFlags, isHentaiMetadata, MAL_MAX_ATTEMPTS, MAL_RETRY_DELAYS_MS };
+// One anime by MAL ID, in the same shape as a search result — backs add-by-
+// ID/link on the Add New page (routes/mal-search.js). Returns null for a
+// MAL ID that doesn't exist; throws (with the same `code`s as search) when
+// MAL itself can't be asked.
+async function fetchMalAnimeById(malId) {
+  if (!MAL_CLIENT_ID) {
+    const err = new Error('MAL_CLIENT_ID is not configured. Add it to .env and restart the server.');
+    err.code = 'MAL_NO_CLIENT_ID';
+    throw err;
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  try {
+    const fields = 'alternative_titles,main_picture,synopsis,start_date,num_episodes,mean,genres,media_type,rating,status,studios';
+    const res = await fetch(`${MAL_API_BASE}/anime/${encodeURIComponent(malId)}?nsfw=true&fields=${fields}`, {
+      headers: { 'X-MAL-CLIENT-ID': MAL_CLIENT_ID },
+      signal: controller.signal,
+    });
+    if (res.status === 404) return null;
+    if (res.status === 429) {
+      const err = new Error('MyAnimeList is rate-limiting us.');
+      err.code = 'MAL_RATE_LIMIT';
+      throw err;
+    }
+    if (!res.ok) throw new Error(`MyAnimeList lookup failed (status ${res.status})`);
+    return { ...mapMalOfficialResult(await res.json()), source: 'mal' };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+module.exports = { fetchMalSearchOnce, fetchMalAnimeById, fetchMalContentFlags, isHentaiMetadata, MAL_MAX_ATTEMPTS, MAL_RETRY_DELAYS_MS };

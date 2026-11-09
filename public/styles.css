@@ -2578,6 +2578,28 @@ a.release-title:hover { text-decoration: underline; }
   border-radius: 4px;
 }
 
+/* SeaDex pick flag (release-picker-modal.js's seadexFlag) — same pill shape
+   as the out-of-profile flag above, success-colored since it's a
+   recommendation rather than a warning. */
+.quality-flag.seadex-flag {
+  display: inline-block;
+  margin-left: 5px;
+  padding: 1px 5px;
+  font-size: 9.5px;
+  font-family: var(--font-ui);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--success);
+  background: var(--success-bg);
+  border-radius: 4px;
+}
+.quality-flag.seadex-flag.seadex-alt { opacity: 0.75; }
+
+/* Cross-site ID links under a series' title (SeriesPage.jsx). */
+.series-id-links { display: flex; flex-wrap: wrap; gap: 10px; margin: 4px 0 0; font-size: 11.5px; }
+.series-id-links a { color: var(--text-muted); text-decoration: none; }
+.series-id-links a:hover { color: var(--accent); text-decoration: underline; }
+
 /* ---------- Queue progress bar ---------- */
 
 .queue-progress { display: flex; flex-direction: column; gap: 4px; }

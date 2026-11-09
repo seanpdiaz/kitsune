@@ -1660,6 +1660,18 @@ export default function SeriesPage() {
             <div>
               <h1 id="detailTitle">{series.title}</h1>
               <p className="title-meta" id="detailMeta">{series.meta || ''}</p>
+              {/* Cross-site IDs (server/lib/anime-ids.js) — filled in shortly
+                  after a series is added; nothing renders until at least
+                  one is known. */}
+              {series.ids && (series.ids.mal || series.ids.anilist || series.ids.anidb || series.ids.tvdb) && (
+                <p className="series-id-links">
+                  {series.ids.mal && <a href={`https://myanimelist.net/anime/${series.ids.mal}`} target="_blank" rel="noopener noreferrer">MAL</a>}
+                  {series.ids.anilist && <a href={`https://anilist.co/anime/${series.ids.anilist}`} target="_blank" rel="noopener noreferrer">AniList</a>}
+                  {series.ids.anidb && <a href={`https://anidb.net/anime/${series.ids.anidb}`} target="_blank" rel="noopener noreferrer">AniDB</a>}
+                  {series.ids.tvdb && <a href={`https://thetvdb.com/dereferrer/series/${series.ids.tvdb}`} target="_blank" rel="noopener noreferrer">TVDB</a>}
+                  {series.ids.anilist && <a href={`https://releases.moe/${series.ids.anilist}/`} target="_blank" rel="noopener noreferrer">SeaDex</a>}
+                </p>
+              )}
             </div>
             <div className="detail-actions">
               <label className="monitor-toggle" title={isComplete ? "This series is complete — there's nothing left to monitor." : undefined}>

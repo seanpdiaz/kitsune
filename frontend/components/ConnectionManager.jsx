@@ -45,6 +45,16 @@ function isProwlarr(section, item) {
   return section === 'indexers' && item.type === 'prowlarr';
 }
 
+// Indexer rows whose Test button makes a real request (POST
+// /api/indexers/:id/test, which branches on the row's type server-side) —
+// Nyaa.si and Prowlarr above, plus AnimeTosho (server/lib/animetosho-
+// search.js) and SeaDex (server/lib/seadex.js), neither of which needs
+// credentials, so they keep the generic edit fields like Nyaa.si does.
+const REAL_INDEXER_TYPES = new Set(['nyaa', 'prowlarr', 'animetosho', 'seadex']);
+function isRealIndexer(section, item) {
+  return section === 'indexers' && REAL_INDEXER_TYPES.has(item.type);
+}
+
 function pushoverMetaLabel(item) {
   const on = PUSHOVER_TRIGGER_LABELS.filter(([key]) => item[key]).map(([, label]) => label);
   return on.length > 0 ? `On ${on.join(', ')}` : 'No triggers';
@@ -296,7 +306,7 @@ export default function ConnectionManager({ section, types, metaLabel, priorityL
       } catch {
         setData((prev) => prev.map((d) => (d.id === item.id ? { ...d, status: 'fail' } : d)));
       }
-    } else if (isNyaa(section, item) || isProwlarr(section, item)) {
+    } else if (isRealIndexer(section, item)) {
       // Real too — a plain connectivity check against Nyaa.si or Prowlarr
       // itself (see server/lib/nyaa-search.js's testNyaaReachable and
       // server/lib/prowlarr-search.js's testProwlarrReachable, both behind

@@ -314,6 +314,12 @@ async function handleRefreshEpisodes(req, res, match) {
     return true;
   }
   const result = await refreshEpisodesForSeries(series);
+  // A manual "Refresh episodes" also re-checks cross-site IDs and AniList
+  // titles (server/lib/anime-ids.js) — the one place a user can ask for a
+  // metadata re-check. Background only; the button's response is about
+  // episodes. Lazy require: anime-ids pulls in nothing from routes, but
+  // keeping it out of this module's top-level load order costs nothing.
+  require('../lib/anime-ids').enrichSeriesIds(id).catch(() => {});
   if (!result.ok) {
     sendJson(res, 502, { error: result.error });
     return true;

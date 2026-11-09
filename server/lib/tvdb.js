@@ -539,4 +539,45 @@ async function fetchTvdbEpisodes(tvdbId) {
   return all.map(({ tvdbEpisodeId, ...ep }) => ep);
 }
 
-module.exports = { tvdbFetch, mapTvdbResult, tvdbSearchAnimeOnly, resolveTvdbEpisodeSourceId, fetchTvdbEpisodes };
+// One series by TVDB ID (or by the slug in a thetvdb.com/series/<slug>
+// URL), in the same shape as a search result — backs add-by-ID/link on the
+// Add New page (routes/mal-search.js). A series record (unlike a search
+// hit) carries no overview, so the English translation is fetched
+// alongside it, best-effort. Returns null when TVDB has no such series.
+async function fetchTvdbSeriesById(idOrSlug) {
+  const bySlug = !/^\d+$/.test(String(idOrSlug));
+  const res = await tvdbFetch(bySlug ? `/series/slug/${encodeURIComponent(idOrSlug)}` : `/series/${encodeURIComponent(idOrSlug)}/extended?short=true`);
+  if (res.status === 404) return null;
+  const json = await res.json().catch(() => null);
+  if (!res.ok || !json || !json.data) throw new Error((json && json.message) || `TVDB lookup failed (status ${res.status})`);
+  const r = json.data;
+  let name = r.name || 'Untitled';
+  let overview = '';
+  try {
+    const tr = await tvdbFetch(`/series/${r.id}/translations/eng`);
+    const trJson = tr.ok ? await tr.json() : null;
+    if (trJson && trJson.data) {
+      if (trJson.data.name) name = trJson.data.name;
+      if (trJson.data.overview) overview = trJson.data.overview;
+    }
+  } catch { /* untranslated — keep the original name, no overview */ }
+  const yearNum = r.year ? parseInt(r.year, 10) : null;
+  return {
+    id: r.id,
+    title: name,
+    year: Number.isFinite(yearNum) ? yearNum : null,
+    overview,
+    poster: r.image || null,
+    numEpisodes: null,
+    score: null,
+    genres: Array.isArray(r.genres) ? r.genres.map((g) => (g && g.name) || g).filter((g) => typeof g === 'string') : [],
+    mediaType: null,
+    status: (r.status && r.status.name) || null,
+    studios: [],
+    altTitleJapanese: null,
+    altTitleSynonyms: Array.isArray(r.aliases) ? r.aliases.map((a) => (a && a.name) || a).filter((a) => typeof a === 'string').slice(0, 5) : [],
+    source: 'tvdb',
+  };
+}
+
+module.exports = { tvdbFetch, mapTvdbResult, tvdbSearchAnimeOnly, resolveTvdbEpisodeSourceId, fetchTvdbEpisodes, fetchTvdbSeriesById };

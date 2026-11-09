@@ -23,6 +23,7 @@
 **Downloading**
 - [Grab / Download Pipeline](Grab-Download-Pipeline)
 - [Real Search and Grabs](Real-Search-and-Grabs)
+- [Search: IDs, AnimeTosho, SeaDex](Search-IDs-AnimeTosho-SeaDex)
 - [Quality Definitions](Quality-Definitions)
 - [Download Clients](Download-Clients)
 - [Connect Notifications](Connect-Notifications)

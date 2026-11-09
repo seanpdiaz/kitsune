@@ -41,6 +41,11 @@ const { logWarn } = require('../logger');
 const { getQualityProfile, rankReleaseCandidates, getQualityOrder } = require('../lib/quality');
 const nyaaSearch = require('../lib/nyaa-search');
 const prowlarrSearch = require('../lib/prowlarr-search');
+const animetoshoSearch = require('../lib/animetosho-search');
+const seadex = require('../lib/seadex');
+
+// Display names for partial-failure notices ("Some indexers failed (...)").
+const INDEXER_LABELS = { nyaa: 'Nyaa.si', prowlarr: 'Prowlarr', animetosho: 'AnimeTosho', seadex: 'SeaDex' };
 
 // 10 minutes — long enough to open the release picker, read through the
 // list, and click Grab without the cache expiring out from under a normal
@@ -101,6 +106,8 @@ async function enabledRealIndexers() {
     const data = JSON.parse(row.data);
     if (!data.enabled) continue;
     if (data.type === 'nyaa') indexers.push({ type: 'nyaa' });
+    else if (data.type === 'animetosho') indexers.push({ type: 'animetosho' });
+    else if (data.type === 'seadex') indexers.push({ type: 'seadex' });
     else if (data.type === 'prowlarr' && data.baseUrl && data.apiKey) {
       indexers.push({ type: 'prowlarr', config: { baseUrl: data.baseUrl, apiKey: data.apiKey, allowInsecureSsl: data.allowInsecureSsl } });
     }
@@ -153,9 +160,20 @@ async function searchRealIndexers(indexers, { series, episode, extraQueryTerm, p
   const isBatch = !episode;
   const outcomes = await Promise.all(indexers.map(async (idx) => {
     try {
-      const result = idx.type === 'nyaa'
-        ? (isBatch ? await nyaaSearch.searchBatchReleases(series, { extraQueryTerm, profile, seasonNumber }) : await nyaaSearch.searchReleasesForEpisode(series, episode, profile))
-        : (isBatch ? await prowlarrSearch.searchBatchReleases(idx.config, series, { extraQueryTerm, profile, seasonNumber }) : await prowlarrSearch.searchReleasesForEpisode(idx.config, series, episode, profile));
+      let result;
+      if (idx.type === 'nyaa') {
+        result = isBatch ? await nyaaSearch.searchBatchReleases(series, { extraQueryTerm, profile, seasonNumber }) : await nyaaSearch.searchReleasesForEpisode(series, episode, profile);
+      } else if (idx.type === 'seadex') {
+        // Not a search engine — a lookup of this series' curated picks
+        // (server/lib/seadex.js). Contributes its own torrents only to a
+        // batch search scoped like its AniList entry (whole series or
+        // season 1); for every search it contributes flags, applied below.
+        result = await seadex.lookupForSearch(series, { wantReleases: isBatch && (seasonNumber == null || Number(seasonNumber) === 1) });
+      } else if (idx.type === 'animetosho') {
+        result = isBatch ? await animetoshoSearch.searchBatchReleases(series, { extraQueryTerm, profile, seasonNumber }) : await animetoshoSearch.searchReleasesForEpisode(series, episode, profile);
+      } else {
+        result = isBatch ? await prowlarrSearch.searchBatchReleases(idx.config, series, { extraQueryTerm, profile, seasonNumber }) : await prowlarrSearch.searchReleasesForEpisode(idx.config, series, episode, profile);
+      }
       return { type: idx.type, ...result };
     } catch (err) {
       return { type: idx.type, ok: false, error: err.message };
@@ -170,13 +188,23 @@ async function searchRealIndexers(indexers, { series, episode, extraQueryTerm, p
     // muddled combined message.
     return { ok: false, error: failed[0]?.error || 'All enabled real indexers failed.' };
   }
-  const merged = await sortAndLimitReleases(dedupeReleases(succeeded.flatMap((o) => o.releases)), profile);
+  // SeaDex flags ride on info hashes, so they're applied after dedupe —
+  // the copy that survives (usually a real indexer's, with real seeders and
+  // its real title) is the one that gets marked, whichever indexer it came
+  // from. quality.js's rankReleaseCandidates then ranks flagged releases
+  // first among in-profile ones.
+  const seadexFlags = new Map();
+  for (const o of succeeded) if (o.flags) for (const [hash, flag] of o.flags) seadexFlags.set(hash, flag);
+  const deduped = dedupeReleases(succeeded.flatMap((o) => o.releases)).map((r) => (
+    r.infoHash && seadexFlags.has(r.infoHash) ? { ...r, seadex: seadexFlags.get(r.infoHash) } : r
+  ));
+  const merged = await sortAndLimitReleases(deduped, profile);
   return {
     ok: true,
     releases: merged,
     // Surfaced to the user only when at least one indexer worked but
     // another didn't, so a fully-working setup stays silent about it.
-    partialError: failed.length > 0 ? failed.map((f) => `${f.type === 'nyaa' ? 'Nyaa.si' : 'Prowlarr'}: ${f.error}`).join('; ') : null,
+    partialError: failed.length > 0 ? failed.map((f) => `${INDEXER_LABELS[f.type] || f.type}: ${f.error}`).join('; ') : null,
   };
 }
 

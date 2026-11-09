@@ -7,6 +7,7 @@ const { sanitizeForPath } = require('../lib/episode-paths');
 const { recomputeSeriesEpisodeStats } = require('../lib/series-stats');
 const { warmEpisodesInBackground } = require('./episodes');
 const { fetchMalContentFlags, isHentaiMetadata } = require('../lib/mal');
+const { enrichSeriesIds, backfillSeriesIds } = require('../lib/anime-ids');
 
 // ---------------------------------------------------------------------------
 // Library persistence (the `series` table)
@@ -329,6 +330,18 @@ const SERIES_SEED = [
     // backfillHentaiFlags below resolves once, rather than a 0 that would
     // silently claim "checked, not hentai" for something nobody looked at.
     ['is_hentai', 'INTEGER'],
+    // Cross-site IDs (see server/lib/anime-ids.js) — filled in from the
+    // Fribb/anime-lists mapping after a series is added (and backfilled
+    // once for older rows). They let release search reach ID-keyed sources
+    // (AnimeTosho by AniDB ID, SeaDex by AniList ID) and pull every known
+    // title for the show from AniList into alt_titles. ids_checked_at
+    // records the last lookup so a show the mapping doesn't cover isn't
+    // re-queried on every start.
+    ['mal_id', 'INTEGER'],
+    ['anilist_id', 'INTEGER'],
+    ['anidb_id', 'INTEGER'],
+    ['tvdb_id', 'INTEGER'],
+    ['ids_checked_at', 'TEXT'],
   ]) {
     if (!seriesColumns.includes(col)) {
       await db.exec(`ALTER TABLE series ADD COLUMN ${col} ${def}`);
@@ -356,6 +369,7 @@ const SERIES_SEED = [
   }
 
   await backfillHentaiFlags();
+  await backfillSeriesIds();
 });
 
 // The genre list lives inside series.meta for seeded/older rows — "2019 ·
@@ -436,6 +450,12 @@ async function rowToSeries(row) {
     path: row.path,
     ignoreSpecials: !!row.ignore_specials,
     isHentai: !!row.is_hentai,
+    ids: {
+      mal: row.mal_id || null,
+      anilist: row.anilist_id || null,
+      anidb: row.anidb_id || null,
+      tvdb: row.tvdb_id || null,
+    },
     tagIds: await tagIdsForSeries(row.id),
   };
 }
@@ -484,6 +504,15 @@ async function handleSeriesApi(req, res, urlPath) {
       ? [...new Set(body.altTitles.map((t) => String(t || '').trim()).filter((t) => t && t.length <= 200))].slice(0, 5)
       : [];
     const altTitlesJson = altTitles.length > 0 ? JSON.stringify(altTitles) : null;
+    // Cross-site IDs the Add New page already knows (an add-by-ID/link
+    // search result carries them — see routes/mal-search.js). Anything not
+    // supplied is filled in by enrichSeriesIds right after the insert.
+    const bodyIds = body.ids && typeof body.ids === 'object' ? body.ids : {};
+    const idOrNull = (v) => (Number.isInteger(Number(v)) && Number(v) > 0 ? Number(v) : null);
+    const malId = idOrNull(bodyIds.mal) || (externalSource === 'mal' ? idOrNull(externalId) : null);
+    const anilistId = idOrNull(bodyIds.anilist);
+    const anidbId = idOrNull(bodyIds.anidb);
+    const tvdbId = idOrNull(bodyIds.tvdb) || (externalSource === 'tvdb' ? idOrNull(externalId) : null);
 
     // Duplicate check. This is the thing that actually stops a title from
     // being added twice — the Add New page tries to pre-empt this in the UI
@@ -502,6 +531,15 @@ async function handleSeriesApi(req, res, urlPath) {
         .get(externalId, externalSource);
       if (byExternal) {
         sendJson(res, 409, { error: `"${byExternal.title}" is already in the Library`, existingId: byExternal.id });
+        return true;
+      }
+    }
+    // Same show added from a different source (MAL vs TVDB result) is still
+    // the same show once its MAL ID is known.
+    if (malId) {
+      const byMal = await db.prepare('SELECT id, title FROM series WHERE mal_id = ?').get(malId);
+      if (byMal) {
+        sendJson(res, 409, { error: `"${byMal.title}" is already in the Library`, existingId: byMal.id });
         return true;
       }
     }
@@ -538,10 +576,10 @@ async function handleSeriesApi(req, res, urlPath) {
     const ignoreSpecials = await resolveIgnoreSpecials(body.ignoreSpecials);
 
     const created = await db.prepare(`
-      INSERT INTO series (title, badge, fill, pct, eps, monitored, status, air_status, next_air_days, added_days_ago, poster, meta, overview, external_id, external_source, alt_titles, path, quality_profile, ignore_specials, is_hentai, created_at)
-      VALUES (?, NULL, 'accent', 0, '0 / 0', 1, ?, ?, NULL, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO series (title, badge, fill, pct, eps, monitored, status, air_status, next_air_days, added_days_ago, poster, meta, overview, external_id, external_source, alt_titles, path, quality_profile, ignore_specials, is_hentai, mal_id, anilist_id, anidb_id, tvdb_id, created_at)
+      VALUES (?, NULL, 'accent', 0, '0 / 0', 1, ?, ?, NULL, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       RETURNING *
-    `).get(title, status, airStatus, body.poster || null, meta, body.overview || null, externalId, externalSource, altTitlesJson, defaultPath, qualityProfile, ignoreSpecials, isHentai, db.now());
+    `).get(title, status, airStatus, body.poster || null, meta, body.overview || null, externalId, externalSource, altTitlesJson, defaultPath, qualityProfile, ignoreSpecials, isHentai, malId, anilistId, anidbId, tvdbId, db.now());
     logInfo('SeriesService', `Series added: ${title}${externalSource ? ` (${externalSource}#${externalId})` : ''}`);
     sendJson(res, 201, await rowToSeries(created));
     // Start warming the episode cache immediately instead of waiting for
@@ -552,6 +590,10 @@ async function handleSeriesApi(req, res, urlPath) {
     // failed TVDB fetch shouldn't hold up "series added" or surface as an
     // error on this request.
     warmEpisodesInBackground(created);
+    // Not awaited, same as the episode warm-up above: the ID mapping may
+    // need its first download, and AniList may be slow — neither should
+    // hold up "series added."
+    enrichSeriesIds(created.id).catch(() => {});
     return true;
   }
 

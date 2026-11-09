@@ -5,8 +5,78 @@
 const { logWarn, logError } = require('../logger');
 const { sendJson } = require('../lib/http');
 const { sleep } = require('../lib/util');
-const { fetchMalSearchOnce, MAL_MAX_ATTEMPTS, MAL_RETRY_DELAYS_MS } = require('../lib/mal');
-const { tvdbSearchAnimeOnly } = require('../lib/tvdb');
+const { fetchMalSearchOnce, fetchMalAnimeById, MAL_MAX_ATTEMPTS, MAL_RETRY_DELAYS_MS } = require('../lib/mal');
+const { tvdbSearchAnimeOnly, fetchTvdbSeriesById } = require('../lib/tvdb');
+const { resolveIds } = require('../lib/anime-ids');
+
+// ---------------------------------------------------------------------------
+// Add by ID or link. Title search guesses; an ID doesn't — pasting a
+// MyAnimeList/AniList/AniDB/TheTVDB link (or typing "mal:3470",
+// "anilist:3470", "anidb:5584", "tvdb:81752") on the Add New page looks up
+// exactly that show. A bare number is deliberately NOT treated as an ID:
+// "86", "91 Days" and "100-man no Inochi no Ue ni..." are real titles.
+//
+// Whatever the input, the result is fetched from MAL when the show has a
+// MAL ID (same result shape, same add flow, same metadata as a normal
+// search), falling back to TVDB — AniList/AniDB IDs are translated through
+// the Fribb/anime-lists mapping (server/lib/anime-ids.js). Every result
+// carries `ids` so POST /api/series stores them straight away.
+// ---------------------------------------------------------------------------
+const ID_URL_PATTERNS = [
+  [/myanimelist\.net\/anime\/(\d+)/i, 'mal'],
+  [/anilist\.co\/anime\/(\d+)/i, 'anilist'],
+  [/anidb\.net\/(?:anime\/|perl-bin\/animedb\.pl\?\S*\baid=)(\d+)/i, 'anidb'],
+  [/thetvdb\.com\/(?:dereferrer\/)?series\/(\d+)(?:[/?#]|$)/i, 'tvdb'],
+  [/thetvdb\.com\/series\/([a-z0-9-]+)/i, 'tvdb-slug'],
+];
+const ID_PREFIXES = { mal: 'mal', myanimelist: 'mal', anilist: 'anilist', al: 'anilist', anidb: 'anidb', adb: 'anidb', tvdb: 'tvdb', thetvdb: 'tvdb' };
+
+function parseIdQuery(q) {
+  for (const [re, kind] of ID_URL_PATTERNS) {
+    const m = re.exec(q);
+    if (m) return { kind, value: m[1] };
+  }
+  const prefixed = /^\s*([a-z]+)\s*[:#]\s*(\d+)\s*$/i.exec(q);
+  if (prefixed && ID_PREFIXES[prefixed[1].toLowerCase()]) return { kind: ID_PREFIXES[prefixed[1].toLowerCase()], value: prefixed[2] };
+  return null;
+}
+
+async function lookupById({ kind, value }) {
+  if (kind === 'tvdb-slug') {
+    const show = await fetchTvdbSeriesById(value);
+    if (!show) return [];
+    const ids = await resolveIds({ tvdbId: show.id });
+    return [{ ...show, ids: { mal: ids.malId, anilist: ids.anilistId, anidb: ids.anidbId, tvdb: show.id } }];
+  }
+  const given = {
+    malId: kind === 'mal' ? Number(value) : null,
+    anilistId: kind === 'anilist' ? Number(value) : null,
+    anidbId: kind === 'anidb' ? Number(value) : null,
+    tvdbId: kind === 'tvdb' ? Number(value) : null,
+  };
+  const ids = await resolveIds(given);
+  const idsOut = { mal: ids.malId, anilist: ids.anilistId, anidb: ids.anidbId, tvdb: ids.tvdbId };
+  let malErr = null;
+  if (ids.malId && kind !== 'tvdb') {
+    try {
+      const show = await fetchMalAnimeById(ids.malId);
+      if (show) return [{ ...show, ids: idsOut }];
+    } catch (err) {
+      malErr = err; // fall through to TVDB below when there's a TVDB ID to try
+    }
+  }
+  if (ids.tvdbId) {
+    const show = await fetchTvdbSeriesById(ids.tvdbId);
+    if (show) return [{ ...show, ids: idsOut }];
+  }
+  if (malErr) throw malErr;
+  if (!ids.malId && !ids.tvdbId) {
+    const err = new Error(`No MyAnimeList or TheTVDB entry is known for ${kind} #${value}.`);
+    err.code = 'ID_UNMAPPED';
+    throw err;
+  }
+  return [];
+}
 const { filterRelevantResults } = require('../lib/search-relevance');
 
 async function handleMalApi(req, res, urlPath) {
@@ -18,6 +88,17 @@ async function handleMalApi(req, res, urlPath) {
     return true;
   }
   const query = q.trim();
+
+  const idQuery = parseIdQuery(query);
+  if (idQuery) {
+    try {
+      sendJson(res, 200, await lookupById(idQuery));
+    } catch (err) {
+      logWarn('MalService', `Lookup by ${idQuery.kind} "${idQuery.value}" failed: ${err.message}`);
+      sendJson(res, err.code === 'ID_UNMAPPED' ? 404 : 502, { error: err.message });
+    }
+    return true;
+  }
 
   // Tier 1: the official API, retried on transient failures. officialResults
   // stays null until an attempt actually succeeds (even with zero matches)
@@ -112,4 +193,4 @@ async function handleMalApi(req, res, urlPath) {
   return true;
 }
 
-module.exports = { handleMalApi };
+module.exports = { handleMalApi, parseIdQuery };

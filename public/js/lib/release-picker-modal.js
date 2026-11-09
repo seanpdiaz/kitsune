@@ -178,6 +178,14 @@ function initReleasePickerModal() {
   // ever set when the indexer actually supplied one; a release whose source
   // didn't include a page link stays plain unclickable text rather than a
   // dead or misleading link.
+  // SeaDex's community pick (server/lib/seadex.js) — ranked first among
+  // in-profile releases server-side; this just says why it's on top.
+  function seadexFlag(r) {
+    if (r.seadex === 'best') return ' <span class="quality-flag seadex-flag" title="SeaDex (releases.moe) lists this as the best release">SeaDex best</span>';
+    if (r.seadex === 'alt') return ' <span class="quality-flag seadex-flag seadex-alt" title="SeaDex (releases.moe) lists this as an alternative">SeaDex alt</span>';
+    return '';
+  }
+
   function titleCell(r) {
     if (r.infoUrl) {
       return `<a class="release-title" href="${escapeAttr(r.infoUrl)}" target="_blank" rel="noopener noreferrer" title="${escapeAttr(r.title)}">${r.title}</a>`;
@@ -228,7 +236,7 @@ function initReleasePickerModal() {
     listEl.innerHTML = view.map(({ r, origIndex }) => `
       <div class="release-row${r.inProfile === false ? ' out-of-profile' : ''}" data-position="${origIndex}">
         ${titleCell(r)}
-        <span>${r.indexer}${r.isBatch ? ' · batch' : ''}</span>
+        <span>${r.indexer}${r.isBatch ? ` · batch${r.fileCount ? ` (${r.fileCount} eps)` : ''}` : ''}${seadexFlag(r)}</span>
         <span class="audio-tag">${r.quality}${r.inProfile === false ? ' <span class="quality-flag out-of-profile-flag" title="Not in this series\' Quality Profile">Outside profile</span>' : ''}</span>
         <span>${formatBytes(r.sizeBytes)}</span>
         <span>${r.seeders}</span>

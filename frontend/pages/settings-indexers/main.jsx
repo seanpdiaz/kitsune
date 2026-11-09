@@ -24,6 +24,14 @@ const indexerTypes = [
   // (unlike Prowlarr's baseUrl/apiKey) since Nyaa.si's RSS endpoint needs no
   // account or URL to point at.
   { key: 'nyaa', name: 'Nyaa.si', protocol: 'Torrent', meta: 'Anime', extra: { type: 'nyaa' } },
+  // Real (server/lib/animetosho-search.js): searches by a series' AniDB ID
+  // when known, so it finds releases whose titles don't match any of the
+  // series' names. Mirrors Nyaa.si, so it complements rather than replaces it.
+  { key: 'animetosho', name: 'AnimeTosho', protocol: 'Torrent', meta: 'Anime (AniDB-linked)', extra: { type: 'animetosho' } },
+  // Real (server/lib/seadex.js): not a search engine — looks up the
+  // community's best-release picks for a series by AniList ID, offers them
+  // in batch searches, and ranks them first (Grab best match takes them).
+  { key: 'seadex', name: 'SeaDex', protocol: 'Torrent', meta: 'Best-release picks', extra: { type: 'seadex' } },
   { key: 'tokyotosho', name: 'TokyoTosho', protocol: 'Torrent', meta: 'Anime' },
   { key: 'anirena', name: 'Anirena', protocol: 'Torrent', meta: 'Anime' },
   { key: 'shanaproject', name: 'Shana Project', protocol: 'Torrent', meta: 'Anime (RSS)' },

@@ -27,7 +27,7 @@ const http = require('http');
 const { logDebug, logInfo, logWarn } = require('../logger');
 const { rankReleaseCandidates } = require('./quality');
 const {
-  titleMatchesEpisode, isBatchRelease, releaseCoversSeason, classifyQualityFromTitle, simplifyTitleForSearch, isHttpUrl,
+  titleMatchesEpisode, isBatchRelease, classifyReleaseShape, releaseCoversSeason, classifyQualityFromTitle, simplifyTitleForSearch, isHttpUrl, isUsableAltQuery,
 } = require('./nyaa-search');
 
 const REQUEST_TIMEOUT_MS = 15000; // longer than Nyaa.si's 10s — Prowlarr fans a query out to every configured indexer and waits on the slowest one
@@ -258,6 +258,11 @@ async function searchProwlarr(config, query) {
     seeders: typeof r.seeders === 'number' ? r.seeders : 0,
     leechers: typeof r.leechers === 'number' ? r.leechers : 0,
     indexerName: r.indexer || 'Prowlarr',
+    // Prowlarr passes through a torrent's file count when the underlying
+    // indexer reports one (Torznab's `files` attr — AnimeTosho, Nyaa via
+    // Cardigann, etc.). Batch search uses it to settle a title that's
+    // neither pack- nor single-episode-shaped; see searchBatchReleases.
+    fileCount: typeof r.files === 'number' && r.files > 0 ? r.files : null,
   })).filter((r) => !!r.magnetUrl);
 
   logDebug(
@@ -283,6 +288,7 @@ async function searchWithFallback(config, series, matchFn, { extraQueryTerm } = 
   try {
     altTitles = series.alt_titles ? JSON.parse(series.alt_titles) : [];
   } catch { /* malformed JSON — treat as no alt titles */ }
+  const primaryCount = attempts.length;
   attempts.push(...altTitles);
 
   logInfo(
@@ -292,11 +298,17 @@ async function searchWithFallback(config, series, matchFn, { extraQueryTerm } = 
 
   let matches = [];
   const seenQueries = new Set();
-  for (const attempt of attempts) {
+  for (const [attemptIndex, attempt] of attempts.entries()) {
     // Same empty-query guard as nyaa-search.js's own fix — a non-Latin-only
     // alt title (e.g. a Japanese title) simplifies to "", which is an
     // unscoped query, not a real search for this show.
     const query = simplifyTitleForSearch(attempt);
+    // Same guard as nyaa-search.js's searchWithFallback (see
+    // isUsableAltQuery there): extra alt titles must identify the show.
+    if (attemptIndex >= primaryCount && !isUsableAltQuery(query)) {
+      logDebug('IndexerService', `Skipping Prowlarr alt title "${attempt}" — too short to identify the show on its own.`);
+      continue;
+    }
     if (query.length < 2 || seenQueries.has(query)) {
       logDebug('IndexerService', `Skipping Prowlarr attempt "${attempt}" — simplifies to "${query}" (${query.length < 2 ? 'too short/empty' : 'already tried'}).`);
       continue;
@@ -333,6 +345,7 @@ async function toReleaseCandidates(matches, extra, profile) {
     magnetUrl: r.magnetUrl,
     infoHash: r.infoHash,
     infoUrl: r.infoUrl,
+    fileCount: r.fileCount || null,
     source: 'real',
     ...extra,
   })));
@@ -379,7 +392,17 @@ async function searchBatchReleases(config, series, { extraQueryTerm, profile, se
     // See nyaa-search.js's releaseCoversSeason comment — same real miss
     // (a different season's batch slipping into a season-scoped search)
     // applies here too, since Prowlarr aggregates the same trackers.
-    matches = await searchWithFallback(config, series, (r) => isBatchRelease(r.title) && releaseCoversSeason(r.title, seasonNumber), { extraQueryTerm });
+    // A pack-shaped title, or — for a title that's neither pack- nor
+    // single-episode-shaped ("[neoHEVC] Special A Class S.A. [DVD 480p
+    // ...]") — a reported file count of 2+. Prowlarr's search API doesn't
+    // hand back a fetchable .torrent for every indexer, so unlike Nyaa.si's
+    // own search (which reads the file list itself) an unlabeled release
+    // with no file count from Prowlarr stays excluded, same as before.
+    matches = await searchWithFallback(config, series, (r) => {
+      const shape = classifyReleaseShape(r.title);
+      const isPack = shape === 'batch' || (shape === 'unknown' && r.fileCount >= 2);
+      return isPack && releaseCoversSeason(r.title, seasonNumber);
+    }, { extraQueryTerm });
   } catch (err) {
     logWarn('IndexerService', `Prowlarr batch search failed for "${series.title}": ${err.message}`);
     return { ok: false, error: err.message };
