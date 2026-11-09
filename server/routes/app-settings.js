@@ -60,6 +60,13 @@ async function handleAppSettingsApi(req, res, urlPath) {
       INSERT INTO app_settings (section, data, updated_at) VALUES (?, ?, ?)
       ON CONFLICT(section) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at
     `).run(section, JSON.stringify(merged), db.now());
+    // Log Level / Log Retention / History Retention live in 'general' —
+    // apply them now rather than waiting for the next hourly run. Required
+    // lazily: retention.js pulls in logger.js and routes/history.js, and
+    // nothing else in this file needs them.
+    if (section === 'general') {
+      await require('../lib/retention').applyRetentionSettings(merged);
+    }
     sendJson(res, 200, merged);
     return true;
   }

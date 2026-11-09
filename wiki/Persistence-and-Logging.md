@@ -208,8 +208,14 @@ recorded.
   row to a `logs` table in the same SQLite database as everything else — that table is
   created before any other table, since the seed steps for Tags/Settings/Library log
   through it too.
-- Kept to the newest 500 rows (pruned on every write) so a long-running server doesn't
-  grow this file forever.
+- **Log Level** (Settings > General > Logging): Debug, Info (default), Warn or Error.
+  It's a minimum — entries below it are neither stored nor printed to the console. A
+  value of "Trace" saved back when this dropdown was decorative is treated as Debug.
+  Applied at startup (before the first request) and immediately on save.
+- **Log Retention** (same card): days to keep log rows, 1–365, default 14. There's also
+  a hard ceiling of 100,000 rows so Debug plus a long retention can't grow forever.
+- Retention used to be "newest 500 rows, pruned on every write"; it's now day-based and
+  handled by `server/lib/retention.js` — see "Retention and housekeeping" below.
 - What actually gets logged: server startup, database seeding/migrations, every HTTP
   request (method, path, status, duration — at `debug` level, so routine page-load
   traffic doesn't clutter the default view but is there if you filter down to it), tag
@@ -227,6 +233,28 @@ recorded.
   buttons) is still a static mockup — this pass covers structured logging into the
   database and the log table itself, not writing to and rotating actual files on disk.
 
+
+## Retention and housekeeping
+
+Both `logs` and `history` used to keep only their newest 500 rows, pruned on every insert.
+Retention is now set in days on Settings > General:
+
+| Setting | Key in the `general` app_settings section | Range | Default |
+|---|---|---|---|
+| Log Level | `general-17` | Debug / Info / Warn / Error | Info |
+| Log Retention | `logRetentionDays` | 1–365 days | 14 |
+| History Retention | `historyRetentionDays` | 0–3650 days (0 = keep forever) | 90 |
+
+`server/lib/retention.js` reads these, sets the logger's minimum level and deletes rows
+older than the cutoff (`DELETE ... WHERE timestamp < ?` / `created_at < ?` — both columns
+are `db.now()`'s fixed-width UTC text, so string comparison is date comparison on SQLite
+and Postgres alike). It runs once at startup, hourly after that, and right after any save
+to the `general` section (`routes/app-settings.js` calls `applyRetentionSettings`), so
+shortening a retention takes effect immediately. Out-of-range or empty values fall back
+to the defaults above. Each run that removes anything logs one `Housekeeping` line.
+
+The 500 figures that remain (`MAX_LOG_ROWS`, `MAX_HISTORY_ROWS`) are now only the most
+rows a single `GET /api/logs` / `GET /api/history` response returns.
 
 ---
 

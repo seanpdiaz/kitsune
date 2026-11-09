@@ -60,6 +60,7 @@ const { startDiskUsageScheduler } = require('./server/lib/disk-usage');
 const { startPermissionsScheduler } = require('./server/lib/permissions');
 const { startRefreshSeriesScheduler } = require('./server/lib/refresh-series-task');
 const { startUpdateCheckScheduler } = require('./server/lib/update-check');
+const { startRetentionScheduler } = require('./server/lib/retention');
 
 // Default for how often the Library dashboard's Disk usage stat card
 // recomputes (a real recursive directory walk — expensive, so it runs on a
@@ -229,6 +230,13 @@ const server = http.createServer(async (req, res) => {
     console.error('Fatal: database initialization failed:', err);
     process.exit(1);
   }
+
+  // Applies Settings > General's Log Level before the first request is
+  // served (so startup and request logging already honor it) and prunes
+  // logs/history past their retention, then re-prunes hourly — see
+  // server/lib/retention.js. Awaited, unlike the schedulers below, because
+  // it's two quick DELETEs and the log level should be in place first.
+  await startRetentionScheduler();
 
   server.listen(PORT, () => {
     logInfo('Server', `Kitsune mockup running at http://localhost:${PORT}`);

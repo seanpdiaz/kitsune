@@ -27,15 +27,35 @@ const DEFAULTS = {
   'general-16': 28,
   'general-17': 'Info',
   'general-18': true,
+  logRetentionDays: 14,
+  historyRetentionDays: 90,
+};
+
+// Log Level is a minimum: entries below it are neither stored nor printed
+// (see server/logger.js). Kitsune has no Trace level; a value saved back
+// when this dropdown was decorative and offered "Trace" is shown as Debug,
+// which is what the server applies for it too.
+const LOG_LEVEL_OPTIONS = [
+  { value: 'Debug', label: 'Debug' },
+  { value: 'Info', label: 'Info' },
+  { value: 'Warn', label: 'Warn' },
+  { value: 'Error', label: 'Error' },
+];
+const LOG_LEVEL_DESC = {
+  Debug: 'Everything, including every HTTP request. Very noisy.',
+  Info: 'Info, warnings and errors. Recommended.',
+  Warn: 'Warnings and errors only.',
+  Error: 'Errors only.',
 };
 
 export default function GeneralPage() {
   const { values: v, setField } = useSettingsForm('general', DEFAULTS);
   const proxyDisabled = !v.proxyEnabledToggle;
+  const logLevel = v['general-17'] === 'Trace' ? 'Debug' : (v['general-17'] || 'Info');
 
   return (
     <>
-      <p className="settings-subtitle">Networking, proxy, updates, backups, and logging.</p>
+      <p className="settings-subtitle">Networking, proxy, updates, backups, logging, and history.</p>
 
       <SettingsCard title="Host" desc="Network binding for the Kitsune web interface.">
         <FormRow name="Bind Address" desc="Interface Kitsune listens on.">
@@ -89,12 +109,21 @@ export default function GeneralPage() {
         </FormRow>
       </SettingsCard>
 
-      <SettingsCard title="Logging">
-        <FormRow name="Log Level">
-          <SelectField id="general-17" value={v['general-17']} onChange={(val) => setField('general-17', val)} options={['Info', 'Debug', 'Trace']} />
+      <SettingsCard title="Logging" desc="What System > Logs keeps, and for how long.">
+        <FormRow name="Log Level" desc={`${LOG_LEVEL_DESC[logLevel]} Lower levels are discarded.`}>
+          <SelectField id="general-17" value={logLevel} onChange={(val) => setField('general-17', val)} options={LOG_LEVEL_OPTIONS} />
+        </FormRow>
+        <FormRow name="Log Retention" desc="Days to keep log entries before deleting (1–365).">
+          <NumberField id="logRetentionDays" value={v.logRetentionDays} onChange={(val) => setField('logRetentionDays', val)} />
         </FormRow>
         <FormRow name="Log to File">
           <ToggleField id="general-18" checked={v['general-18']} onChange={(val) => setField('general-18', val)} />
+        </FormRow>
+      </SettingsCard>
+
+      <SettingsCard title="History" desc="Grab, import, failure and deletion events shown on Activity > History.">
+        <FormRow name="History Retention" desc="Days to keep history before deleting. 0 keeps it forever.">
+          <NumberField id="historyRetentionDays" value={v.historyRetentionDays} onChange={(val) => setField('historyRetentionDays', val)} />
         </FormRow>
       </SettingsCard>
     </>
