@@ -22,11 +22,13 @@
     <div class="page-tabs"></div>
     <p class="settings-subtitle">A record of grabs, imports, failures, and removals.</p>
 
-    <!-- Both React now (see README's "React migration" section) — one
+    <!-- All React now (see README's "React migration" section) — one
          component/state drives the tab strip (portaled into
-         historyFilterTabsRoot) and the list below. -->
+         historyFilterTabsRoot), the show search box (portaled into
+         historySearchRoot) and the list below. -->
     <div class="filter-row" style="margin-bottom: 14px;">
       <div class="tabs" id="historyFilterTabsRoot"></div>
+      <div id="historySearchRoot"></div>
     </div>
 
     <div class="event-header">

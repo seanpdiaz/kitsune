@@ -69,18 +69,44 @@ async function handleHistoryApi(req, res, urlPath) {
 
   const url = new URL(req.url, 'http://localhost');
   const type = url.searchParams.get('type');
-  const limit = Math.min(parseInt(url.searchParams.get('limit'), 10) || 100, MAX_HISTORY_ROWS);
+  const q = (url.searchParams.get('q') || '').trim();
+  const seriesId = parseInt(url.searchParams.get('seriesId'), 10);
+  const showFilter = Boolean(q) || Number.isInteger(seriesId);
+  // Looking up one show should return every event still retained for it, not
+  // just whatever happens to fall inside the newest 100 rows overall.
+  const defaultLimit = showFilter ? MAX_HISTORY_ROWS : 100;
+  const limit = Math.min(parseInt(url.searchParams.get('limit'), 10) || defaultLimit, MAX_HISTORY_ROWS);
 
-  const whereType = type && type !== 'all' ? 'WHERE h.event_type = ?' : '';
+  const where = [];
+  const params = [];
+  if (type && type !== 'all') {
+    where.push('h.event_type = ?');
+    params.push(type);
+  }
+  if (Number.isInteger(seriesId)) {
+    where.push('h.series_id = ?');
+    params.push(seriesId);
+  } else if (q) {
+    // Show-name search. Also matches the release title, so events for a
+    // series that has since been deleted (its LEFT JOIN title is now null)
+    // still turn up by name. LOWER() on both sides because LIKE is
+    // case-insensitive on SQLite but case-sensitive on Postgres; % and _ in
+    // the user's text are escaped so they match literally.
+    const pattern = `%${q.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    where.push(`(LOWER(s.title) LIKE ? ESCAPE '\\' OR LOWER(h.release_title) LIKE ? ESCAPE '\\')`);
+    params.push(pattern, pattern);
+  }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
   const rows = await db.prepare(`
     SELECT h.*, s.title AS series_title, e.season_number, e.num
     FROM history h
     LEFT JOIN series s ON s.id = h.series_id
     LEFT JOIN episodes e ON e.id = h.episode_id
-    ${whereType}
+    ${whereSql}
     ORDER BY h.id DESC
     LIMIT ?
-  `).all(...(whereType ? [type, limit] : [limit]));
+  `).all(...params, limit);
 
   sendJson(res, 200, { history: rows.map(rowToHistoryEntry) });
   return true;
