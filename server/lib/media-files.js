@@ -301,6 +301,12 @@ function guessSeasonEpisode(filename, seasonHint) {
   m = /\s(\d{1,3})(?:v\d)?\s*(?=\[|\(|$)/.exec(normalized);
   if (m) return { season: seasonHint ?? null, episode: Number(m[1]), confident: seasonHint != null };
 
+  // The whole filename is just the number — "Season 02/03.mkv", a common
+  // layout for batch releases where the show and season live in the folder
+  // names. Nothing else in the name could be mistaken for it.
+  m = /^\s*(\d{1,3})(?:v\d)?\s*$/.exec(normalized);
+  if (m) return { season: seasonHint ?? null, episode: Number(m[1]), confident: seasonHint != null };
+
   return { season: seasonHint ?? null, episode: null, confident: false };
 }
 
@@ -311,5 +317,5 @@ function guessSeasonEpisode(filename, seasonHint) {
 // trying to match any of them to an episode.
 module.exports = {
   isVideoFile, isSampleFile, walkVideoFiles, summarizeFiles, guessQualityTierName, guessSeasonEpisode,
-  resolutionGroupFromHeight,
+  resolutionGroupFromHeight, seasonNumberFromFolderName, guessResolutionGroup,
 };

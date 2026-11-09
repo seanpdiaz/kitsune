@@ -44,6 +44,7 @@ const NAV_SECTIONS = [
     subs: [
       { href: 'wanted-missing.html', label: 'Missing' },
       { href: 'wanted-cutoff-unmet.html', label: 'Cutoff Unmet' },
+      { href: 'wanted-manual-import.html', label: 'Manual Import' },
     ],
   },
   { divider: true },

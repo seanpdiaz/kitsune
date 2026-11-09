@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kitsune — Wanted — Manual Import</title>
+<script src="js/sidebar-boot.js"></script>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div class="layout">
+
+  <aside class="sidebar" id="sidebar"></aside>
+
+  <main class="main">
+    <div class="top-row">
+      <div>
+        <h1 class="settings-heading">Wanted</h1>
+      </div>
+    </div>
+
+    <div class="page-tabs"></div>
+    <!-- React (see README's "React migration" section) — frontend/pages/wanted-manual-import/. -->
+    <div id="manualImportRoot"></div>
+
+  </main>
+</div>
+
+<script type="module" src="app.js"></script>
+<script type="module" src="dist/wanted-manual-import.js"></script>
+</body>
+</html>

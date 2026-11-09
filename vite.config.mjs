@@ -51,6 +51,7 @@ export default defineConfig({
         'activity-blocklist': resolve(process.cwd(), 'frontend/pages/activity-blocklist/main.jsx'),
         'wanted-missing': resolve(process.cwd(), 'frontend/pages/wanted-missing/main.jsx'),
         'wanted-cutoff-unmet': resolve(process.cwd(), 'frontend/pages/wanted-cutoff-unmet/main.jsx'),
+        'wanted-manual-import': resolve(process.cwd(), 'frontend/pages/wanted-manual-import/main.jsx'),
         'calendar': resolve(process.cwd(), 'frontend/pages/calendar/main.jsx'),
         'settings-indexers': resolve(process.cwd(), 'frontend/pages/settings-indexers/main.jsx'),
         'settings-import-lists': resolve(process.cwd(), 'frontend/pages/settings-import-lists/main.jsx'),

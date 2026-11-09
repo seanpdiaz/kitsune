@@ -930,7 +930,18 @@ select {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
+  /* The action toolbar has grown to nine controls (Monitored + 8 buttons),
+     wider than .detail-info on most desktop widths. Without wrapping, its
+     fixed width squeezed the title into a narrow column (one word per line)
+     and pushed Delete off the right edge. Wrapping lets the toolbar drop
+     onto its own line below the title when the two don't fit side by side. */
+  flex-wrap: wrap;
+  row-gap: 12px;
 }
+
+/* Title block: grow into whatever space is left, but never get narrower
+   than 240px before the toolbar is forced onto the next line. */
+.title-row > :first-child { flex: 1 1 240px; min-width: 0; }
 
 .title-row h1 {
   font-size: 21px;
@@ -945,7 +956,10 @@ select {
   margin: 0;
 }
 
-.detail-actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+/* flex: 0 1 auto (not flex-shrink: 0) + flex-wrap: once the toolbar is on
+   its own line it may still be wider than .detail-info, so it shrinks to
+   the line width and wraps its buttons rather than overflowing the page. */
+.detail-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex: 0 1 auto; min-width: 0; }
 
 .monitor-toggle {
   display: flex;
@@ -1382,7 +1396,7 @@ select {
 .health-row { grid-template-columns: 150px 1fr; }
 .event-header, .event-row { grid-template-columns: 90px 100px 1fr; }
 .log-header, .log-row { grid-template-columns: 90px 70px 160px 1fr; }
-.queue-header, .queue-row { grid-template-columns: 1fr 110px 80px 160px 120px 32px 32px; }
+.queue-header, .queue-row { grid-template-columns: 1fr 110px 80px 160px 120px 32px 32px 32px; }
 .blocklist-header, .blocklist-row { grid-template-columns: 1fr 140px 130px 110px 110px 32px; }
 /* Files column added between Match and Status for the real per-folder file
    summary (count/size/formats) — see frontend/pages/library-import/LibraryImportPage.jsx. */
@@ -3567,3 +3581,111 @@ a.release-title:hover { text-decoration: underline; }
   .calendar-weekdays,
   .calendar-grid { min-width: 700px; }
 }
+
+
+/* ---------- Wanted > Manual Import ---------- */
+/* frontend/pages/wanted-manual-import/ManualImportPage.jsx */
+
+.mi-source {
+  padding: 14px 16px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  margin-bottom: 16px;
+}
+.mi-folder-form { display: flex; gap: 8px; align-items: center; }
+.mi-folder-form .field-input { flex: 1; height: 36px; font-family: 'JetBrains Mono', monospace; font-size: 12.5px; }
+.mi-folder-form button { height: 36px; flex-shrink: 0; }
+.mi-recent { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; }
+.mi-chip {
+  height: 26px; padding: 0 10px; font-size: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block;
+}
+.mi-queue-banner { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; }
+.mi-queue-banner .settings-meta { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+.mi-queue-banner a { color: var(--accent); margin-left: auto; }
+
+.mi-notice {
+  padding: 10px 14px; margin-bottom: 12px;
+  border: 1px solid var(--border); border-left: 3px solid var(--warning);
+  border-radius: var(--radius-sm); background: var(--surface-1);
+  color: var(--text-secondary); font-size: 13px;
+}
+.mi-notice.error { border-left-color: var(--danger); }
+.mi-notice p { margin: 0 0 8px; }
+.mi-notice p:last-child { margin: 0; }
+
+.mi-toolbar { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 10px; }
+.mi-toolbar-group { display: flex; gap: 8px; align-items: center; }
+.mi-toolbar-group .field-select { width: 260px; }
+
+.mi-header, .mi-row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1.5fr) minmax(0, 1fr) 150px minmax(0, 1.1fr) 140px 130px;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 12px;
+}
+.mi-header { font-size: 11.5px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.03em; }
+.mi-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-bottom: 6px;
+  background: var(--surface-1);
+}
+.mi-row.selected { border-color: var(--border-strong); }
+.mi-row.done { opacity: 0.7; }
+.mi-row .field-select { min-width: 0; }
+.mi-file { font-family: 'JetBrains Mono', monospace; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mi-row .status-pill { justify-self: start; }
+
+.mi-picker { position: relative; min-width: 0; }
+.mi-picker-btn {
+  width: 100%; height: 32px; padding: 0 8px 0 10px;
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  background: var(--surface-2); font-size: 13px; text-align: left;
+}
+.mi-picker-btn.empty .mi-picker-label { color: var(--text-muted); }
+.mi-picker-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.mi-picker-panel {
+  position: absolute; z-index: 40; top: calc(100% + 4px); left: 0;
+  width: max(100%, 340px); max-height: 320px; overflow-y: auto;
+  background: var(--surface-2); border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm); box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+  padding: 4px;
+}
+.mi-picker-item {
+  display: grid; grid-template-columns: 16px 40px minmax(0, 1fr) auto auto;
+  gap: 8px; align-items: center;
+  padding: 6px 8px; border-radius: var(--radius-sm); cursor: pointer; font-size: 13px;
+}
+.mi-picker-item:hover { background: var(--surface-3); }
+.mi-picker-item.checked { background: var(--accent-bg); }
+.mi-ep-num { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-secondary); }
+.mi-ep-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mi-ep-flag { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.mi-ep-flag.warn { color: var(--warning); }
+
+.mi-footer {
+  display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap;
+  margin-top: 14px; padding: 12px 16px;
+  background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius-md);
+}
+.mi-mode { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 300px; }
+.mi-mode .field-select { width: 170px; flex-shrink: 0; }
+.mi-footer-actions { display: flex; align-items: center; gap: 14px; }
+.mi-text-warn { color: var(--warning); }
+.mi-text-ok { color: var(--success); }
+
+@media (max-width: 1100px) {
+  .mi-header { display: none; }
+  .mi-row { grid-template-columns: 28px minmax(0, 1fr); }
+  .mi-row > :not(:first-child) { grid-column: 2; }
+  .mi-row > :first-child { grid-row: 1; align-self: start; padding-top: 2px; }
+  .mi-toolbar, .mi-folder-form { flex-wrap: wrap; }
+}
+
+/* Activity > Queue's Manual Import button — amber while the automatic
+   import is failing. */
+.ep-action.ep-action-warn { color: var(--warning); }

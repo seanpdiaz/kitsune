@@ -9,6 +9,7 @@
 - [Persistence and Logging](Persistence-and-Logging)
 - [Metadata Search](Metadata-Search)
 - [Root Folders and Library Import](Root-Folders-and-Library-Import)
+- [Manual Import](Manual-Import)
 
 **Library & Series**
 - [Sidebar Navigation](Sidebar-Navigation)

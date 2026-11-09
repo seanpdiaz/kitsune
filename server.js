@@ -52,6 +52,7 @@ const { handleSystemApi } = require('./server/routes/system');
 const { handleSystemTasksApi } = require('./server/routes/system-tasks');
 const { handleSystemUpdatesApi } = require('./server/routes/system-updates');
 const { handleImportFilesApi } = require('./server/routes/import-files');
+const { handleManualImportApi } = require('./server/routes/manual-import');
 const { handleBackupsApi } = require('./server/routes/backups');
 const { handleSslApi } = require('./server/routes/ssl');
 const { handleIndexersApi } = require('./server/routes/indexers');
@@ -144,6 +145,7 @@ const server = http.createServer(async (req, res) => {
         (await handleSystemTasksApi(req, res, urlPath)) ||
         (await handleSystemUpdatesApi(req, res, urlPath)) ||
         (await handleImportFilesApi(req, res, urlPath)) ||
+        (await handleManualImportApi(req, res, urlPath)) ||
         (await handleBackupsApi(req, res, urlPath)) ||
         (await handleSslApi(req, res, urlPath)) ||
         (await handleIndexersApi(req, res, urlPath));

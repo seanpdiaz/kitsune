@@ -1715,6 +1715,14 @@ export default function SeriesPage() {
               </button>
               <button
                 type="button"
+                title="Import files from another folder (e.g. a download Kitsune couldn't import on its own) and choose which episode each one is."
+                onClick={() => { window.location.href = `wanted-manual-import.html?seriesId=${series.id}`; }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 3v11M7 9l5 5 5-5" /><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4" /></svg>
+                Manual import
+              </button>
+              <button
+                type="button"
                 title="Preview and rename this series' downloaded files to match the naming format in Settings > Media Management"
                 onClick={() => setRenameFilesOpen(true)}
               >
