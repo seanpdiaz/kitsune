@@ -27,9 +27,16 @@ Refresh, Rescan and Rename are the least-used actions. Imports already rename fi
 
 ### Change poster / Change background
 
-`ArtworkModal`. It has an image URL field with a live preview. For the background, **Remove background** clears it, and the page goes back to the blurred poster. Saving sends `PATCH /api/series/:id` with `{ poster }` or `{ fanart }`. The server accepts only http(s) URLs, or an empty value to clear.
+`ArtworkModal`. The top of the dialog shows TheTVDB's posters or backgrounds for the series (`GET /api/series/:id/artwork?kind=poster|background`): English first, then images with no text, then other languages, each sorted by TheTVDB score. Click one to choose it, or paste any image URL instead; there's a live preview either way. For the background, **Remove background** clears it, and the page goes back to the blurred poster. Saving sends `PATCH /api/series/:id` with `{ poster }` or `{ fanart }`. The server accepts only http(s) URLs, or an empty value to clear.
 
-A Plex-style gallery that picks from the metadata sources' own artwork is the planned next step.
+### Automatic background from TheTVDB
+
+`server/lib/series-artwork.js`. When a series has no background and nobody has set one, Kitsune saves TheTVDB's best background (same order as above). This happens:
+
+- when a series' episodes are first fetched, which covers both adding a series and the first time its page opens;
+- on every episode refresh, both Refresh episodes and the scheduled Refresh Series task, so series added before this existed fill in too.
+
+`series.fanart_source` records who set the background. NULL means nobody yet, so it's eligible to be filled and is retried on each refresh until TheTVDB has one. `tvdb` means it was filled automatically. `user` means it was set or removed in Change background, and it's never touched automatically again. The series page checks back once, shortly after load, so a newly filled background shows up without a reload.
 
 ### Edit titles and sort name
 
@@ -43,6 +50,7 @@ New `series` columns, added by the startup migration in `server/routes/series.js
 |---|---|---|
 | `fanart` | `fanart` | Backdrop image URL. NULL means use the blurred poster. |
 | `sort_title` | `sortTitle` | Library sort key. NULL means sort by `title`. |
+| `fanart_source` | `fanartSource` | Who set `fanart`: NULL (nobody yet, so auto-fill), `tvdb`, or `user`. |
 
 `GET /api/series` also returns `altTitles`, which is the parsed `alt_titles` JSON array.
 

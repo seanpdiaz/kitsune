@@ -10,6 +10,7 @@ const { normalizeFolderName } = require('../lib/fs-helpers');
 const { walkVideoFiles, guessQualityTierName, guessSeasonEpisode, resolutionGroupFromHeight } = require('../lib/media-files');
 const { probeMediaStreams, checkFfprobeAvailability } = require('../lib/ffprobe');
 const { probeUnprobedEpisodes } = require('../lib/media-probe-backfill');
+const { fillSeriesFanartFromTvdb } = require('../lib/series-artwork');
 const { episodeFileNameFor, getMediaManagementSettings } = require('../lib/episode-paths');
 const { applyPermissions } = require('../lib/permissions');
 const { applyDefaultTrackFlags, checkMkvpropeditAvailability } = require('../lib/mkvpropedit');
@@ -976,6 +977,10 @@ async function resolveAndCacheEpisodesForSeries(series) {
       // Couldn't resolve any TVDB series for this title.
       return { episodes: [], source: null };
     }
+    // Background image from TheTVDB, if the series doesn't have one yet (see
+    // lib/series-artwork.js). Not awaited: it handles its own errors and the
+    // episode list shouldn't wait on it.
+    fillSeriesFanartFromTvdb(series, tvdbId);
     const episodes = await fetchTvdbEpisodes(tvdbId);
     if (episodes.length > 0) {
       const insertEp = db.prepare(`
@@ -1078,6 +1083,9 @@ async function refreshEpisodesForSeries(series) {
     await upsert.run(series.id, e.seasonNumber, e.seasonName, e.num, e.title, e.titleJapanese, e.titleRomanji, e.aired, e.score, e.filler ? 1 : 0, e.recap ? 1 : 0, e.url, e.overview || null);
   }
   await recomputeSeriesEpisodeStats(series.id);
+  // Fill in a background from TheTVDB for series that don't have one yet
+  // (including ones added before this existed); see lib/series-artwork.js.
+  await fillSeriesFanartFromTvdb(series, tvdbId);
   logInfo('EpisodeService', `Refreshed episode metadata for "${series.title}" from TheTVDB (${episodes.length} episode(s))`);
   return { ok: true, count: episodes.length };
 }

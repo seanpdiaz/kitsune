@@ -8,6 +8,7 @@ const { recomputeSeriesEpisodeStats } = require('../lib/series-stats');
 const { warmEpisodesInBackground } = require('./episodes');
 const { fetchMalContentFlags, isHentaiMetadata } = require('../lib/mal');
 const { enrichSeriesIds, backfillSeriesIds } = require('../lib/anime-ids');
+const { resolveTvdbEpisodeSourceId, fetchTvdbArtworks } = require('../lib/tvdb');
 
 // ---------------------------------------------------------------------------
 // Library persistence (the `series` table)
@@ -350,6 +351,10 @@ const SERIES_SEED = [
     // sorting "The Eminence in Shadow" under E); NULL means sort by title.
     ['fanart', 'TEXT'],
     ['sort_title', 'TEXT'],
+    // Who set fanart: NULL = nobody yet (filled automatically from
+    // TheTVDB, see lib/series-artwork.js), 'tvdb' = filled automatically,
+    // 'user' = set or removed in Change background, never auto-filled again.
+    ['fanart_source', 'TEXT'],
   ]) {
     if (!seriesColumns.includes(col)) {
       await db.exec(`ALTER TABLE series ADD COLUMN ${col} ${def}`);
@@ -469,6 +474,7 @@ async function rowToSeries(row) {
     addedDaysAgo: row.added_days_ago,
     poster: row.poster,
     fanart: row.fanart || null,
+    fanartSource: row.fanart_source || null,
     sortTitle: row.sort_title || null,
     altTitles: parseAltTitles(row.alt_titles),
     meta: row.meta,
@@ -636,6 +642,34 @@ async function handleSeriesApi(req, res, urlPath) {
   // Path, and Tags. Every field is optional/independent — only the ones
   // actually present in the request body get touched, same pattern as the
   // settings PATCH endpoints elsewhere in this file.
+  // GET /api/series/:id/artwork?kind=poster|background — TheTVDB's posters
+  // or backgrounds for this series, best first, for the Change poster /
+  // Change background dialogs to pick from.
+  const artworkMatch = req.method === 'GET' && urlPath.match(/^\/api\/series\/(\d+)\/artwork$/);
+  if (artworkMatch) {
+    const kind = new URL(req.url, 'http://x').searchParams.get('kind') || 'background';
+    if (kind !== 'poster' && kind !== 'background') {
+      sendJson(res, 400, { error: 'kind must be poster or background' });
+      return true;
+    }
+    const row = await db.prepare('SELECT * FROM series WHERE id = ?').get(Number(artworkMatch[1]));
+    if (!row) {
+      sendJson(res, 404, { error: 'Series not found' });
+      return true;
+    }
+    try {
+      const tvdbId = await resolveTvdbEpisodeSourceId(row);
+      if (!tvdbId) {
+        sendJson(res, 200, { images: [], message: "This series isn't matched on TheTVDB yet." });
+        return true;
+      }
+      sendJson(res, 200, { images: (await fetchTvdbArtworks(tvdbId, kind)).slice(0, 40) });
+    } catch (err) {
+      sendJson(res, 200, { images: [], message: err.code === 'TVDB_NO_KEY' ? 'TheTVDB API key isn\'t configured.' : `Couldn't load images from TheTVDB: ${err.message}` });
+    }
+    return true;
+  }
+
   const patchMatch = req.method === 'PATCH' && urlPath.match(/^\/api\/series\/(\d+)$/);
   if (patchMatch) {
     const id = Number(patchMatch[1]);
@@ -685,6 +719,9 @@ async function handleSeriesApi(req, res, urlPath) {
         return true;
       }
       await db.prepare(`UPDATE series SET ${col} = ? WHERE id = ?`).run(parsed.value, id);
+      // A background chosen (or removed) by hand is never replaced by the
+      // automatic TheTVDB fill.
+      if (key === 'fanart') await db.prepare("UPDATE series SET fanart_source = 'user' WHERE id = ?").run(id);
       logInfo('SeriesService', `${existing.title}: ${label.toLowerCase()} ${parsed.value ? 'changed' : 'cleared'}`);
     }
     if (body.monitored !== undefined) {

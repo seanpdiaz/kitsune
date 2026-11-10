@@ -86,7 +86,22 @@ export function ArtworkModal({ series, kind, onClose, onSaved }) {
   const [previewOk, setPreviewOk] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [choices, setChoices] = useState(null); // null = loading; TheTVDB images, best first
+  const [choicesNote, setChoicesNote] = useState('');
   const trimmed = url.trim();
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/series/${series.id}/artwork?kind=${isPoster ? 'poster' : 'background'}`)
+      .then((r) => r.json())
+      .then((body) => {
+        if (cancelled) return;
+        setChoices(body.images || []);
+        setChoicesNote(body.message || '');
+      })
+      .catch(() => { if (!cancelled) { setChoices([]); setChoicesNote("Couldn't load images from TheTVDB."); } });
+    return () => { cancelled = true; };
+  }, [series.id, isPoster]);
 
   async function save(value) {
     setSaving(true);
@@ -106,13 +121,32 @@ export function ArtworkModal({ series, kind, onClose, onSaved }) {
 
   return (
     <div className="modal-overlay open" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal-box">
+      <div className="modal-box wide">
         <div className="modal-header">
           <h2>{isPoster ? 'Change poster' : 'Change background'}</h2>
           <button className="modal-close" type="button" aria-label="Close" data-tooltip="Close" onClick={onClose}>{icons.x}</button>
         </div>
         <div className="modal-body">
-          <label className="hero-field-label" htmlFor="artworkUrl">Image URL</label>
+          <p className="hero-field-label">From TheTVDB</p>
+          {choices === null ? (
+            <p className="settings-meta">Loading images…</p>
+          ) : choices.length === 0 ? (
+            <p className="settings-meta">{choicesNote || `TheTVDB has no ${isPoster ? 'posters' : 'backgrounds'} for this series.`}</p>
+          ) : (
+            <div className={`artwork-choices ${isPoster ? 'is-poster' : 'is-fanart'}`}>
+              {choices.map((c) => (
+                <button
+                  type="button" key={c.url} className={`artwork-choice${trimmed === c.url ? ' is-selected' : ''}`}
+                  title={[c.language ? c.language.toUpperCase() : 'No text', c.width && c.height ? `${c.width}×${c.height}` : null].filter(Boolean).join(' · ')}
+                  aria-pressed={trimmed === c.url}
+                  onClick={() => { setUrl(c.url); setPreviewOk(true); }}
+                >
+                  <img src={c.thumbnail} alt="" loading="lazy" />
+                </button>
+              ))}
+            </div>
+          )}
+          <label className="hero-field-label" htmlFor="artworkUrl" style={{ marginTop: 16 }}>Or an image URL</label>
           <input
             id="artworkUrl" type="url" className="field-input" value={url} autoFocus
             placeholder={isPoster ? 'https://…/poster.jpg' : 'https://…/fanart.jpg'}

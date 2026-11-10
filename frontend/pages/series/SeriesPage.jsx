@@ -1365,7 +1365,8 @@ export default function SeriesPage() {
   // -cancel reload) called both on series change and on demand via
   // loadRealEpisodesRef, so there's exactly one place this logic lives.
   const loadRealEpisodesRef = useRef(() => {});
-  const probeAttemptedForRef = useRef(null); // series id the automatic probe-files call already ran for
+  const probeAttemptedForRef = useRef(null);
+  const fanartCheckedForRef = useRef(null); // series id the one-time background re-check already ran for // series id the automatic probe-files call already ran for
   useEffect(() => {
     loadRealEpisodesRef.current = async () => {
       if (!series) return;
@@ -1397,6 +1398,14 @@ export default function SeriesPage() {
         // import time came back empty): ask the server to read them now,
         // once per page visit, then reload so Media info, the Audio column
         // and Edit tracks pick it up.
+        // No background yet and none chosen by hand: the server fetches one
+        // from TheTVDB alongside the first episode fetch, so check back
+        // once shortly after.
+        if (!series.fanart && !series.fanartSource && fanartCheckedForRef.current !== series.id) {
+          fanartCheckedForRef.current = series.id;
+          setTimeout(() => reloadSeriesArtworkRef.current && reloadSeriesArtworkRef.current(), 2500);
+        }
+
         if (probeAttemptedForRef.current !== series.id && rows.some((r) => r.downloaded && r.path && !r.mediaStreams)) {
           probeAttemptedForRef.current = series.id;
           fetch(`/api/series/${series.id}/probe-files`, { method: 'POST' })
@@ -1535,6 +1544,21 @@ export default function SeriesPage() {
   // batch of translation requests failed — see tvdb.js's now-logged
   // fetchTvdbEpisodeTranslation), without deleting and re-adding the whole
   // series (which would also throw away real per-episode download state).
+  // Re-reads this series' poster/background from the server — the
+  // automatic TheTVDB background (server/lib/series-artwork.js) lands a
+  // moment after a series' episodes are first fetched or refreshed.
+  async function reloadSeriesArtwork() {
+    if (!series) return;
+    try {
+      const res = await fetch('/api/series');
+      if (!res.ok) return;
+      const fresh = (await res.json()).find((s) => s.id === series.id);
+      if (fresh) setSeries((prev) => (prev ? { ...prev, poster: fresh.poster, fanart: fresh.fanart, fanartSource: fresh.fanartSource } : prev));
+    } catch { /* keep what's shown */ }
+  }
+  const reloadSeriesArtworkRef = useRef(null);
+  reloadSeriesArtworkRef.current = reloadSeriesArtwork;
+
   async function handleRefreshEpisodes() {
     if (!series || refreshingEpisodes) return;
     setRefreshingEpisodes(true);
@@ -1544,6 +1568,7 @@ export default function SeriesPage() {
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
       loadRealEpisodesRef.current();
+      reloadSeriesArtwork(); // a refresh may have filled in the background from TheTVDB
     } catch (err) {
       setRefreshError(err.message || 'Could not refresh episodes.');
     } finally {

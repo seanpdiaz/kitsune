@@ -580,4 +580,53 @@ async function fetchTvdbSeriesById(idOrSlug) {
   };
 }
 
-module.exports = { tvdbFetch, mapTvdbResult, tvdbSearchAnimeOnly, resolveTvdbEpisodeSourceId, fetchTvdbEpisodes, fetchTvdbSeriesById };
+// Series artwork (TVDB v4 artwork types: 2 = series poster, 3 = series
+// background, a.k.a. fanart). Returns [{ url, thumbnail, language, score,
+// width, height }] best first: English, then language-neutral (no text in
+// the image), then any other language, each by TVDB's own score (votes).
+// Used to fill a series' background automatically (series-artwork.js) and
+// to list choices in the series page's Change poster / Change background
+// dialogs.
+const ARTWORK_TYPE_IDS = { poster: 2, background: 3 };
+const TVDB_ARTWORK_HOST = 'https://artworks.thetvdb.com';
+
+function absoluteArtworkUrl(u) {
+  if (!u) return null;
+  if (/^https?:\/\//i.test(u)) return u;
+  return `${TVDB_ARTWORK_HOST}${u.startsWith('/') ? '' : '/'}${u}`;
+}
+
+async function fetchTvdbArtworks(tvdbId, kind) {
+  const typeId = ARTWORK_TYPE_IDS[kind];
+  if (!typeId) throw new Error(`Unknown artwork kind "${kind}"`);
+  // /series/:id/artworks filters server-side by type; some API mirrors
+  // don't have it, so fall back to the full /extended record, which lists
+  // every artwork.
+  let list = null;
+  let res = await tvdbFetch(`/series/${encodeURIComponent(tvdbId)}/artworks?type=${typeId}`);
+  if (res.ok) {
+    const json = await res.json().catch(() => null);
+    if (json && json.data && Array.isArray(json.data.artworks)) list = json.data.artworks;
+  }
+  if (!list) {
+    res = await tvdbFetch(`/series/${encodeURIComponent(tvdbId)}/extended`);
+    if (res.status === 404) return [];
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json || !json.data) throw new Error((json && json.message) || `TVDB artwork lookup failed (status ${res.status})`);
+    list = Array.isArray(json.data.artworks) ? json.data.artworks : [];
+  }
+  const langRank = (lang) => (lang === 'eng' ? 0 : (!lang ? 1 : 2));
+  return list
+    .filter((a) => a && Number(a.type) === typeId && a.image)
+    .map((a) => ({
+      url: absoluteArtworkUrl(a.image),
+      thumbnail: absoluteArtworkUrl(a.thumbnail) || absoluteArtworkUrl(a.image),
+      language: a.language || null,
+      score: Number(a.score) || 0,
+      width: a.width || null,
+      height: a.height || null,
+    }))
+    .sort((x, y) => (langRank(x.language) - langRank(y.language)) || (y.score - x.score));
+}
+
+module.exports = { tvdbFetch, mapTvdbResult, tvdbSearchAnimeOnly, resolveTvdbEpisodeSourceId, fetchTvdbEpisodes, fetchTvdbSeriesById, fetchTvdbArtworks };

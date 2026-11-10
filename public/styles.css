@@ -3899,8 +3899,30 @@ a.release-title:hover { text-decoration: underline; }
   font-size: 12.5px;
 }
 .artwork-preview.is-poster { width: 160px; height: 240px; }
-.artwork-preview.is-fanart { width: 100%; aspect-ratio: 16 / 9; }
+.artwork-preview.is-fanart { width: 100%; max-width: 420px; aspect-ratio: 16 / 9; }
 .artwork-preview img { width: 100%; height: 100%; object-fit: cover; }
+.artwork-choices {
+  display: grid;
+  gap: 8px;
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 2px;
+}
+.artwork-choices.is-fanart { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.artwork-choices.is-poster { grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); }
+.artwork-choice {
+  height: auto;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--surface-2);
+}
+.artwork-choices.is-fanart .artwork-choice { aspect-ratio: 16 / 9; }
+.artwork-choices.is-poster .artwork-choice { aspect-ratio: 2 / 3; }
+.artwork-choice img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.artwork-choice:hover { border-color: var(--border-strong); }
+.artwork-choice.is-selected { border-color: var(--accent); }
 .titles-alt-list { margin: 0 0 6px; padding-left: 18px; font-size: 13px; color: var(--text-secondary); line-height: 1.6; }
 
 @media (max-width: 860px) {
