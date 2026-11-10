@@ -61,6 +61,7 @@ const { startPermissionsScheduler } = require('./server/lib/permissions');
 const { startRefreshSeriesScheduler } = require('./server/lib/refresh-series-task');
 const { startUpdateCheckScheduler } = require('./server/lib/update-check');
 const { startRetentionScheduler } = require('./server/lib/retention');
+const { startProbeBackfillScheduler } = require('./server/lib/media-probe-backfill');
 
 // Default for how often the Library dashboard's Disk usage stat card
 // recomputes (a real recursive directory walk — expensive, so it runs on a
@@ -237,6 +238,10 @@ const server = http.createServer(async (req, res) => {
   // server/lib/retention.js. Awaited, unlike the schedulers below, because
   // it's two quick DELETEs and the log level should be in place first.
   await startRetentionScheduler();
+  // Probe downloaded files that still have no media info (see
+  // server/lib/media-probe-backfill.js): shortly after startup, then every
+  // few hours.
+  startProbeBackfillScheduler();
 
   server.listen(PORT, () => {
     logInfo('Server', `Kitsune mockup running at http://localhost:${PORT}`);

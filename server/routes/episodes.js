@@ -8,7 +8,8 @@ const { resolveTvdbEpisodeSourceId, fetchTvdbEpisodes } = require('../lib/tvdb')
 const { recomputeSeriesEpisodeStats } = require('../lib/series-stats');
 const { normalizeFolderName } = require('../lib/fs-helpers');
 const { walkVideoFiles, guessQualityTierName, guessSeasonEpisode, resolutionGroupFromHeight } = require('../lib/media-files');
-const { probeMediaStreams } = require('../lib/ffprobe');
+const { probeMediaStreams, checkFfprobeAvailability } = require('../lib/ffprobe');
+const { probeUnprobedEpisodes } = require('../lib/media-probe-backfill');
 const { episodeFileNameFor, getMediaManagementSettings } = require('../lib/episode-paths');
 const { applyPermissions } = require('../lib/permissions');
 const { applyDefaultTrackFlags, checkMkvpropeditAvailability } = require('../lib/mkvpropedit');
@@ -191,6 +192,27 @@ async function handleSeriesEpisodesApi(req, res, urlPath) {
   const editSeriesTracksMatch = req.method === 'PATCH' && urlPath.match(/^\/api\/series\/(\d+)\/tracks$/);
   if (editSeriesTracksMatch) return handleEditSeriesTracks(req, res, editSeriesTracksMatch);
 
+  // POST /api/series/:id/probe-files — read audio/video/subtitle info for
+  // this series' downloaded files that don't have it yet (see
+  // server/lib/media-probe-backfill.js). The series page calls this on its
+  // own when it finds unprobed files, and Edit Tracks calls it before
+  // saying there's nothing to edit.
+  const probeFilesMatch = req.method === 'POST' && urlPath.match(/^\/api\/series\/(\d+)\/probe-files$/);
+  if (probeFilesMatch) {
+    const user = await getSessionUser(req);
+    if (!user) {
+      sendJson(res, 401, { error: 'Not signed in.' });
+      return true;
+    }
+    const seriesId = Number(probeFilesMatch[1]);
+    const exists = await db.prepare('SELECT id FROM series WHERE id = ?').get(seriesId);
+    if (!exists) {
+      sendJson(res, 404, { error: 'Series not found' });
+      return true;
+    }
+    sendJson(res, 200, await probeUnprobedEpisodes({ seriesId }));
+    return true;
+  }
   const renamePreviewMatch = req.method === 'GET' && urlPath.match(/^\/api\/series\/(\d+)\/rename-preview$/);
   if (renamePreviewMatch) return handleRenamePreview(req, res, renamePreviewMatch);
 
@@ -434,8 +456,18 @@ async function handleEditEpisodeTracks(req, res, match) {
     try { mediaStreams = JSON.parse(episode.media_streams); } catch { /* falls through to the null check below */ }
   }
   if (!mediaStreams) {
-    sendJson(res, 400, { error: "This episode's audio/subtitle tracks haven't been probed yet — try Rescan for local files first." });
-    return true;
+    // Not probed yet (the probe at import time came back empty) — try now
+    // rather than sending the user off to rescan.
+    if (!checkFfprobeAvailability()) {
+      sendJson(res, 500, { error: "ffprobe isn't installed on the server, so this file's tracks can't be read. Install ffmpeg and restart Kitsune." });
+      return true;
+    }
+    mediaStreams = await probeMediaStreams(episode.path);
+    if (!mediaStreams) {
+      sendJson(res, 400, { error: "Couldn't read this file's audio/subtitle tracks. See Ffprobe warnings in System > Logs." });
+      return true;
+    }
+    await db.prepare('UPDATE episodes SET media_streams = ? WHERE id = ?').run(JSON.stringify(mediaStreams), id);
   }
 
   let body;
@@ -580,6 +612,9 @@ async function handleEditSeriesTracks(req, res, match) {
   }
 
   const seasonNumber = body.seasonNumber != null ? Number(body.seasonNumber) : null;
+  // Probe any downloaded files that never got media info first, so a file
+  // whose import-time probe came back empty still counts.
+  const probeResult = await probeUnprobedEpisodes({ seriesId });
   const rows = seasonNumber != null
     ? await db.prepare('SELECT * FROM episodes WHERE series_id = ? AND season_number = ?').all(seriesId, seasonNumber)
     : await db.prepare('SELECT * FROM episodes WHERE series_id = ?').all(seriesId);
@@ -594,11 +629,16 @@ async function handleEditSeriesTracks(req, res, match) {
     return !!row.media_streams;
   });
   if (eligible.length === 0) {
-    sendJson(res, 400, {
-      error: seasonNumber != null
-        ? 'No probed .mkv files found in this season yet.'
-        : 'No probed .mkv files found in this series yet.',
-    });
+    // Say which gap it is, not just "none found".
+    const scope = seasonNumber != null ? 'this season' : 'this series';
+    const withFiles = rows.filter((row) => row.downloaded && row.path);
+    const mkvFiles = withFiles.filter((row) => path.extname(row.path).toLowerCase() === '.mkv');
+    let error;
+    if (withFiles.length === 0) error = `There are no downloaded files in ${scope} yet.`;
+    else if (mkvFiles.length === 0) error = `None of the files in ${scope} are .mkv. Editing default tracks only works on .mkv files.`;
+    else if (probeResult.ffprobeMissing) error = "ffprobe isn't installed on the server, so these files' tracks can't be read. Install ffmpeg and restart Kitsune.";
+    else error = `Couldn't read the tracks of the .mkv files in ${scope}${probeResult.missingFiles ? ` (${probeResult.missingFiles} not found on disk)` : ''}. See Ffprobe warnings in System > Logs.`;
+    sendJson(res, 400, { error });
     return true;
   }
 

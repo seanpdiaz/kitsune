@@ -1106,6 +1106,18 @@ function EditTracksModal({ ep, onClose, onSaved }) {
 // group, a missing dub added later, ...), so this is a union, not any one
 // episode's own list; findTrackIndex on the server is what reconciles a
 // chosen selection back against each individual file.
+// Why Edit Tracks has nothing to work with, in plain words, instead of a
+// generic "nothing found".
+function noEligibleReason(episodes, scopeNoun, probeResult) {
+  const withFiles = episodes.filter((ep) => ep.downloaded && ep.path);
+  if (withFiles.length === 0) return `There are no downloaded files in ${scopeNoun} yet.`;
+  const mkv = withFiles.filter((ep) => ep.path.toLowerCase().endsWith('.mkv'));
+  if (mkv.length === 0) return `None of the files in ${scopeNoun} are .mkv. Editing default tracks only works on .mkv files.`;
+  if (probeResult && probeResult.ffprobeMissing) return "ffprobe isn't installed on the server, so these files' audio and subtitle tracks can't be read. Install ffmpeg and restart Kitsune.";
+  if (!probeResult) return `Reading audio and subtitle tracks from ${mkv.length} file${mkv.length === 1 ? '' : 's'}… Try again in a moment.`;
+  return `Couldn't read the audio and subtitle tracks of the .mkv files in ${scopeNoun}${probeResult.missingFiles ? ` (${probeResult.missingFiles} not found on disk)` : ''}. See Ffprobe warnings in System > Logs.`;
+}
+
 function collectTrackOptions(episodes, key) {
   const seen = new Map();
   for (const ep of episodes) {
@@ -1132,7 +1144,7 @@ function collectTrackOptions(episodes, key) {
 // alone and reported back as skipped rather than guessed at, same as the
 // server side's own findTrackIndex.
 // ---------------------------------------------------------------------------
-function EditTracksScopeModal({ seriesId, scope, seasonNumber, scopeLabel, episodes, onClose, onSaved }) {
+function EditTracksScopeModal({ seriesId, scope, seasonNumber, scopeLabel, episodes, probeResult, onClose, onSaved }) {
   const eligibleEpisodes = episodes.filter(
     (ep) => ep.downloaded && ep.path && ep.path.toLowerCase().endsWith('.mkv') && ep.mediaStreams
   );
@@ -1195,7 +1207,7 @@ function EditTracksScopeModal({ seriesId, scope, seasonNumber, scopeLabel, episo
         </div>
         <div className="modal-body">
           {eligibleEpisodes.length === 0 ? (
-            <p className="modal-label">No probed .mkv files found in {scopeNoun} yet.</p>
+            <p className="modal-label">{noEligibleReason(episodes, scopeNoun, probeResult)}</p>
           ) : (
             <>
               <p className="modal-label">
@@ -1295,6 +1307,7 @@ export default function SeriesPage() {
   const [grabBestMessage, setGrabBestMessage] = useState(null); // { text, isError }
   const [artworkKind, setArtworkKind] = useState(null); // 'poster' | 'fanart' | null — which Change artwork dialog is open
   const [titlesOpen, setTitlesOpen] = useState(false);
+  const [probeResult, setProbeResult] = useState(null); // last POST /probe-files result: { ffprobeMissing, candidates, probed, missingFiles, failed }
   const [renameEpisodeId, setRenameEpisodeId] = useState(null); // set when Rename file… was picked from one episode's menu
   const [overviewOpen, setOverviewOpen] = useState(false);
 
@@ -1352,6 +1365,7 @@ export default function SeriesPage() {
   // -cancel reload) called both on series change and on demand via
   // loadRealEpisodesRef, so there's exactly one place this logic lives.
   const loadRealEpisodesRef = useRef(() => {});
+  const probeAttemptedForRef = useRef(null); // series id the automatic probe-files call already ran for
   useEffect(() => {
     loadRealEpisodesRef.current = async () => {
       if (!series) return;
@@ -1378,6 +1392,21 @@ export default function SeriesPage() {
         const rows = buildRealEpisodeRows(series, real, queueByEpisodeId);
         const groups = groupEpisodesBySeason(rows);
         setRealGroups(groups);
+
+        // Downloaded files with no audio/video info yet (their probe at
+        // import time came back empty): ask the server to read them now,
+        // once per page visit, then reload so Media info, the Audio column
+        // and Edit tracks pick it up.
+        if (probeAttemptedForRef.current !== series.id && rows.some((r) => r.downloaded && r.path && !r.mediaStreams)) {
+          probeAttemptedForRef.current = series.id;
+          fetch(`/api/series/${series.id}/probe-files`, { method: 'POST' })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((result) => {
+              setProbeResult(result);
+              if (result && result.probed > 0) loadRealEpisodesRef.current();
+            })
+            .catch(() => {});
+        }
         // Default to Season 1 on first load; keep whatever tab is already
         // active on a poll-triggered refresh instead of silently jumping
         // back to it out from under someone who already switched tabs.
@@ -1559,7 +1588,10 @@ export default function SeriesPage() {
         let text = `Linked ${matchedCount} file${matchedCount === 1 ? '' : 's'} to episode${matchedCount === 1 ? '' : 's'}.`;
         if (unmatchedCount > 0) text += ` ${unmatchedCount} couldn't be matched.`;
         if (resetCount > 0) text += ` ${resetCount} previously-downloaded episode${resetCount === 1 ? '' : 's'} had no matching file and ${resetCount === 1 ? 'was' : 'were'} marked not downloaded.`;
-        setRescanMessage({ text, isError: unmatchedCount > 0 });
+        const probe = body.probe || {};
+        if (probe.ffprobeMissing && matchedCount > 0) text += " Audio/video info couldn't be read: ffprobe isn't installed on the server.";
+        else if (probe.unprobed > 0) text += ` Audio/video info couldn't be read for ${probe.unprobed} file${probe.unprobed === 1 ? '' : 's'} (see System > Logs).`;
+        setRescanMessage({ text, isError: unmatchedCount > 0 || !!probe.ffprobeMissing || probe.unprobed > 0 });
         if (matchedCount > 0 || resetCount > 0) {
           setSeries((prev) => ({ ...prev, eps: body.seriesEps, pct: body.seriesPct }));
           loadRealEpisodesRef.current();
@@ -1907,6 +1939,7 @@ export default function SeriesPage() {
           seasonNumber={editTracksScope.seasonNumber}
           scopeLabel={editTracksScope.scopeLabel}
           episodes={editTracksScope.scope === 'season' ? (activeGroup ? activeGroup.rows : []) : (realGroups || []).flatMap((g) => g.rows)}
+          probeResult={probeResult}
           onClose={() => setEditTracksScope(null)}
           onSaved={handleTracksScopeSaved}
         />

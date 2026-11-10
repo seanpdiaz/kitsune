@@ -31,7 +31,7 @@ const { sendJson, readJsonBody } = require('../lib/http');
 const path = require('path');
 const { walkVideoFiles, guessQualityTierName, guessSeasonEpisode, resolutionGroupFromHeight } = require('../lib/media-files');
 const { recomputeSeriesEpisodeStats } = require('../lib/series-stats');
-const { probeMediaStreams } = require('../lib/ffprobe');
+const { probeMediaStreams, checkFfprobeAvailability } = require('../lib/ffprobe');
 const { findExistingSeriesFolder } = require('./episodes');
 const { pathExists } = require('../lib/fs-helpers');
 
@@ -339,7 +339,15 @@ async function handleImportFilesApi(req, res, urlPath) {
     logInfo('LibraryImport', `"${series.title}": ${viaAbsoluteCount} file(s) in "${folderPath}" matched by absolute (cumulative) episode number rather than per-season numbering.`);
   }
 
-  sendJson(res, 200, { matched, unmatched, reset, seriesEps: updated.eps, seriesPct: updated.pct, seriesPath: folderPath });
+  // How many matched files still have no media info (ffprobe missing, or
+  // the probe failed — see Ffprobe warnings in System > Logs), so the
+  // series page can say so instead of Edit tracks failing later with no
+  // explanation.
+  const unprobedCount = matched.filter((m) => !m.mediaStreams).length;
+  sendJson(res, 200, {
+    matched, unmatched, reset, seriesEps: updated.eps, seriesPct: updated.pct, seriesPath: folderPath,
+    probe: { unprobed: unprobedCount, ffprobeMissing: !checkFfprobeAvailability() },
+  });
   return true;
 }
 

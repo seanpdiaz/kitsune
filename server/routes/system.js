@@ -24,6 +24,8 @@ const db = require('../db');
 const { sendJson } = require('../lib/http');
 const { computeRootFolderStats } = require('../lib/fs-helpers');
 const { getCachedDiskUsage } = require('../lib/disk-usage');
+const { checkFfprobeAvailability } = require('../lib/ffprobe');
+const { checkMkvpropeditAvailability } = require('../lib/mkvpropedit');
 
 const { version } = require('../../package.json');
 const PROCESS_START = Date.now();
@@ -92,6 +94,10 @@ async function handleSystemApi(req, res, urlPath) {
     diskUsageFormatted,
     diskUsageComputedAt,
     diskUsageComputing,
+    // External tools some features shell out to: ffprobe reads each file's
+    // audio/video/subtitle info, mkvpropedit writes default-track flags.
+    tools: { ffprobe: checkFfprobeAvailability(), mkvpropedit: checkMkvpropeditAvailability() },
+    unprobedEpisodeCount: (await db.prepare("SELECT COUNT(*) AS n FROM episodes WHERE downloaded = 1 AND path IS NOT NULL AND path != '' AND media_streams IS NULL").get()).n,
   });
   return true;
 }
