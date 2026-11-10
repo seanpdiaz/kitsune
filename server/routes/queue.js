@@ -70,6 +70,13 @@ db.init(async () => {
     // show for it.
     ['import_attempts', 'INTEGER NOT NULL DEFAULT 0'],
     ['last_import_error', 'TEXT'],
+    // The torrent-relative path of this row's own file, when it was already
+    // known at grab time — set by a manual add (routes/manual-grab.js),
+    // which reads the real .torrent file list up front and lets the person
+    // confirm which file is which episode. pickFileForEpisode trusts it over
+    // its filename guess, so a pack numbered differently from the episode
+    // list (absolute numbering, odd names) still imports what was confirmed.
+    ['file_hint', 'TEXT'],
   ]) {
     if (!queueColumns.includes(col)) {
       await db.exec(`ALTER TABLE queue ADD COLUMN ${col} ${def}`);
@@ -221,6 +228,24 @@ async function fetchTorrentFile(url, redirectsLeft = MAX_TORRENT_FETCH_REDIRECTS
 }
 
 async function submitRealGrab(release) {
+  // A manual add (routes/manual-grab.js) that already holds the real
+  // .torrent bytes — an uploaded file, or one fetched from a pasted link
+  // while previewing — uploads them directly instead of fetching again.
+  if (release.torrentBuffer) {
+    const client = await pickQbittorrentClient();
+    if (!client) {
+      return { ok: false, torrentHash: null, downloadClientId: null, error: 'No enabled qBittorrent client is configured — add one in Settings > Download Clients before grabbing.' };
+    }
+    const addResult = await qbittorrent.addTorrent(client, {
+      torrentFileBuffer: release.torrentBuffer,
+      filename: `${release.title}.torrent`,
+      category: client.category,
+    });
+    if (!addResult.ok) {
+      return { ok: false, torrentHash: null, downloadClientId: null, error: `Could not submit to "${client.name}": ${addResult.error}` };
+    }
+    return { ok: true, torrentHash: release.infoHash || null, downloadClientId: client.id };
+  }
   if (!release.magnetUrl) {
     return { ok: false, torrentHash: null, downloadClientId: null, error: 'This release has no magnet or download link to submit.' };
   }
@@ -554,7 +579,9 @@ async function handleQueueApi(req, res, urlPath) {
 // Shared by the manual releaseIndex batch path and "Grab best match" for a
 // season/series (handleAutoBatchGrab, below) — same "we have a release,
 // everything after that is identical" split as insertSingleGrab.
-async function insertBatchGrab(series, release, targetEpisodes, { seasonNumber, hasSeasonNumber }) {
+// `fileHints` (optional Map episodeId -> torrent-relative path) — see the
+// queue table's file_hint column.
+async function insertBatchGrab(series, release, targetEpisodes, { seasonNumber, hasSeasonNumber, fileHints = null }) {
   // One real submit for the whole batch — not one per episode, since it's
   // genuinely a single torrent (see module header). See insertSingleGrab's
   // own comment for why a submit that doesn't actually succeed errors out
@@ -565,15 +592,16 @@ async function insertBatchGrab(series, release, targetEpisodes, { seasonNumber, 
   }
 
   const insertStmt = db.prepare(`
-    INSERT INTO queue (series_id, episode_id, release_title, quality, size_bytes, indexer, protocol, status, progress_pct, source, magnet_url, torrent_hash, download_client_id, added_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'downloading', 0, 'real', ?, ?, ?, ?)
+    INSERT INTO queue (series_id, episode_id, release_title, quality, size_bytes, indexer, protocol, status, progress_pct, source, magnet_url, torrent_hash, download_client_id, file_hint, added_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'downloading', 0, 'real', ?, ?, ?, ?, ?)
     RETURNING id
   `);
   const insertedIds = [];
   for (const ep of targetEpisodes) {
     const insertedRow = await insertStmt.get(
       series.id, ep.id, release.title, release.quality, release.sizeBytes, release.indexer, release.protocol,
-      release.magnetUrl || null, submitted.torrentHash, submitted.downloadClientId, db.now(),
+      release.magnetUrl || null, submitted.torrentHash, submitted.downloadClientId,
+      (fileHints && fileHints.get(ep.id)) || null, db.now(),
     );
     insertedIds.push(insertedRow.id);
     await insertHistoryRow({
@@ -764,7 +792,7 @@ async function realTick() {
       const episode = await db.prepare('SELECT season_number, num FROM episodes WHERE id = ?').get(row.episode_id);
       if (episode) {
         const files = await filesForHash(row.torrent_hash);
-        const file = pickFileForEpisode(files, episode);
+        const file = pickFileForEpisode(files, episode, row.file_hint);
         if (file && typeof file.progress === 'number') return Math.round(file.progress * 100);
       }
       return Math.round((torrent.progress || 0) * 100);
@@ -793,7 +821,7 @@ async function realTick() {
       const episode = await db.prepare('SELECT season_number, num FROM episodes WHERE id = ?').get(row.episode_id);
       if (episode) {
         const files = await filesForHash(row.torrent_hash);
-        const file = pickFileForEpisode(files, episode);
+        const file = pickFileForEpisode(files, episode, row.file_hint);
         if (file && typeof file.progress === 'number') return file.progress >= 1;
       }
       return (torrent.progress || 0) >= 1;
@@ -860,8 +888,23 @@ async function realTick() {
 // than a same-numbered extras clip is. Only resolves the tie when exactly
 // one candidate has this stronger signal; a genuine tie between two equally
 // explicit season+episode names still returns null rather than guessing.
-function pickFileForEpisode(files, episode) {
+function pickFileForEpisode(files, episode, fileHint = null) {
   if (!files || files.length === 0) return null;
+  if (fileHint) {
+    // A path confirmed at grab time (see the queue table's file_hint). The
+    // client's listing is relative to the save path, same shape as the
+    // .torrent's own list; compared with forward slashes either way.
+    const want = String(fileHint).replace(/\\/g, '/');
+    const norm = (n) => String(n).replace(/\\/g, '/');
+    const hinted = files.find((f) => norm(f.name) === want);
+    if (hinted) return hinted;
+    // qBittorrent's "Don't create subfolder" content layout drops the
+    // torrent's top folder from every name — fall back to the filename,
+    // but only when exactly one file has it.
+    const base = want.split('/').pop();
+    const byBase = files.filter((f) => norm(f.name).split('/').pop() === base);
+    if (byBase.length === 1) return byBase[0];
+  }
   const videoFiles = files.filter((f) => isVideoFile(f.name));
   if (videoFiles.length === 0) return null;
   if (videoFiles.length === 1) return videoFiles[0];
@@ -945,7 +988,7 @@ async function completeRealDownload(row, torrent, client, files) {
   let quality = row.quality;
 
   if (series && episode && client) {
-    const file = pickFileForEpisode(files, episode);
+    const file = pickFileForEpisode(files, episode, row.file_hint);
     if (!file) {
       importNote = files
         ? `Could not tell which file in "${row.release_title}" is ${episodeLabel} — recorded a placeholder path instead of importing.`
@@ -1106,4 +1149,9 @@ async function handleFailedCompletion(row, err) {
 
 setInterval(() => { realTick().catch((err) => logWarn('Queue', `realTick failed: ${err.message}`)); }, REAL_TICK_MS);
 
-module.exports = { handleQueueApi };
+module.exports = {
+  handleQueueApi,
+  // routes/manual-grab.js — a manual add reuses the batch insert path
+  // (history, notifications, per-episode rows) and the .torrent fetcher.
+  insertBatchGrab, fetchTorrentFile, extractInfoHashFromMagnet, pickFileForEpisode,
+};

@@ -11,12 +11,15 @@ function sendJson(res, status, body) {
   res.end(payload);
 }
 
-function readJsonBody(req) {
+// maxBytes: most bodies are tiny form saves; routes/manual-grab.js raises it
+// for an uploaded .torrent file (base64 in JSON — a big season pack's
+// .torrent can run to a few hundred KB).
+function readJsonBody(req, { maxBytes = 1e6 } = {}) {
   return new Promise((resolve, reject) => {
     let raw = '';
     req.on('data', (chunk) => {
       raw += chunk;
-      if (raw.length > 1e6) req.destroy(); // basic guard against runaway bodies
+      if (raw.length > maxBytes) req.destroy(); // basic guard against runaway bodies
     });
     req.on('end', () => {
       if (!raw) return resolve({});

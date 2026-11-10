@@ -261,7 +261,12 @@ function guessSeasonEpisode(filename, seasonHint) {
   // coincidental "-NNN-" inside a title that itself contains a hyphen (e.g.
   // "Re:ZERO -Starting Life in Another World-" — that hyphen isn't
   // immediately followed by a digit, so it can't match this pattern).
-  m = /-\s*(\d{1,4})(?:v\d)?\s+-\s+\S/.exec(normalized);
+  // The "title" after the second " - " must not itself be just another
+  // episode number: "Mob Psycho 100 - 13 [1080p]" is episode 13 of a show
+  // whose name ends in a number, not episode 100 titled "13" (real case
+  // from a Mob Psycho 100 pack). The bracket-adjacent pattern below then
+  // picks up the 13.
+  m = /-\s*(\d{1,4})(?:v\d)?\s+-\s+(?!\d{1,4}(?:v\d)?\s*(?:[[(]|$))\S/.exec(normalized);
   if (m) return { season: seasonHint ?? null, episode: Number(m[1]), confident: seasonHint != null };
 
   // Same idea without a leading hyphen — a lone episode number followed by
@@ -273,7 +278,7 @@ function guessSeasonEpisode(filename, seasonHint) {
   // ever closes with a bracket/paren), so this was always reachable either
   // way; it just now also runs ahead of them for consistency with the
   // hyphen-prefixed version above.
-  m = /(?:^|\s)(\d{1,3})(?:v\d)?\s*-\s*\S/.exec(normalized);
+  m = /(?:^|\s)(\d{1,3})(?:v\d)?\s*-\s*(?!\d{1,4}(?:v\d)?\s*(?:[[(]|$))\S/.exec(normalized);
   if (m) return { season: seasonHint ?? null, episode: Number(m[1]), confident: seasonHint != null };
 
   // Common anime convention: "Series Name - 05 [1080p][hash]" — a lone

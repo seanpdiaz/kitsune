@@ -738,6 +738,194 @@ function RenameSeasonModal({ seriesId, seasonNumber, currentLabel, onClose, onRe
 }
 
 // ---------------------------------------------------------------------------
+// Add release modal — a magnet link, a .torrent file, or a link to one (a
+// Nyaa view page works), for when search doesn't find the release wanted.
+// server/routes/manual-grab.js reads it and matches its files to episodes;
+// the person confirms which episodes to queue, and from there it's tracked
+// and imported like any grab from search.
+// ---------------------------------------------------------------------------
+const MANUAL_STATE_LABEL = { missing: 'Missing', downloaded: 'Downloaded', queued: 'In queue', unaired: 'Not aired' };
+
+function AddReleaseModal({ seriesId, scope, seasonNumber, scopeLabel, onClose, onAdded }) {
+  const [link, setLink] = useState('');
+  const [file, setFile] = useState(null); // { name, base64 }
+  const [preview, setPreview] = useState(null);
+  const [selected, setSelected] = useState(() => new Set());
+  const [reading, setReading] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [error, setError] = useState('');
+  const fileInputRef = useRef(null);
+
+  function handleFileChosen(e) {
+    const chosen = e.target.files && e.target.files[0];
+    if (!chosen) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      setFile({ name: chosen.name, base64: result.slice(result.indexOf(',') + 1) });
+      setLink('');
+      setPreview(null);
+      setError('');
+    };
+    reader.onerror = () => setError("Couldn't read that file.");
+    reader.readAsDataURL(chosen);
+  }
+
+  async function handleRead() {
+    setReading(true);
+    setError('');
+    setPreview(null);
+    try {
+      const source = file ? { torrentBase64: file.base64 } : { url: link.trim() };
+      const res = await fetch('/api/manual-grab/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ seriesId, seasonNumber: scope === 'season' ? seasonNumber : undefined, ...source }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      setPreview(body);
+      setSelected(new Set(body.episodes.filter((ep) => ep.selected).map((ep) => ep.id)));
+    } catch (err) {
+      setError(err.message || "Couldn't read that release.");
+    } finally {
+      setReading(false);
+    }
+  }
+
+  async function handleAdd() {
+    setAdding(true);
+    setError('');
+    try {
+      const res = await fetch('/api/manual-grab', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: preview.token, episodeIds: [...selected] }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      onAdded(body);
+    } catch (err) {
+      setError(err.message || "Couldn't add this release.");
+      setAdding(false);
+    }
+  }
+
+  function toggle(id) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  const selectable = preview ? preview.episodes.filter((ep) => ep.state !== 'queued') : [];
+  const allSelected = selectable.length > 0 && selectable.every((ep) => selected.has(ep.id));
+  function toggleAll() {
+    setSelected(allSelected ? new Set() : new Set(selectable.map((ep) => ep.id)));
+  }
+  const fileName = (p) => (p ? p.split('/').pop() : '');
+  const unmatchedVideos = preview ? preview.files.filter((f) => !f.episodeId && f.reason !== 'Not a video file') : [];
+  const canRead = !reading && (file || link.trim());
+
+  return (
+    <div className="modal-overlay open" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal-box wide">
+        <div className="modal-header">
+          <h2>Add Release — {scopeLabel}</h2>
+          <button className="modal-close" type="button" aria-label="Close" data-tooltip="Close" onClick={onClose}>{icons.x}</button>
+        </div>
+        <div className="modal-body">
+          <p className="settings-meta" style={{ marginBottom: 12 }}>
+            Paste a magnet link, a .torrent link, or a Nyaa page link — or choose a .torrent file. Kitsune checks which
+            episode each file is before anything is sent to your download client.
+          </p>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input
+              type="text"
+              className="field-input"
+              style={{ flex: 1 }}
+              placeholder="magnet:?xt=urn:btih:…  or  https://nyaa.si/view/…"
+              value={file ? '' : link}
+              disabled={!!file}
+              onChange={(e) => { setLink(e.target.value); setPreview(null); }}
+              onKeyDown={(e) => { if (e.key === 'Enter' && canRead) handleRead(); }}
+              autoFocus
+            />
+            <input ref={fileInputRef} type="file" accept=".torrent,application/x-bittorrent" style={{ display: 'none' }} onChange={handleFileChosen} />
+            {file ? (
+              <button type="button" onClick={() => { setFile(null); setPreview(null); if (fileInputRef.current) fileInputRef.current.value = ''; }}>
+                Clear {file.name.length > 24 ? `${file.name.slice(0, 22)}…` : file.name}
+              </button>
+            ) : (
+              <button type="button" onClick={() => fileInputRef.current && fileInputRef.current.click()}>Choose .torrent…</button>
+            )}
+            <button type="button" disabled={!canRead} onClick={handleRead}>{reading ? 'Reading…' : 'Read release'}</button>
+          </div>
+
+          {preview && (
+            <div style={{ marginTop: 16 }}>
+              <p style={{ fontWeight: 600, wordBreak: 'break-word' }}>{preview.title}</p>
+              <p className="settings-meta">
+                {preview.quality}
+                {preview.sizeBytes ? ` · ${formatBytes(preview.sizeBytes)}` : ''}
+                {preview.hasFileList ? ` · ${preview.files.length} file${preview.files.length === 1 ? '' : 's'}` : ''}
+              </p>
+              {preview.warnings.map((w) => <p key={w} className="import-result warn">{w}</p>)}
+
+              {preview.episodes.length === 0 ? (
+                <p className="settings-empty">No episodes to add in this scope.</p>
+              ) : (
+                <>
+                  <label className="rename-select-all" style={{ marginTop: 12 }}>
+                    <input type="checkbox" checked={allSelected} onChange={toggleAll} />
+                    {selected.size} episode{selected.size === 1 ? '' : 's'} selected
+                  </label>
+                  <div className="file-browser-list-wrap">
+                    <div className="rename-preview-list">
+                      {preview.episodes.map((ep) => (
+                        <label className="rename-file-row" key={ep.id}>
+                          <input type="checkbox" checked={selected.has(ep.id)} disabled={ep.state === 'queued'} onChange={() => toggle(ep.id)} />
+                          <div className="rename-file-names">
+                            <p className="rename-old-name" style={{ textDecoration: 'none' }}>
+                              {ep.label}{ep.title ? ` — ${ep.title}` : ''}
+                              <span className="settings-meta"> · {MANUAL_STATE_LABEL[ep.state] || ep.state}{ep.inScope ? '' : ' · from another season'}</span>
+                            </p>
+                            <p className="rename-new-name">
+                              {ep.filePath ? fileName(ep.filePath) : preview.hasFileList ? 'No file in this release' : 'File list not known yet (magnet)'}
+                            </p>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {unmatchedVideos.length > 0 && (
+                <details style={{ marginTop: 10 }}>
+                  <summary className="settings-meta">{unmatchedVideos.length} video file{unmatchedVideos.length === 1 ? '' : 's'} not matched to an episode</summary>
+                  {unmatchedVideos.map((f) => (
+                    <p key={f.path} className="settings-meta" style={{ wordBreak: 'break-word' }}>{fileName(f.path)} — {f.reason}</p>
+                  ))}
+                </details>
+              )}
+            </div>
+          )}
+          <p className={`form-error${error ? '' : ' is-collapsed'}`}>{error}</p>
+        </div>
+        <div className="modal-footer">
+          <button type="button" onClick={onClose}>Cancel</button>
+          <button className="btn-accent" type="button" disabled={!preview || adding || selected.size === 0} onClick={handleAdd}>
+            {adding ? 'Adding…' : `Add ${selected.size || ''} episode${selected.size === 1 ? '' : 's'}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Delete Series modal
 // ---------------------------------------------------------------------------
 function DeleteSeriesModal({ series, onClose }) {
@@ -1310,6 +1498,7 @@ export default function SeriesPage() {
   const [probeResult, setProbeResult] = useState(null); // last POST /probe-files result: { ffprobeMissing, candidates, probed, missingFiles, failed }
   const [renameEpisodeId, setRenameEpisodeId] = useState(null); // set when Rename file… was picked from one episode's menu
   const [overviewOpen, setOverviewOpen] = useState(false);
+  const [addReleaseScope, setAddReleaseScope] = useState(null); // { scope: 'series' | 'season', seasonNumber, scopeLabel } | null
 
   const releasePickerRef = useRef(null);
   const episodeDetailsModalRef = useRef(null);
@@ -1829,6 +2018,15 @@ export default function SeriesPage() {
               </button>
               <button
                 type="button"
+                disabled={!realGroups}
+                title={!realGroups ? 'Add release is unavailable until real episode data has loaded.' : "Add a release by hand — a magnet link, a .torrent file, or a link to one — when search doesn't find the one you want"}
+                onClick={() => setAddReleaseScope({ scope: 'series', seasonNumber: null, scopeLabel: series.title })}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7" /><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" /></svg>
+                Add release
+              </button>
+              <button
+                type="button"
                 title="Import files from another folder (e.g. a download Kitsune couldn't import on its own) and choose which episode each one is."
                 onClick={() => { window.location.href = `wanted-manual-import.html?seriesId=${series.id}`; }}
               >
@@ -1893,6 +2091,17 @@ export default function SeriesPage() {
           <button
             type="button"
             className="ep-action"
+            aria-label="Add release for season"
+            data-tooltip="Add release by hand"
+            onClick={() => setAddReleaseScope({ scope: 'season', seasonNumber: activeGroup.seasonNumber, scopeLabel: segmentLabel(activeGroup) })}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7" /><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" /></svg>
+          </button>
+        )}
+        {!!activeGroup && (
+          <button
+            type="button"
+            className="ep-action"
             aria-label="Edit tracks for season"
             data-tooltip="Edit tracks"
             onClick={() => handleEditTracksScope('season', activeGroup.seasonNumber)}
@@ -1928,6 +2137,20 @@ export default function SeriesPage() {
           series={series}
           onClose={() => setTitlesOpen(false)}
           onSaved={(body) => { setSeries((prev) => ({ ...prev, ...body })); setTitlesOpen(false); document.title = `Kitsune — ${body.title}`; }}
+        />
+      )}
+      {addReleaseScope && (
+        <AddReleaseModal
+          seriesId={series.id}
+          scope={addReleaseScope.scope}
+          seasonNumber={addReleaseScope.seasonNumber}
+          scopeLabel={addReleaseScope.scopeLabel}
+          onClose={() => setAddReleaseScope(null)}
+          onAdded={(body) => {
+            setAddReleaseScope(null);
+            setGrabBestMessage({ text: `Added "${body.releaseTitle}" (${body.quality}) — ${body.count} episode${body.count === 1 ? '' : 's'}.`, isError: false });
+            loadRealEpisodesRef.current();
+          }}
         />
       )}
       {deleteOpen && <DeleteSeriesModal series={series} onClose={() => setDeleteOpen(false)} />}

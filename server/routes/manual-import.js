@@ -504,4 +504,4 @@ async function handleManualImportApi(req, res, urlPath) {
   return false;
 }
 
-module.exports = { handleManualImportApi, guessSeriesForFile, loadSeriesIndex };
+module.exports = { handleManualImportApi, guessSeriesForFile, loadSeriesIndex, assignEpisodes };
