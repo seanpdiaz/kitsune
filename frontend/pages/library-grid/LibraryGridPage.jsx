@@ -103,11 +103,17 @@ function matchesFilter(s, filter) {
   }
 }
 
+// Title sort uses the series' sort title when one is set (series page "…"
+// menu > Edit titles and sort name), else its display title.
+function sortKey(s) {
+  return s.sortTitle || s.title || '';
+}
+
 function sortSeries(list, sort) {
   const sorted = list.slice();
   if (sort === 'next-airing') {
     sorted.sort((a, b) => {
-      if (a.nextAirDays == null && b.nextAirDays == null) return a.title.localeCompare(b.title);
+      if (a.nextAirDays == null && b.nextAirDays == null) return sortKey(a).localeCompare(sortKey(b));
       if (a.nextAirDays == null) return 1;
       if (b.nextAirDays == null) return -1;
       return a.nextAirDays - b.nextAirDays;
@@ -115,7 +121,7 @@ function sortSeries(list, sort) {
   } else if (sort === 'recently-added') {
     sorted.sort((a, b) => a.addedDaysAgo - b.addedDaysAgo);
   } else {
-    sorted.sort((a, b) => a.title.localeCompare(b.title));
+    sorted.sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
   }
   return sorted;
 }

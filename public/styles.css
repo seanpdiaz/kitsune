@@ -1120,7 +1120,8 @@ select {
      wrapping onto a second line at the hyphen, which made a row's height
      differ from other rows in the same table whenever one episode had a
      longer quality string than its neighbors (see .ep-date below too). */
-  grid-template-columns: 44px 1fr 84px 80px 96px 110px 68px;
+  /* Last column: Search + Grab best match + the "…" menu on every row. */
+  grid-template-columns: 44px 1fr 84px 80px 96px 110px 100px;
   gap: 8px;
   align-items: center;
   padding: 10px 12px;
@@ -3689,3 +3690,227 @@ a.release-title:hover { text-decoration: underline; }
 /* Activity > Queue's Manual Import button — amber while the automatic
    import is failing. */
 .ep-action.ep-action-warn { color: var(--warning); }
+
+/* ---------- Series page header (fanart hero) ----------
+   Replaces the old .detail-header card on the series page (see
+   SeriesPage.jsx and wiki/Series-Page.md). The hero is tall, so the series
+   page no longer pins the header and scrolls only the episode list: the
+   whole #seriesRoot column scrolls instead, with the season tabs row
+   sticking to the top once the hero has scrolled away. .main-series keeps
+   its fixed 100vh height, so #seriesRoot is the one scroll container (the
+   episode menu's flip-upward check finds it via findScrollParent). */
+.main-series { padding: 0; }
+.main-series > .back-link { display: none; }
+.main-series #seriesRoot {
+  overflow-y: auto;
+  overflow-x: clip;
+  padding: 0 28px 40px;
+}
+.main-series .episode-list-scroll { flex: none; overflow: visible; }
+.main-series .episode-list-scroll .ep-header { position: static; }
+.main-series .segment-tabs-row {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--bg);
+  padding-top: 6px;
+}
+
+.series-hero { position: relative; margin: 0 -28px 28px; flex-shrink: 0; }
+.series-hero-backdrop {
+  position: relative;
+  height: 340px;
+  overflow: hidden;
+  background: var(--surface-1);
+}
+.series-hero-fanart {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 25%;
+}
+/* No fanart: the poster, blown up and blurred, fills the band instead. */
+.series-hero-fanart.is-blurred {
+  inset: -40px;
+  width: calc(100% + 80px);
+  height: calc(100% + 80px);
+  object-position: center;
+  filter: blur(36px) saturate(1.2) brightness(0.55);
+}
+.series-hero-backdrop::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(20, 22, 27, 0.25) 0%, rgba(20, 22, 27, 0.6) 55%, var(--bg) 100%);
+}
+
+.series-hero-back {
+  position: absolute;
+  top: 18px;
+  left: 28px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px 6px 8px;
+  border-radius: var(--radius-sm);
+  background: rgba(20, 22, 27, 0.6);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.series-hero-back:hover { background: rgba(20, 22, 27, 0.85); }
+
+.series-hero-menu { position: absolute; top: 18px; right: 28px; z-index: 10; }
+.series-hero-menu-btn {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: rgba(20, 22, 27, 0.6);
+  color: var(--text-primary);
+}
+.series-hero-menu-btn:hover { background: rgba(20, 22, 27, 0.85); }
+.series-hero-menu-btn svg { width: 18px; height: 18px; }
+.series-hero-dropdown { top: calc(100% + 6px); min-width: 240px; }
+.series-hero-menu-group + .series-hero-menu-group { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 4px; }
+.series-hero-menu-label {
+  margin: 0;
+  padding: 6px 9px 3px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+.series-hero-dropdown button:disabled { opacity: 0.5; cursor: default; }
+
+.series-hero-body {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  gap: 36px;
+  margin-top: -200px;
+  padding: 0 28px;
+}
+.series-hero-poster {
+  position: relative;
+  flex: 0 0 210px;
+  height: 315px;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: linear-gradient(155deg, var(--surface-3), var(--surface-2));
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+}
+.series-hero-poster img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+
+.series-hero-info {
+  flex: 1;
+  min-width: 0;
+  padding-top: 96px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.series-hero-title {
+  margin: 0;
+  font-size: 32px;
+  line-height: 1.15;
+  font-weight: 800;
+  letter-spacing: -0.015em;
+}
+.series-hero-alt { margin: 4px 0 0; font-size: 13px; color: var(--text-secondary); }
+
+.series-hero-overview-wrap { max-width: 760px; }
+.series-hero-overview {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.series-hero-overview.is-open { display: block; }
+.link-button {
+  height: auto;
+  padding: 0;
+  margin-top: 2px;
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+}
+.link-button:hover { background: none; border: none; text-decoration: underline; }
+
+.series-hero-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.series-hero-chip {
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.series-hero-chip.status-continuing { font-family: var(--font-ui); font-weight: 700; color: var(--success); background: var(--success-bg); border-color: transparent; }
+.series-hero-chip.status-ended { font-family: var(--font-ui); font-weight: 700; color: var(--text-secondary); background: var(--surface-3); border-color: transparent; }
+
+.series-hero-progress { display: flex; align-items: center; gap: 12px; max-width: 520px; }
+.series-hero-bar { flex: 1; height: 6px; border-radius: 3px; background: var(--surface-3); overflow: hidden; }
+.series-hero-bar > div { height: 100%; border-radius: 3px; background: var(--accent); }
+.series-hero-progress span { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
+
+.series-hero-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 2px; }
+.series-hero-actions > button { height: 36px; padding: 0 14px; font-weight: 600; }
+.series-hero-actions > .series-hero-monitor { width: 36px; padding: 0; justify-content: center; color: var(--text-secondary); }
+.series-hero-monitor.is-on { color: var(--accent); }
+
+.series-hero-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin: 0; font-size: 12.5px; }
+.series-hero-footer a { color: var(--text-secondary); font-weight: 600; text-decoration: none; }
+.series-hero-footer a:hover { color: var(--accent); }
+.series-hero-path {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+  padding-right: 14px;
+  border-right: 1px solid var(--border-strong);
+}
+
+/* Change poster / background and Edit titles dialogs (SeriesHeaderParts.jsx). */
+.hero-field-label { display: block; margin: 0 0 6px; font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.artwork-preview {
+  margin-top: 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+.artwork-preview.is-poster { width: 160px; height: 240px; }
+.artwork-preview.is-fanart { width: 100%; aspect-ratio: 16 / 9; }
+.artwork-preview img { width: 100%; height: 100%; object-fit: cover; }
+.titles-alt-list { margin: 0 0 6px; padding-left: 18px; font-size: 13px; color: var(--text-secondary); line-height: 1.6; }
+
+@media (max-width: 860px) {
+  .main-series #seriesRoot { overflow: visible; padding: 0 16px 32px; }
+  .series-hero { margin: 0 -16px 20px; }
+  .series-hero-backdrop { height: 220px; }
+  .series-hero-back { left: 16px; }
+  .series-hero-menu { right: 16px; }
+  .series-hero-body { flex-direction: column; gap: 16px; margin-top: -150px; padding: 0 16px; }
+  .series-hero-poster { flex: none; width: 140px; height: 210px; }
+  .series-hero-info { padding-top: 0; }
+  .series-hero-title { font-size: 24px; }
+}

@@ -342,6 +342,14 @@ const SERIES_SEED = [
     ['anidb_id', 'INTEGER'],
     ['tvdb_id', 'INTEGER'],
     ['ids_checked_at', 'TEXT'],
+    // Series page artwork/titles overrides (the "…" menu's Change poster,
+    // Change background and Edit titles and sort name). fanart is the wide
+    // backdrop behind the series page header; NULL means none, and the page
+    // falls back to a blurred, darkened copy of the poster. sort_title is
+    // what the Library's Title sort uses instead of `title` when set (e.g.
+    // sorting "The Eminence in Shadow" under E); NULL means sort by title.
+    ['fanart', 'TEXT'],
+    ['sort_title', 'TEXT'],
   ]) {
     if (!seriesColumns.includes(col)) {
       await db.exec(`ALTER TABLE series ADD COLUMN ${col} ${def}`);
@@ -424,6 +432,28 @@ async function tagIdsForSeries(seriesId) {
   return (await db.prepare('SELECT tag_id FROM series_tags WHERE series_id = ? ORDER BY tag_id ASC').all(seriesId)).map((r) => r.tag_id);
 }
 
+function parseAltTitles(raw) {
+  if (!raw) return [];
+  try {
+    const list = JSON.parse(raw);
+    return Array.isArray(list) ? list.filter((t) => typeof t === 'string' && t.trim()) : [];
+  } catch {
+    return [];
+  }
+}
+
+// Poster/fanart overrides must be a real http(s) URL (shown straight in an
+// <img>), or empty to clear. Returns { value } or { error }.
+function parseArtworkUrl(raw, label) {
+  if (raw == null) return { value: null };
+  const value = String(raw).trim();
+  if (!value) return { value: null };
+  let url;
+  try { url = new URL(value); } catch { return { error: `${label} must be a full http(s) URL` }; }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return { error: `${label} must be a full http(s) URL` };
+  return { value };
+}
+
 async function rowToSeries(row) {
   return {
     id: row.id,
@@ -438,6 +468,9 @@ async function rowToSeries(row) {
     nextAirDays: row.next_air_days,
     addedDaysAgo: row.added_days_ago,
     poster: row.poster,
+    fanart: row.fanart || null,
+    sortTitle: row.sort_title || null,
+    altTitles: parseAltTitles(row.alt_titles),
     meta: row.meta,
     overview: row.overview,
     externalId: row.external_id,
@@ -639,6 +672,20 @@ async function handleSeriesApi(req, res, urlPath) {
       }
       await db.prepare('UPDATE series SET title = ? WHERE id = ?').run(title, id);
       if (title !== existing.title) logInfo('SeriesService', `Renamed "${existing.title}" to "${title}"`);
+    }
+    if (body.sortTitle !== undefined) {
+      const sortTitle = body.sortTitle == null ? '' : String(body.sortTitle).trim();
+      await db.prepare('UPDATE series SET sort_title = ? WHERE id = ?').run(sortTitle || null, id);
+    }
+    for (const [key, col, label] of [['poster', 'poster', 'Poster'], ['fanart', 'fanart', 'Background']]) {
+      if (body[key] === undefined) continue;
+      const parsed = parseArtworkUrl(body[key], label);
+      if (parsed.error) {
+        sendJson(res, 400, { error: parsed.error });
+        return true;
+      }
+      await db.prepare(`UPDATE series SET ${col} = ? WHERE id = ?`).run(parsed.value, id);
+      logInfo('SeriesService', `${existing.title}: ${label.toLowerCase()} ${parsed.value ? 'changed' : 'cleared'}`);
     }
     if (body.monitored !== undefined) {
       await db.prepare('UPDATE series SET monitored = ? WHERE id = ?').run(body.monitored ? 1 : 0, id);

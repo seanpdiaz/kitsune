@@ -6,6 +6,7 @@ import { initReleasePickerModal } from '../../../public/js/lib/release-picker-mo
 import { initEpisodeDetailsModal } from '../../../public/js/lib/episode-details-modal.js';
 import { formatBytes } from '../../../public/js/lib/format.js';
 import { initFileBrowserModal } from '../../../public/js/lib/file-browser-modal.js';
+import { SeriesMenu, ArtworkModal, TitlesModal, headerIcons } from './SeriesHeaderParts.jsx';
 
 // React port of the Series detail half of public/js/pages/library.js (now
 // deleted) — see README's "React migration" section. The release picker and
@@ -271,7 +272,8 @@ function findScrollParent(el) {
 // renders — via a layout effect, before the browser paints, so there's no
 // visible flash of it opening downward first — rather than guessed up front
 // from a hardcoded item count/height.
-function EpisodeActionsMenu({ ep, onMediaInfo, onDeleteFile, onEditTracks }) {
+function EpisodeActionsMenu({ ep, onMediaInfo, onDeleteFile, onEditTracks, onRenameFile, onManualImport }) {
+  const hasFile = ep.state === 'done';
   const [open, setOpen] = useState(false);
   const [openUpward, setOpenUpward] = useState(false);
   const wrapRef = useRef(null);
@@ -312,17 +314,29 @@ function EpisodeActionsMenu({ ep, onMediaInfo, onDeleteFile, onEditTracks }) {
       </button>
       {open && (
         <div className="ep-menu" role="menu" ref={menuRef} style={openUpward ? { top: 'auto', bottom: 'calc(100% + 4px)' } : undefined}>
-          <button type="button" role="menuitem" onClick={() => { setOpen(false); onMediaInfo(ep); }}>
-            {icons.info}Media Info
-          </button>
-          {canEditTracks(ep) && (
+          {hasFile && canEditTracks(ep) && (
             <button type="button" role="menuitem" onClick={() => { setOpen(false); onEditTracks(ep); }}>
-              {icons.tracks}Edit Tracks
+              {icons.tracks}Edit tracks…
             </button>
           )}
-          <button type="button" role="menuitem" className="danger" onClick={() => { setOpen(false); onDeleteFile(ep); }}>
-            {icons.trash}Delete
+          {hasFile && (
+            <button type="button" role="menuitem" onClick={() => { setOpen(false); onRenameFile(ep); }}>
+              {headerIcons.rename}Rename file…
+            </button>
+          )}
+          {hasFile && (
+            <button type="button" role="menuitem" onClick={() => { setOpen(false); onMediaInfo(ep); }}>
+              {icons.info}Media info
+            </button>
+          )}
+          <button type="button" role="menuitem" onClick={() => { setOpen(false); onManualImport(ep); }}>
+            {icons.importFile}Manual import…
           </button>
+          {hasFile && (
+            <button type="button" role="menuitem" className="danger" onClick={() => { setOpen(false); onDeleteFile(ep); }}>
+              {icons.trash}Delete file…
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -332,7 +346,24 @@ function EpisodeActionsMenu({ ep, onMediaInfo, onDeleteFile, onEditTracks }) {
 // ---------------------------------------------------------------------------
 // Episode row
 // ---------------------------------------------------------------------------
-function EpisodeRow({ ep, onSearch, onGrabBest, grabbingBestId, onCancel, onDetails, onMediaInfo, onDeleteFile, onEditTracks }) {
+function EpisodeRow({ ep, onSearch, onGrabBest, grabbingBestId, onCancel, onDetails, onMediaInfo, onDeleteFile, onEditTracks, onRenameFile, onManualImport }) {
+  const menu = <EpisodeActionsMenu ep={ep} onMediaInfo={onMediaInfo} onDeleteFile={onDeleteFile} onEditTracks={onEditTracks} onRenameFile={onRenameFile} onManualImport={onManualImport} />;
+  const grabbingThis = grabbingBestId === ep.id;
+  // Search (interactive release list) + Grab best match (automatic pick) —
+  // on an Available episode these look for an upgrade; the server skips
+  // the grab with a reason when nothing better fits the Quality Profile.
+  const searchButtons = (
+    <>
+      <button className="ep-action" type="button" aria-label="Search episode" data-tooltip="Search episode" onClick={() => onSearch(ep.id)}>{icons.search}</button>
+      <button
+        className="ep-action" type="button" aria-label="Grab best match" data-tooltip="Grab best match"
+        disabled={grabbingBestId != null} style={grabbingThis ? { opacity: 0.5 } : undefined}
+        onClick={() => onGrabBest(ep.id)}
+      >
+        {icons.zap}
+      </button>
+    </>
+  );
   const rowClass = ep.state === 'missing' ? 'missing' : ep.state === 'downloading' ? 'downloading' : '';
   const canAct = ep.id != null;
   let status, action;
@@ -350,34 +381,23 @@ function EpisodeRow({ ep, onSearch, onGrabBest, grabbingBestId, onCancel, onDeta
     // synthetic fallback (shown before real episode data has loaded) has no
     // real sizeBytes/path/quality-tier-name behind it for Media Info to show.
     action = canAct
-      ? <EpisodeActionsMenu ep={ep} onMediaInfo={onMediaInfo} onDeleteFile={onDeleteFile} onEditTracks={onEditTracks} />
+      ? <div className="ep-action-group">{searchButtons}{menu}</div>
       : <button className="ep-action" aria-label="Options" data-tooltip="Episode options" disabled style={{ opacity: 0.4 }}>{icons.dots}</button>;
   } else if (ep.state === 'missing') {
     status = <span className="ep-status status-missing">{icons.alert}Missing</span>;
-    const grabbingThis = grabbingBestId === ep.id;
     action = canAct
-      ? (
-        <div className="ep-action-group">
-          <button className="ep-action" type="button" aria-label="Search episode" data-tooltip="Search episode" onClick={() => onSearch(ep.id)}>{icons.search}</button>
-          <button
-            className="ep-action"
-            type="button"
-            aria-label="Grab best match"
-            data-tooltip="Grab best match"
-            disabled={grabbingBestId != null}
-            style={grabbingThis ? { opacity: 0.5 } : undefined}
-            onClick={() => onGrabBest(ep.id)}
-          >
-            {icons.zap}
-          </button>
-        </div>
-      )
+      ? <div className="ep-action-group">{searchButtons}{menu}</div>
       : <button className="ep-action" aria-label="Search episode" data-tooltip="Search episode" disabled style={{ opacity: 0.4 }}>{icons.search}</button>;
   } else if (ep.state === 'downloading') {
     status = <span className="ep-status status-dl">{icons.download}{ep.pct}%</span>;
-    action = canAct && ep.queueId != null
-      ? <button className="ep-action" type="button" aria-label="Cancel download" data-tooltip="Cancel download" onClick={() => onCancel(ep.queueId)}>{icons.x}</button>
-      : <button className="ep-action" aria-label="Cancel download" data-tooltip="Cancel download" disabled style={{ opacity: 0.4 }}>{icons.x}</button>;
+    action = (
+      <div className="ep-action-group">
+        {canAct && ep.queueId != null
+          ? <button className="ep-action" type="button" aria-label="Cancel download" data-tooltip="Cancel download" onClick={() => onCancel(ep.queueId)}>{icons.x}</button>
+          : <button className="ep-action" aria-label="Cancel download" data-tooltip="Cancel download" disabled style={{ opacity: 0.4 }}>{icons.x}</button>}
+        {canAct && menu}
+      </div>
+    );
   } else {
     status = <span className="ep-status status-not-aired">{icons.clock}Not aired</span>;
     action = <button className="ep-action" aria-label="Search episode" data-tooltip="Search episode" disabled style={{ opacity: 0.4 }}>{icons.dots}</button>;
@@ -769,7 +789,7 @@ function DeleteSeriesModal({ series, onClose }) {
 // always exactly what was just shown. Same preview-then-commit shape real
 // Sonarr/Radarr's own Rename dialog uses.
 // ---------------------------------------------------------------------------
-function RenameFilesModal({ series, onClose, onRenamed }) {
+function RenameFilesModal({ series, onlyEpisodeId, onClose, onRenamed }) {
   const [items, setItems] = useState(null); // null = loading; only "changed" entries from the API
   const [loadFailed, setLoadFailed] = useState(false);
   const [selected, setSelected] = useState(() => new Set());
@@ -787,7 +807,7 @@ function RenameFilesModal({ series, onClose, onRenamed }) {
         // at all — nothing to decide about them, and a long list of
         // already-correct names would just bury the ones that actually
         // changed.
-        const changed = (body.items || []).filter((i) => i.changed);
+        const changed = (body.items || []).filter((i) => i.changed && (onlyEpisodeId == null || i.episodeId === onlyEpisodeId));
         setItems(changed);
         setSelected(new Set(changed.map((i) => i.episodeId)));
         setRenameToggleOff(!body.renameEpisodesToggle);
@@ -795,7 +815,7 @@ function RenameFilesModal({ series, onClose, onRenamed }) {
         setLoadFailed(true);
       }
     })();
-  }, [series.id]);
+  }, [series.id, onlyEpisodeId]);
 
   function toggleOne(id) {
     setSelected((prev) => {
@@ -839,7 +859,7 @@ function RenameFilesModal({ series, onClose, onRenamed }) {
     <div className="modal-overlay open" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal-box wide">
         <div className="modal-header">
-          <h2>Rename Files — {series.title}</h2>
+          <h2>{onlyEpisodeId == null ? `Rename Files — ${series.title}` : 'Rename File'}</h2>
           <button className="modal-close" type="button" aria-label="Close" data-tooltip="Close" onClick={onClose}>{icons.x}</button>
         </div>
         <div className="modal-body">
@@ -854,7 +874,7 @@ function RenameFilesModal({ series, onClose, onRenamed }) {
           ) : items === null ? (
             <p className="settings-empty">Loading…</p>
           ) : items.length === 0 ? (
-            <p className="settings-empty">Every downloaded file already matches the current naming format.</p>
+            <p className="settings-empty">{onlyEpisodeId == null ? 'Every downloaded file already matches the current naming format.' : 'This file already matches the current naming format.'}</p>
           ) : (
             <>
               <label className="rename-select-all">
@@ -1273,6 +1293,10 @@ export default function SeriesPage() {
   const [grabbingBestId, setGrabbingBestId] = useState(null); // episode id currently mid-"Grab best match", or null
   const [grabbingBestScope, setGrabbingBestScope] = useState(null); // 'season' | 'series', while a batch auto-grab is in flight
   const [grabBestMessage, setGrabBestMessage] = useState(null); // { text, isError }
+  const [artworkKind, setArtworkKind] = useState(null); // 'poster' | 'fanart' | null — which Change artwork dialog is open
+  const [titlesOpen, setTitlesOpen] = useState(false);
+  const [renameEpisodeId, setRenameEpisodeId] = useState(null); // set when Rename file… was picked from one episode's menu
+  const [overviewOpen, setOverviewOpen] = useState(false);
 
   const releasePickerRef = useRef(null);
   const episodeDetailsModalRef = useRef(null);
@@ -1566,6 +1590,13 @@ export default function SeriesPage() {
     if (body && body.seriesEps != null) setSeries((prev) => ({ ...prev, eps: body.seriesEps, pct: body.seriesPct }));
     loadRealEpisodesRef.current();
   }
+  function handleRenameFile(ep) {
+    setRenameEpisodeId(ep.id);
+    setRenameFilesOpen(true);
+  }
+  function handleManualImport() {
+    window.location.href = `wanted-manual-import.html?seriesId=${series.id}`;
+  }
   function handleEditTracks(ep) {
     setEditTracksEp(ep);
   }
@@ -1628,6 +1659,15 @@ export default function SeriesPage() {
   else if (series.airStatus) nextAiringText = shortenAirStatus(series.airStatus);
   else if (series.status === 'ended') nextAiringText = 'Ended';
 
+  // Header chips: series.meta is "2023 · Adventure, Drama · TV · 24 min eps"
+  // — one chip per part. Alternate titles: the first two, then "+N more"
+  // (the full list is the line's tooltip and in Edit titles and sort name).
+  const metaParts = (series.meta || '').split('·').map((m) => m.trim()).filter(Boolean);
+  const altList = (series.altTitles || []).filter((t) => t !== series.title);
+  const altTitleText = altList.length
+    ? altList.slice(0, 2).join(' · ') + (altList.length > 2 ? `  +${altList.length - 2} more` : '')
+    : '';
+
   let episodeList;
   let segmentButtons = null;
   let activeGroup = null; // only meaningful in the realGroups branch — used below to gate/label the Rename season button
@@ -1640,9 +1680,9 @@ export default function SeriesPage() {
       ));
     }
     activeGroup = realGroups.find((g) => g.seasonNumber === activeSeasonNumber) || realGroups[0];
-    episodeList = (activeGroup ? activeGroup.rows : []).map((ep) => <EpisodeRow key={ep.id} ep={ep} onSearch={handleSearch} onGrabBest={handleGrabBest} grabbingBestId={grabbingBestId} onCancel={handleCancel} onDetails={handleDetails} onMediaInfo={handleMediaInfo} onDeleteFile={handleDeleteFile} onEditTracks={handleEditTracks} />);
+    episodeList = (activeGroup ? activeGroup.rows : []).map((ep) => <EpisodeRow key={ep.id} ep={ep} onSearch={handleSearch} onGrabBest={handleGrabBest} grabbingBestId={grabbingBestId} onCancel={handleCancel} onDetails={handleDetails} onMediaInfo={handleMediaInfo} onDeleteFile={handleDeleteFile} onEditTracks={handleEditTracks} onRenameFile={handleRenameFile} onManualImport={handleManualImport} />);
   } else {
-    episodeList = buildGenericEpisodes(series).map((ep, i) => <EpisodeRow key={i} ep={ep} onSearch={handleSearch} onGrabBest={handleGrabBest} grabbingBestId={grabbingBestId} onCancel={handleCancel} onDetails={handleDetails} onMediaInfo={handleMediaInfo} onDeleteFile={handleDeleteFile} onEditTracks={handleEditTracks} />);
+    episodeList = buildGenericEpisodes(series).map((ep, i) => <EpisodeRow key={i} ep={ep} onSearch={handleSearch} onGrabBest={handleGrabBest} grabbingBestId={grabbingBestId} onCancel={handleCancel} onDetails={handleDetails} onMediaInfo={handleMediaInfo} onDeleteFile={handleDeleteFile} onEditTracks={handleEditTracks} onRenameFile={handleRenameFile} onManualImport={handleManualImport} />);
   }
   // Only a real, TVDB-backed, non-Specials season can be renamed — the
   // generic synthetic fallback has no real episode rows behind it for PUT
@@ -1653,110 +1693,114 @@ export default function SeriesPage() {
 
   return (
     <>
-      <div className="detail-header">
-        <div className="detail-poster" id="detailPoster">{series.poster && <img src={series.poster} alt={`${series.title} poster`} />}</div>
-        <div className="detail-info">
-          <div className="title-row">
+      <div className="series-hero">
+        <div className="series-hero-backdrop" aria-hidden="true">
+          {series.fanart
+            ? <img className="series-hero-fanart" src={series.fanart} alt="" />
+            : series.poster && <img className="series-hero-fanart is-blurred" src={series.poster} alt="" />}
+        </div>
+        <a className="series-hero-back" href="index.html">{headerIcons.back}Library</a>
+        <SeriesMenu groups={[
+          {
+            label: 'Artwork and titles',
+            items: [
+              { key: 'poster', label: 'Change poster…', icon: headerIcons.poster, onClick: () => setArtworkKind('poster') },
+              { key: 'fanart', label: 'Change background…', icon: headerIcons.background, onClick: () => setArtworkKind('fanart') },
+              { key: 'titles', label: 'Edit titles and sort name…', icon: headerIcons.titles, onClick: () => setTitlesOpen(true) },
+            ],
+          },
+          {
+            label: 'Library',
+            items: [
+              { key: 'refresh', label: refreshingEpisodes ? 'Refreshing…' : 'Refresh episodes', icon: icons.refresh, disabled: refreshingEpisodes, title: 'Re-fetch episode titles, air dates, and synopses from TheTVDB.', onClick: handleRefreshEpisodes },
+              { key: 'rescan', label: rescanningFiles ? 'Scanning…' : 'Rescan for local files', icon: headerIcons.rescan, disabled: rescanningFiles, title: "Check this series' folder on disk for files Kitsune doesn't know about yet.", onClick: handleRescanFiles },
+              { key: 'rename', label: 'Rename files…', icon: headerIcons.rename, title: 'Preview and rename files to match the naming format in Settings > Media Management', onClick: () => setRenameFilesOpen(true) },
+              { key: 'tracks', label: 'Edit tracks…', icon: icons.tracks, disabled: !realGroups, title: 'Set a default audio/subtitle track across every probed .mkv file in this series', onClick: () => handleEditTracksScope('series') },
+            ],
+          },
+          {
+            items: [
+              { key: 'delete', label: 'Delete series…', icon: icons.trash, danger: true, onClick: () => setDeleteOpen(true) },
+            ],
+          },
+        ]} />
+
+        <div className="series-hero-body">
+          <div className="series-hero-poster">
+            {series.poster && <img src={series.poster} alt={`${series.title} poster`} />}
+          </div>
+          <div className="series-hero-info">
             <div>
-              <h1 id="detailTitle">{series.title}</h1>
-              <p className="title-meta" id="detailMeta">{series.meta || ''}</p>
-              {/* Cross-site IDs (server/lib/anime-ids.js) — filled in shortly
-                  after a series is added; nothing renders until at least
-                  one is known. */}
-              {series.ids && (series.ids.mal || series.ids.anilist || series.ids.anidb || series.ids.tvdb) && (
-                <p className="series-id-links">
-                  {series.ids.mal && <a href={`https://myanimelist.net/anime/${series.ids.mal}`} target="_blank" rel="noopener noreferrer">MAL</a>}
-                  {series.ids.anilist && <a href={`https://anilist.co/anime/${series.ids.anilist}`} target="_blank" rel="noopener noreferrer">AniList</a>}
-                  {series.ids.anidb && <a href={`https://anidb.net/anime/${series.ids.anidb}`} target="_blank" rel="noopener noreferrer">AniDB</a>}
-                  {series.ids.tvdb && <a href={`https://thetvdb.com/dereferrer/series/${series.ids.tvdb}`} target="_blank" rel="noopener noreferrer">TVDB</a>}
-                  {series.ids.anilist && <a href={`https://releases.moe/${series.ids.anilist}/`} target="_blank" rel="noopener noreferrer">SeaDex</a>}
-                </p>
+              <h1 className="series-hero-title" id="detailTitle">{series.title}</h1>
+              {altTitleText && (
+                <p className="series-hero-alt" title={(series.altTitles || []).join('\n')}>{altTitleText}</p>
               )}
             </div>
-            <div className="detail-actions">
-              <label className="monitor-toggle" title={isComplete ? "This series is complete — there's nothing left to monitor." : undefined}>
-                <input type="checkbox" checked={!!series.monitored} disabled={isComplete} onChange={handleMonitorToggle} /> Monitored
-              </label>
+            <div className="series-hero-overview-wrap">
+              <p className={`series-hero-overview${overviewOpen ? ' is-open' : ''}`} id="detailOverview">
+                {series.overview || 'No overview available yet.'}
+              </p>
+              {(series.overview || '').length > 280 && (
+                <button type="button" className="link-button" onClick={() => setOverviewOpen((o) => !o)}>{overviewOpen ? 'Less' : 'More'}</button>
+              )}
+            </div>
+            <div className="series-hero-chips">
+              <span className={`series-hero-chip status-${isComplete ? 'ended' : 'continuing'}`}>{isComplete ? 'Ended' : 'Continuing'}</span>
+              {metaParts.map((m) => <span key={m} className="series-hero-chip">{m}</span>)}
+              {series.qualityProfile && <span className="series-hero-chip">{series.qualityProfile}</span>}
+              <span className="series-hero-chip">{sizeText}</span>
+              {!isComplete && nextAiringText !== '—' && <span className="series-hero-chip">Next {nextAiringText}</span>}
+            </div>
+            <div className="series-hero-progress">
+              <div className="series-hero-bar"><div style={{ width: `${Math.max(0, Math.min(100, series.pct || 0))}%` }} /></div>
+              <span>{series.eps} episodes</span>
+            </div>
+            <div className="series-hero-actions">
               <button
-                type="button"
-                disabled={!realGroups}
+                type="button" className="btn-accent" disabled={!realGroups}
                 title={!realGroups ? 'Search all is unavailable until real episode data has loaded.' : 'Search for the whole series as one batch release'}
                 onClick={handleSearchAll}
               >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></svg>
-                Search all
+                {icons.search}Search all
               </button>
               <button
-                type="button"
-                disabled={!realGroups || grabbingBestScope != null}
+                type="button" disabled={!realGroups || grabbingBestScope != null}
                 title={!realGroups ? 'Grab best match is unavailable until real episode data has loaded.' : "Search and grab the whole series' best-match batch release for this series' Quality Profile — no picker"}
                 onClick={() => handleGrabBestScope('series')}
               >
-                {icons.zap}
-                {grabbingBestScope === 'series' ? 'Grabbing…' : 'Grab best match'}
-              </button>
-              <button
-                type="button"
-                disabled={refreshingEpisodes}
-                title="Re-fetch episode titles, air dates, and synopses from TheTVDB."
-                onClick={handleRefreshEpisodes}
-              >
-                {icons.refresh}
-                {refreshingEpisodes ? 'Refreshing…' : 'Refresh episodes'}
-              </button>
-              <button
-                type="button"
-                disabled={rescanningFiles}
-                title="Check this series' folder on disk for files Kitsune doesn't know about yet."
-                onClick={handleRescanFiles}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 7h4l2-2h6l2 2h4v12H3z" /></svg>
-                {rescanningFiles ? 'Scanning…' : 'Rescan for local files'}
+                {icons.zap}{grabbingBestScope === 'series' ? 'Grabbing…' : 'Grab best match'}
               </button>
               <button
                 type="button"
                 title="Import files from another folder (e.g. a download Kitsune couldn't import on its own) and choose which episode each one is."
                 onClick={() => { window.location.href = `wanted-manual-import.html?seriesId=${series.id}`; }}
               >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 3v11M7 9l5 5 5-5" /><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4" /></svg>
-                Manual import
+                {icons.importFile}Manual import
               </button>
+              <button type="button" onClick={() => setEditOpen(true)}>{icons.edit}Edit</button>
               <button
-                type="button"
-                title="Preview and rename this series' downloaded files to match the naming format in Settings > Media Management"
-                onClick={() => setRenameFilesOpen(true)}
+                type="button" className={`series-hero-monitor${series.monitored ? ' is-on' : ''}`}
+                aria-pressed={!!series.monitored} disabled={isComplete}
+                aria-label={series.monitored ? 'Monitored' : 'Not monitored'}
+                data-tooltip={isComplete ? 'Complete — nothing left to monitor' : (series.monitored ? 'Monitored' : 'Not monitored')}
+                onClick={() => handleMonitorToggle({ target: { checked: !series.monitored } })}
               >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 7h16M4 12h10M4 17h7" /><path d="M17 15l3 3-3 3" /></svg>
-                Rename files
-              </button>
-              <button
-                type="button"
-                disabled={!realGroups}
-                title={!realGroups ? 'Edit tracks is unavailable until real episode data has loaded.' : "Set a default audio/subtitle track across every probed .mkv file in this series"}
-                onClick={() => handleEditTracksScope('series')}
-              >
-                {icons.tracks}
-                Edit tracks
-              </button>
-              <button type="button" onClick={() => setEditOpen(true)}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" /></svg>
-                Edit
-              </button>
-              <button className="btn-danger" type="button" onClick={() => setDeleteOpen(true)}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6" /></svg>
-                Delete
+                {headerIcons.bookmark(!!series.monitored)}
               </button>
             </div>
-          </div>
-          {refreshError && <p className="form-error">{refreshError}</p>}
-          {rescanMessage && <p className={rescanMessage.isError ? 'form-error' : 'import-result ok'}>{rescanMessage.text}</p>}
-          {grabBestMessage && <p className={grabBestMessage.isError ? 'form-error' : 'import-result ok'}>{grabBestMessage.text}</p>}
-          <p className="overview" id="detailOverview">{series.overview || 'No overview available yet.'}</p>
-          <div className="detail-stats">
-            <div className="stat-card"><p className="label">Episodes</p><p className="value">{series.eps}</p></div>
-            <div className="stat-card"><p className="label">Quality</p><p className="value">{series.qualityProfile || '—'}</p></div>
-            <div className="stat-card"><p className="label">Size</p><p className="value">{sizeText}</p></div>
-            <div className="stat-card"><p className="label">Next airing</p><p className="value">{nextAiringText}</p></div>
+            {refreshError && <p className="form-error">{refreshError}</p>}
+            {rescanMessage && <p className={rescanMessage.isError ? 'form-error' : 'import-result ok'}>{rescanMessage.text}</p>}
+            {grabBestMessage && <p className={grabBestMessage.isError ? 'form-error' : 'import-result ok'}>{grabBestMessage.text}</p>}
+            <p className="series-hero-footer">
+              {series.path && <span className="series-hero-path">{series.path}</span>}
+              {/* Cross-site IDs (server/lib/anime-ids.js) — filled in shortly
+                  after a series is added; nothing renders until one is known. */}
+              {series.ids && series.ids.mal && <a href={`https://myanimelist.net/anime/${series.ids.mal}`} target="_blank" rel="noopener noreferrer">MAL</a>}
+              {series.ids && series.ids.anilist && <a href={`https://anilist.co/anime/${series.ids.anilist}`} target="_blank" rel="noopener noreferrer">AniList</a>}
+              {series.ids && series.ids.anidb && <a href={`https://anidb.net/anime/${series.ids.anidb}`} target="_blank" rel="noopener noreferrer">AniDB</a>}
+              {series.ids && series.ids.tvdb && <a href={`https://thetvdb.com/dereferrer/series/${series.ids.tvdb}`} target="_blank" rel="noopener noreferrer">TVDB</a>}
+              {series.ids && series.ids.anilist && <a href={`https://releases.moe/${series.ids.anilist}/`} target="_blank" rel="noopener noreferrer">SeaDex</a>}
+            </p>
           </div>
         </div>
       </div>
@@ -1814,12 +1858,28 @@ export default function SeriesPage() {
         <div id="episodeList">{episodeList}</div>
       </div>
 
+      {artworkKind && (
+        <ArtworkModal
+          series={series}
+          kind={artworkKind}
+          onClose={() => setArtworkKind(null)}
+          onSaved={(body) => { setSeries((prev) => ({ ...prev, ...body })); setArtworkKind(null); }}
+        />
+      )}
+      {titlesOpen && (
+        <TitlesModal
+          series={series}
+          onClose={() => setTitlesOpen(false)}
+          onSaved={(body) => { setSeries((prev) => ({ ...prev, ...body })); setTitlesOpen(false); document.title = `Kitsune — ${body.title}`; }}
+        />
+      )}
       {deleteOpen && <DeleteSeriesModal series={series} onClose={() => setDeleteOpen(false)} />}
       {renameFilesOpen && (
         <RenameFilesModal
           series={series}
-          onClose={() => setRenameFilesOpen(false)}
-          onRenamed={() => { setRenameFilesOpen(false); loadRealEpisodesRef.current(); }}
+          onlyEpisodeId={renameEpisodeId}
+          onClose={() => { setRenameFilesOpen(false); setRenameEpisodeId(null); }}
+          onRenamed={() => { setRenameFilesOpen(false); setRenameEpisodeId(null); loadRealEpisodesRef.current(); }}
         />
       )}
       {renamingSeason && canRenameActiveSeason && (
