@@ -260,11 +260,20 @@ function waitForHealth(run, token) {
 // ---------------------------------------------------------------------------
 // Applying and rolling back
 // ---------------------------------------------------------------------------
+// A path with its symlinks resolved, or just resolved when it doesn't exist.
+// The same folder can be spelled two ways: on macOS /var/... is really
+// /private/var/..., and an install folder can itself be a symlink. Comparing
+// spellings would refuse a legitimate staged update.
+function realOrResolved(p) {
+  const resolved = path.resolve(p);
+  try { return fs.realpathSync(resolved); } catch { return resolved; }
+}
+
 function validatePending(pending) {
   if (!pending || typeof pending !== 'object') throw new Error('pending.json is missing or unreadable.');
   if (pending.protocol !== P.PROTOCOL) throw new Error(`pending.json uses update protocol ${pending.protocol}; this launcher understands ${P.PROTOCOL}. Restart Kitsune and try again.`);
-  const staging = path.resolve(String(pending.stagingDir || ''));
-  if (!isInside(staging, P.STAGING_DIR)) throw new Error('pending.json points outside data/updates/staging.');
+  const staging = realOrResolved(String(pending.stagingDir || ''));
+  if (!isInside(staging, realOrResolved(P.STAGING_DIR))) throw new Error('pending.json points outside data/updates/staging.');
   for (const required of ['server.js', 'launcher.js', 'package.json', 'node_modules']) {
     if (!fs.existsSync(path.join(staging, required))) throw new Error(`The staged version is missing ${required}.`);
   }
