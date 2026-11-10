@@ -7,10 +7,12 @@
 // that's explicitly a later phase, gated on deployment-mode.js telling it
 // whether this instance is even the kind that could safely do that.
 // ---------------------------------------------------------------------------
-const { sendJson } = require('../lib/http');
+const { sendJson, readJsonBody } = require('../lib/http');
 const { logInfo, logWarn } = require('../logger');
-const { getCachedUpdateStatus, runNow } = require('../lib/update-check');
+const { getCachedUpdateStatus, runNow, loadBuildInfo } = require('../lib/update-check');
 const { getDeploymentMode } = require('../lib/deployment-mode');
+const updater = require('../lib/updater');
+const { requireAuth, requireAdmin } = require('./auth');
 const { version: currentVersion } = require('../../package.json');
 
 async function handleSystemUpdatesApi(req, res, urlPath) {
@@ -24,7 +26,65 @@ async function handleSystemUpdatesApi(req, res, urlPath) {
       currentVersion,
       deploymentMode: getDeploymentMode(),
       ...getCachedUpdateStatus(),
+      // Read fresh, not from the cached check: right after an update the
+      // cache still describes the previous build until the next check ends.
+      buildInfo: loadBuildInfo(),
+      install: updater.getInstallStatus(),
     });
+    return true;
+  }
+
+  // ---- Phase 2: installing a chosen version (see server/lib/updater.js) ----
+
+  // GET /api/system-updates/targets[?refresh=1] — branches and releases on
+  // GitHub that can be installed. Cached for a few minutes, since
+  // unauthenticated GitHub API calls are limited to 60 an hour.
+  if (req.method === 'GET' && urlPath === '/api/system-updates/targets') {
+    if (!(await requireAuth(req, res))) return true;
+    const refresh = /[?&]refresh=1\b/.test(req.url);
+    try {
+      sendJson(res, 200, await updater.listTargets({ refresh }));
+    } catch (err) {
+      sendJson(res, 502, { error: err.message });
+    }
+    return true;
+  }
+
+  // GET /api/system-updates/preview?type=branch|release&ref=<name> — which
+  // commit that is, and whether installing it is an upgrade, a downgrade or
+  // a branch switch, with the commits involved.
+  if (req.method === 'GET' && urlPath === '/api/system-updates/preview') {
+    if (!(await requireAuth(req, res))) return true;
+    const params = new URL(req.url, 'http://localhost').searchParams;
+    try {
+      sendJson(res, 200, await updater.previewTarget(params.get('type'), params.get('ref')));
+    } catch (err) {
+      sendJson(res, err.status || 502, { error: err.message });
+    }
+    return true;
+  }
+
+  // POST /api/system-updates/install { type, ref, confirm } — admins only.
+  // Anything other than a plain upgrade answers { needsConfirm: true, ... }
+  // until it's sent again with confirm: true. Otherwise starts in the
+  // background; GET /api/system-updates reports progress under `install`.
+  if (req.method === 'POST' && urlPath === '/api/system-updates/install') {
+    const user = await requireAdmin(req, res);
+    if (!user) return true;
+    let body = {};
+    try {
+      body = await readJsonBody(req);
+    } catch {
+      sendJson(res, 400, { error: 'Invalid JSON body.' });
+      return true;
+    }
+    try {
+      const result = await updater.startInstall({ type: body.type, ref: body.ref, confirm: body.confirm === true }, user);
+      sendJson(res, result.needsConfirm ? 409 : 202, result);
+    } catch (err) {
+      logWarn('SystemUpdates', `Install request refused: ${err.message}`);
+      sendJson(res, err.status || 500, { error: err.message });
+    }
     return true;
   }
 

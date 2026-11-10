@@ -30,6 +30,9 @@
 - [Download Clients](Download-Clients)
 - [Connect Notifications](Connect-Notifications)
 
+**System**
+- [In-App Updates](In-App-Updates)
+
 **Dashboard**
 - [Disk Usage](Disk-Usage)
 - [Three Small Fixes](Three-Small-Fixes)

@@ -1,0 +1,40 @@
+# systemd unit for a standalone (non-Docker) Kitsune install.
+#
+# Install:
+#   sudo cp scripts/kitsune.service /etc/systemd/system/kitsune.service
+#   sudo systemctl edit --full kitsune     # adjust User, WorkingDirectory, node path
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now kitsune
+#   journalctl -u kitsune -f               # logs, including the launcher's
+#
+# ExecStart runs launcher.js, not server.js. The launcher is what applies an
+# update installed from System > Updates (and rolls it back if the new version
+# fails to start); it restarts the server itself during an update, so systemd
+# only steps in if the whole thing actually crashes.
+#
+# The service user must own the install directory: an update replaces its
+# files (everything except data/, .env* and .git), and npm needs to write
+# node_modules there.
+
+[Unit]
+Description=Kitsune (self-hosted anime automation)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kitsune
+Group=kitsune
+WorkingDirectory=/opt/kitsune
+# Use the absolute path of the Node 22.5+ binary you run Kitsune with
+# (`which node`). The updater runs the npm that sits next to it.
+ExecStart=/usr/bin/node /opt/kitsune/launcher.js
+Restart=on-failure
+RestartSec=5
+# The launcher forwards SIGTERM to the server and waits for it; give an
+# in-progress shutdown time to close the database cleanly.
+KillMode=mixed
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

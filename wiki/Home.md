@@ -18,7 +18,7 @@ sections sometimes revise or extend its earlier ones.
 ```
 npm install
 npm run build   # compiles whichever pages have migrated to React so far into public/dist/
-node server.js
+npm start       # launcher.js, which runs server.js and applies in-app updates
 ```
 
 Then open http://localhost:3000
@@ -110,6 +110,8 @@ missing, cutoff unmet) are all backed by SQLite — see
 - [Connect Notifications](Connect-Notifications) — real Pushover notifications
 
 **Dashboard**
+- [In-App Updates](In-App-Updates) — install a branch or release from System > Updates,
+  with a pre-update backup and automatic rollback through `launcher.js`
 - [Disk Usage](Disk-Usage) — real recursive disk usage, the System > Tasks recompute job,
   and persistence across restarts
 - [Three Small Settings/Nav Fixes](Three-Small-Fixes)

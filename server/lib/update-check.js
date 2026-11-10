@@ -53,7 +53,9 @@ const TASK_NAME = 'Application Update Check';
 const MIN_INTERVAL_HOURS = 1;
 const MAX_INTERVAL_HOURS = 168; // 1 week
 const BUILD_INFO_PATH = path.join(__dirname, '..', '..', 'build-info.json');
-const GITHUB_API_BASE = 'https://api.github.com';
+// Overridable for GitHub Enterprise, and for scripts/test-updater.js, which
+// points it at a local mock.
+const GITHUB_API_BASE = (process.env.KITSUNE_GITHUB_API_BASE || 'https://api.github.com').replace(/\/+$/, '');
 const DEFAULT_BRANCH = 'main';
 
 // ---------------------------------------------------------------------------
@@ -97,10 +99,13 @@ function loadBuildInfo() {
     return {
       commit: parsed.commit || null,
       branch: parsed.branch || null,
+      // Set only for a release installed through System > Updates (see
+      // server/lib/updater.js), which stamps the tag it installed.
+      tag: parsed.tag || null,
       builtAt: parsed.builtAt || null,
     };
   } catch {
-    return { commit: null, branch: null, builtAt: null };
+    return { commit: null, branch: null, tag: null, builtAt: null };
   }
 }
 
@@ -479,4 +484,11 @@ module.exports = {
   runNow,
   startUpdateCheckScheduler,
   getCachedUpdateStatus,
+  // Shared with server/lib/updater.js, which installs what this module finds.
+  GITHUB_API_BASE,
+  getRepoInfo,
+  loadBuildInfo,
+  githubHeaders,
+  githubGet,
+  summarizeCommit,
 };
