@@ -138,8 +138,16 @@ async function rankReleaseCandidates(releases, { profile, runtimeMinutes } = {})
     inProfile: allowed ? allowed.has(r.quality) : true,
     _sizeDistance: await sizeDistance(r),
   })));
+  // SeaDex's curated pick (server/lib/seadex.js) outranks quality tier
+  // within the profile: it's a human judgment that already weighs
+  // encode quality, source and completeness — things a tier name like
+  // "Bluray-1080p" can't. It never lifts an out-of-profile release above an
+  // in-profile one; the profile still decides what's acceptable at all.
+  const seadexRank = (r) => (r.seadex === 'best' ? 2 : r.seadex === 'alt' ? 1 : 0);
   annotated.sort((a, b) => {
     if (a.inProfile !== b.inProfile) return a.inProfile ? -1 : 1;
+    const seadexDiff = seadexRank(b) - seadexRank(a);
+    if (seadexDiff !== 0) return seadexDiff;
     const rankDiff = order.indexOf(b.quality) - order.indexOf(a.quality);
     if (rankDiff !== 0) return rankDiff;
     const sizeDiff = a._sizeDistance - b._sizeDistance;

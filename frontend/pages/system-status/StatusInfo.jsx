@@ -50,7 +50,13 @@ export default function StatusInfo() {
           <div className="stat-card"><p className="label">App Data</p><p className="value" style={{ fontSize: '13px' }}>{status ? status.appDataPath : '—'}</p></div>
           <div className="stat-card"><p className="label">Series</p><p className="value" style={{ fontSize: '15px' }}>{status ? `${status.seriesCount} (${status.monitoredCount} monitored)` : '—'}</p></div>
           <div className="stat-card"><p className="label">Episodes</p><p className="value" style={{ fontSize: '15px' }}>{status ? `${status.downloadedEpisodeCount} / ${status.episodeCount}` : '—'}</p></div>
+          <div className="stat-card"><p className="label">ffprobe</p><p className="value" style={{ fontSize: '15px', color: status && status.tools && !status.tools.ffprobe ? 'var(--danger)' : undefined }}>{status && status.tools ? (status.tools.ffprobe ? 'Installed' : 'Not found') : '—'}</p></div>
+          <div className="stat-card"><p className="label">mkvpropedit</p><p className="value" style={{ fontSize: '15px', color: status && status.tools && !status.tools.mkvpropedit ? 'var(--danger)' : undefined }}>{status && status.tools ? (status.tools.mkvpropedit ? 'Installed' : 'Not found') : '—'}</p></div>
+          <div className="stat-card"><p className="label">Files missing media info</p><p className="value" style={{ fontSize: '15px' }}>{status && status.unprobedEpisodeCount != null ? status.unprobedEpisodeCount : '—'}</p></div>
         </div>
+        {status && status.tools && !status.tools.ffprobe && (
+          <p className="form-error" style={{ marginTop: 0 }}>ffprobe isn't installed, so audio/video info can't be read from your files (Media info, the Audio column and Edit tracks stay empty). Install ffmpeg on the server and restart Kitsune.</p>
+        )}
       </div>
 
       <div className="settings-card">

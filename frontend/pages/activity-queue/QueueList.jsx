@@ -147,6 +147,19 @@ export default function QueueList() {
         >
           {retrying ? 'Import failed' : (QUEUE_STATUS_LABEL[q.status] || q.status)}
         </span>
+        {/* Manual Import for this item's torrent (Wanted > Manual Import,
+            server/routes/manual-import.js) — the way out when the
+            automatic import keeps failing, or the files need assigning by
+            hand. Highlighted while an import is failing. */}
+        <button
+          className={`ep-action${retrying ? ' ep-action-warn' : ''}`}
+          type="button"
+          aria-label={`Manual import ${q.seriesTitle} ${q.episodeLabel}`}
+          data-tooltip="Manual import"
+          onClick={() => { window.location.href = `wanted-manual-import.html?queueId=${q.id}`; }}
+        >
+          {icons.importFile}
+        </button>
         <button
           className="ep-action"
           type="button"

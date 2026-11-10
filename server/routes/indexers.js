@@ -15,6 +15,10 @@ const { sendJson } = require('../lib/http');
 const { rowToItem } = require('./settings-items');
 const { testNyaaReachable } = require('../lib/nyaa-search');
 const { testProwlarrReachable } = require('../lib/prowlarr-search');
+const { testAnimeToshoReachable } = require('../lib/animetosho-search');
+const { testSeaDexReachable } = require('../lib/seadex');
+
+const REAL_TEST_TYPES = new Set(['nyaa', 'prowlarr', 'animetosho', 'seadex']);
 
 async function handleIndexersApi(req, res, urlPath) {
   const testMatch = urlPath.match(/^\/api\/indexers\/(\d+)\/test$/);
@@ -28,15 +32,19 @@ async function handleIndexersApi(req, res, urlPath) {
   }
   const saved = JSON.parse(existing.data);
 
-  if (saved.type !== 'nyaa' && saved.type !== 'prowlarr') {
-    sendJson(res, 400, { error: 'Real testing is only available for the Nyaa.si and Prowlarr indexers right now.' });
+  if (!REAL_TEST_TYPES.has(saved.type)) {
+    sendJson(res, 400, { error: 'Real testing is only available for the Nyaa.si, AnimeTosho, SeaDex and Prowlarr indexers right now.' });
     return true;
   }
 
   logInfo('IndexerService', `Testing "${saved.name}"`);
   const result = saved.type === 'nyaa'
     ? await testNyaaReachable()
-    : await testProwlarrReachable({ baseUrl: saved.baseUrl, apiKey: saved.apiKey, allowInsecureSsl: saved.allowInsecureSsl });
+    : saved.type === 'animetosho'
+      ? await testAnimeToshoReachable()
+      : saved.type === 'seadex'
+        ? await testSeaDexReachable()
+        : await testProwlarrReachable({ baseUrl: saved.baseUrl, apiKey: saved.apiKey, allowInsecureSsl: saved.allowInsecureSsl });
 
   const updatedData = { ...saved, status: result.ok ? 'ok' : 'fail' };
   await db.prepare('UPDATE settings_items SET data = ? WHERE id = ?').run(JSON.stringify(updatedData), id);

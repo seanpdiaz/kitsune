@@ -28,6 +28,7 @@ const { logDebug, logInfo, logWarn, logError } = require('./server/logger');
 const { sendJson } = require('./server/lib/http');
 
 const { handleAuthApi, handleBasicAuthChallenge } = require('./server/routes/auth');
+const { handleOidcApi } = require('./server/routes/oidc');
 const { handleUserPrefsApi } = require('./server/routes/user-prefs');
 const { handleTagsApi } = require('./server/routes/tags');
 const { handleSettingsItemsApi } = require('./server/routes/settings-items');
@@ -51,6 +52,8 @@ const { handleSystemApi } = require('./server/routes/system');
 const { handleSystemTasksApi } = require('./server/routes/system-tasks');
 const { handleSystemUpdatesApi } = require('./server/routes/system-updates');
 const { handleImportFilesApi } = require('./server/routes/import-files');
+const { handleManualImportApi } = require('./server/routes/manual-import');
+const { handleManualGrabApi } = require('./server/routes/manual-grab');
 const { handleBackupsApi } = require('./server/routes/backups');
 const { handleSslApi } = require('./server/routes/ssl');
 const { handleIndexersApi } = require('./server/routes/indexers');
@@ -58,6 +61,8 @@ const { startDiskUsageScheduler } = require('./server/lib/disk-usage');
 const { startPermissionsScheduler } = require('./server/lib/permissions');
 const { startRefreshSeriesScheduler } = require('./server/lib/refresh-series-task');
 const { startUpdateCheckScheduler } = require('./server/lib/update-check');
+const { startRetentionScheduler } = require('./server/lib/retention');
+const { startProbeBackfillScheduler } = require('./server/lib/media-probe-backfill');
 
 // Default for how often the Library dashboard's Disk usage stat card
 // recomputes (a real recursive directory walk — expensive, so it runs on a
@@ -119,6 +124,7 @@ const server = http.createServer(async (req, res) => {
     try {
       const handled =
         (await handleAuthApi(req, res, urlPath)) ||
+        (await handleOidcApi(req, res, urlPath)) ||
         (await handleUserPrefsApi(req, res, urlPath)) ||
         (await handleTagsApi(req, res, urlPath)) ||
         (await handleSettingsItemsApi(req, res, urlPath)) ||
@@ -142,6 +148,8 @@ const server = http.createServer(async (req, res) => {
         (await handleSystemTasksApi(req, res, urlPath)) ||
         (await handleSystemUpdatesApi(req, res, urlPath)) ||
         (await handleImportFilesApi(req, res, urlPath)) ||
+        (await handleManualImportApi(req, res, urlPath)) ||
+        (await handleManualGrabApi(req, res, urlPath)) ||
         (await handleBackupsApi(req, res, urlPath)) ||
         (await handleSslApi(req, res, urlPath)) ||
         (await handleIndexersApi(req, res, urlPath));
@@ -165,7 +173,7 @@ const server = http.createServer(async (req, res) => {
 
   if (urlPath === '/') urlPath = '/index.html';
 
-  // Settings > General's Authentication Method set to "Basic (browser
+  // Settings > Security's Authentication Method set to "Basic (browser
   // popup)" means every *.html page load — the only place a real browser
   // ever gets the chance to show its native credential prompt — goes
   // through a real HTTP Basic Auth challenge first (see
@@ -225,6 +233,17 @@ const server = http.createServer(async (req, res) => {
     console.error('Fatal: database initialization failed:', err);
     process.exit(1);
   }
+
+  // Applies Settings > General's Log Level before the first request is
+  // served (so startup and request logging already honor it) and prunes
+  // logs/history past their retention, then re-prunes hourly — see
+  // server/lib/retention.js. Awaited, unlike the schedulers below, because
+  // it's two quick DELETEs and the log level should be in place first.
+  await startRetentionScheduler();
+  // Probe downloaded files that still have no media info (see
+  // server/lib/media-probe-backfill.js): shortly after startup, then every
+  // few hours.
+  startProbeBackfillScheduler();
 
   server.listen(PORT, () => {
     logInfo('Server', `Kitsune mockup running at http://localhost:${PORT}`);

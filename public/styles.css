@@ -930,7 +930,18 @@ select {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
+  /* The action toolbar has grown to nine controls (Monitored + 8 buttons),
+     wider than .detail-info on most desktop widths. Without wrapping, its
+     fixed width squeezed the title into a narrow column (one word per line)
+     and pushed Delete off the right edge. Wrapping lets the toolbar drop
+     onto its own line below the title when the two don't fit side by side. */
+  flex-wrap: wrap;
+  row-gap: 12px;
 }
+
+/* Title block: grow into whatever space is left, but never get narrower
+   than 240px before the toolbar is forced onto the next line. */
+.title-row > :first-child { flex: 1 1 240px; min-width: 0; }
 
 .title-row h1 {
   font-size: 21px;
@@ -945,7 +956,10 @@ select {
   margin: 0;
 }
 
-.detail-actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+/* flex: 0 1 auto (not flex-shrink: 0) + flex-wrap: once the toolbar is on
+   its own line it may still be wider than .detail-info, so it shrinks to
+   the line width and wraps its buttons rather than overflowing the page. */
+.detail-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex: 0 1 auto; min-width: 0; }
 
 .monitor-toggle {
   display: flex;
@@ -1106,7 +1120,8 @@ select {
      wrapping onto a second line at the hyphen, which made a row's height
      differ from other rows in the same table whenever one episode had a
      longer quality string than its neighbors (see .ep-date below too). */
-  grid-template-columns: 44px 1fr 84px 80px 96px 110px 68px;
+  /* Last column: Search + Grab best match + the "…" menu on every row. */
+  grid-template-columns: 44px 1fr 84px 80px 96px 110px 100px;
   gap: 8px;
   align-items: center;
   padding: 10px 12px;
@@ -1382,7 +1397,7 @@ select {
 .health-row { grid-template-columns: 150px 1fr; }
 .event-header, .event-row { grid-template-columns: 90px 100px 1fr; }
 .log-header, .log-row { grid-template-columns: 90px 70px 160px 1fr; }
-.queue-header, .queue-row { grid-template-columns: 1fr 110px 80px 160px 120px 32px 32px; }
+.queue-header, .queue-row { grid-template-columns: 1fr 110px 80px 160px 120px 32px 32px 32px; }
 .blocklist-header, .blocklist-row { grid-template-columns: 1fr 140px 130px 110px 110px 32px; }
 /* Files column added between Match and Status for the real per-folder file
    summary (count/size/formats) — see frontend/pages/library-import/LibraryImportPage.jsx. */
@@ -1417,6 +1432,42 @@ select {
 }
 
 .event-row .ep-date, .log-row .ep-date { font-family: var(--font-mono); }
+
+/* Activity > History show search — the "Showing events for X" bar above the
+   list, and series names in each row rendered as link-style buttons that
+   pin the list to that one show (see HistoryList.jsx). The buttons reset the
+   global button chrome (height/background/border) to read as inline text. */
+.history-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  background: var(--accent-bg);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.history-filter-bar strong { color: var(--text-primary); font-weight: 600; }
+.history-filter-bar > span { flex: 1; min-width: 0; }
+.history-filter-link { color: var(--accent); font-size: 13px; }
+.history-filter-link:hover { text-decoration: underline; }
+.history-filter-clear,
+.history-series-link {
+  height: auto;
+  padding: 0;
+  background: none;
+  border: none;
+  font: inherit;
+  cursor: pointer;
+  white-space: normal;
+  display: inline;
+}
+.history-filter-clear { color: var(--text-primary); font-size: 13px; }
+.history-filter-clear:hover { color: var(--accent); }
+.history-series-link { color: var(--text-primary); font-weight: 600; }
+.history-series-link:hover { color: var(--accent); text-decoration: underline; }
 
 /* Indeterminate progress bar for the one real System > Tasks row (Disk Usage
    Recompute) while a scan is in flight — see public/js/pages/system-tasks.js.
@@ -1749,6 +1800,35 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 }
 .field-input:focus, .field-select:focus { outline: none; border-color: var(--border-strong); }
 
+/* Multi-line PEM input (Settings > Security's Trusted CA Certificate) —
+   same surface as .field-input, monospace since it's certificate text. */
+.field-textarea {
+  width: 100%;
+  min-height: 96px;
+  padding: 8px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-primary);
+  resize: vertical;
+}
+.field-textarea:focus { outline: none; border-color: var(--border-strong); }
+
+/* Warning callout for settings that weaken security (e.g. skipping
+   certificate verification for single sign-on). */
+.settings-warning {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--danger);
+  background: var(--danger-bg);
+  border-radius: var(--radius-sm);
+}
+
 .format-preview {
   font-family: var(--font-mono);
   font-size: 11px;
@@ -2048,6 +2128,22 @@ input[type="range"].size-slider::-moz-range-track {
 
 .auth-page .field-input { width: 100%; }
 .auth-submit { width: 100%; justify-content: center; margin-top: 20px; }
+
+/* Single sign-on (server/routes/oidc.js): the provider button sits above the
+   password form, which becomes the secondary option below an "or" rule. */
+.auth-sso { margin-top: 18px; }
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.auth-divider::before,
+.auth-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
 
 /* Modal */
 .modal-overlay {
@@ -2496,6 +2592,28 @@ a.release-title:hover { text-decoration: underline; }
   background: var(--warning-bg);
   border-radius: 4px;
 }
+
+/* SeaDex pick flag (release-picker-modal.js's seadexFlag) — same pill shape
+   as the out-of-profile flag above, success-colored since it's a
+   recommendation rather than a warning. */
+.quality-flag.seadex-flag {
+  display: inline-block;
+  margin-left: 5px;
+  padding: 1px 5px;
+  font-size: 9.5px;
+  font-family: var(--font-ui);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--success);
+  background: var(--success-bg);
+  border-radius: 4px;
+}
+.quality-flag.seadex-flag.seadex-alt { opacity: 0.75; }
+
+/* Cross-site ID links under a series' title (SeriesPage.jsx). */
+.series-id-links { display: flex; flex-wrap: wrap; gap: 10px; margin: 4px 0 0; font-size: 11.5px; }
+.series-id-links a { color: var(--text-muted); text-decoration: none; }
+.series-id-links a:hover { color: var(--accent); text-decoration: underline; }
 
 /* ---------- Queue progress bar ---------- */
 
@@ -3347,6 +3465,7 @@ a.release-title:hover { text-decoration: underline; }
 
   .top-row { flex-wrap: wrap; row-gap: 12px; }
   .search-box { width: 100%; }
+  #historySearchRoot { width: 100%; }
   .filter-row { flex-wrap: wrap; row-gap: 10px; }
   .filter-row-right { flex-wrap: wrap; row-gap: 8px; }
 
@@ -3462,4 +3581,358 @@ a.release-title:hover { text-decoration: underline; }
      title or two. */
   .calendar-weekdays,
   .calendar-grid { min-width: 700px; }
+}
+
+
+/* ---------- Wanted > Manual Import ---------- */
+/* frontend/pages/wanted-manual-import/ManualImportPage.jsx */
+
+.mi-source {
+  padding: 14px 16px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  margin-bottom: 16px;
+}
+.mi-folder-form { display: flex; gap: 8px; align-items: center; }
+.mi-folder-form .field-input { flex: 1; height: 36px; font-family: 'JetBrains Mono', monospace; font-size: 12.5px; }
+.mi-folder-form button { height: 36px; flex-shrink: 0; }
+.mi-recent { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; }
+.mi-chip {
+  height: 26px; padding: 0 10px; font-size: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block;
+}
+.mi-queue-banner { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; }
+.mi-queue-banner .settings-meta { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+.mi-queue-banner a { color: var(--accent); margin-left: auto; }
+
+.mi-notice {
+  padding: 10px 14px; margin-bottom: 12px;
+  border: 1px solid var(--border); border-left: 3px solid var(--warning);
+  border-radius: var(--radius-sm); background: var(--surface-1);
+  color: var(--text-secondary); font-size: 13px;
+}
+.mi-notice.error { border-left-color: var(--danger); }
+.mi-notice p { margin: 0 0 8px; }
+.mi-notice p:last-child { margin: 0; }
+
+.mi-toolbar { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 10px; }
+.mi-toolbar-group { display: flex; gap: 8px; align-items: center; }
+.mi-toolbar-group .field-select { width: 260px; }
+
+.mi-header, .mi-row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1.5fr) minmax(0, 1fr) 150px minmax(0, 1.1fr) 140px 130px;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 12px;
+}
+.mi-header { font-size: 11.5px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.03em; }
+.mi-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-bottom: 6px;
+  background: var(--surface-1);
+}
+.mi-row.selected { border-color: var(--border-strong); }
+.mi-row.done { opacity: 0.7; }
+.mi-row .field-select { min-width: 0; }
+.mi-file { font-family: 'JetBrains Mono', monospace; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mi-row .status-pill { justify-self: start; }
+
+.mi-picker { position: relative; min-width: 0; }
+.mi-picker-btn {
+  width: 100%; height: 32px; padding: 0 8px 0 10px;
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  background: var(--surface-2); font-size: 13px; text-align: left;
+}
+.mi-picker-btn.empty .mi-picker-label { color: var(--text-muted); }
+.mi-picker-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.mi-picker-panel {
+  position: absolute; z-index: 40; top: calc(100% + 4px); left: 0;
+  width: max(100%, 340px); max-height: 320px; overflow-y: auto;
+  background: var(--surface-2); border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm); box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+  padding: 4px;
+}
+.mi-picker-item {
+  display: grid; grid-template-columns: 16px 40px minmax(0, 1fr) auto auto;
+  gap: 8px; align-items: center;
+  padding: 6px 8px; border-radius: var(--radius-sm); cursor: pointer; font-size: 13px;
+}
+.mi-picker-item:hover { background: var(--surface-3); }
+.mi-picker-item.checked { background: var(--accent-bg); }
+.mi-ep-num { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-secondary); }
+.mi-ep-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mi-ep-flag { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.mi-ep-flag.warn { color: var(--warning); }
+
+.mi-footer {
+  display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap;
+  margin-top: 14px; padding: 12px 16px;
+  background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius-md);
+}
+.mi-mode { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 300px; }
+.mi-mode .field-select { width: 170px; flex-shrink: 0; }
+.mi-footer-actions { display: flex; align-items: center; gap: 14px; }
+.mi-text-warn { color: var(--warning); }
+.mi-text-ok { color: var(--success); }
+
+@media (max-width: 1100px) {
+  .mi-header { display: none; }
+  .mi-row { grid-template-columns: 28px minmax(0, 1fr); }
+  .mi-row > :not(:first-child) { grid-column: 2; }
+  .mi-row > :first-child { grid-row: 1; align-self: start; padding-top: 2px; }
+  .mi-toolbar, .mi-folder-form { flex-wrap: wrap; }
+}
+
+/* Activity > Queue's Manual Import button — amber while the automatic
+   import is failing. */
+.ep-action.ep-action-warn { color: var(--warning); }
+
+/* ---------- Series page header (fanart hero) ----------
+   Replaces the old .detail-header card on the series page (see
+   SeriesPage.jsx and wiki/Series-Page.md). The hero is tall, so the series
+   page no longer pins the header and scrolls only the episode list: the
+   whole #seriesRoot column scrolls instead, with the season tabs row
+   sticking to the top once the hero has scrolled away. .main-series keeps
+   its fixed 100vh height, so #seriesRoot is the one scroll container (the
+   episode menu's flip-upward check finds it via findScrollParent). */
+.main-series { padding: 0; }
+.main-series > .back-link { display: none; }
+.main-series #seriesRoot {
+  overflow-y: auto;
+  overflow-x: clip;
+  padding: 0 28px 40px;
+}
+.main-series .episode-list-scroll { flex: none; overflow: visible; }
+.main-series .episode-list-scroll .ep-header { position: static; }
+.main-series .segment-tabs-row {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--bg);
+  padding-top: 6px;
+}
+
+.series-hero { position: relative; margin: 0 -28px 28px; flex-shrink: 0; }
+.series-hero-backdrop {
+  position: relative;
+  height: 340px;
+  overflow: hidden;
+  background: var(--surface-1);
+}
+.series-hero-fanart {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 25%;
+}
+/* No fanart: the poster, blown up and blurred, fills the band instead. */
+.series-hero-fanart.is-blurred {
+  inset: -40px;
+  width: calc(100% + 80px);
+  height: calc(100% + 80px);
+  object-position: center;
+  filter: blur(36px) saturate(1.2) brightness(0.55);
+}
+.series-hero-backdrop::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(20, 22, 27, 0.25) 0%, rgba(20, 22, 27, 0.6) 55%, var(--bg) 100%);
+}
+
+.series-hero-back {
+  position: absolute;
+  top: 18px;
+  left: 28px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px 6px 8px;
+  border-radius: var(--radius-sm);
+  background: rgba(20, 22, 27, 0.6);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.series-hero-back:hover { background: rgba(20, 22, 27, 0.85); }
+
+.series-hero-menu { position: absolute; top: 18px; right: 28px; z-index: 10; }
+.series-hero-menu-btn {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: rgba(20, 22, 27, 0.6);
+  color: var(--text-primary);
+}
+.series-hero-menu-btn:hover { background: rgba(20, 22, 27, 0.85); }
+.series-hero-menu-btn svg { width: 18px; height: 18px; }
+.series-hero-dropdown { top: calc(100% + 6px); min-width: 240px; }
+.series-hero-menu-group + .series-hero-menu-group { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 4px; }
+.series-hero-menu-label {
+  margin: 0;
+  padding: 6px 9px 3px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+.series-hero-dropdown button:disabled { opacity: 0.5; cursor: default; }
+
+.series-hero-body {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  gap: 36px;
+  margin-top: -200px;
+  padding: 0 28px;
+}
+.series-hero-poster {
+  position: relative;
+  flex: 0 0 210px;
+  height: 315px;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: linear-gradient(155deg, var(--surface-3), var(--surface-2));
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+}
+.series-hero-poster img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+
+.series-hero-info {
+  flex: 1;
+  min-width: 0;
+  padding-top: 96px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.series-hero-title {
+  margin: 0;
+  font-size: 32px;
+  line-height: 1.15;
+  font-weight: 800;
+  letter-spacing: -0.015em;
+}
+.series-hero-alt { margin: 4px 0 0; font-size: 13px; color: var(--text-secondary); }
+
+.series-hero-overview-wrap { max-width: 760px; }
+.series-hero-overview {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.series-hero-overview.is-open { display: block; }
+.link-button {
+  height: auto;
+  padding: 0;
+  margin-top: 2px;
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+}
+.link-button:hover { background: none; border: none; text-decoration: underline; }
+
+.series-hero-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.series-hero-chip {
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.series-hero-chip.status-continuing { font-family: var(--font-ui); font-weight: 700; color: var(--success); background: var(--success-bg); border-color: transparent; }
+.series-hero-chip.status-ended { font-family: var(--font-ui); font-weight: 700; color: var(--text-secondary); background: var(--surface-3); border-color: transparent; }
+
+.series-hero-progress { display: flex; align-items: center; gap: 12px; max-width: 520px; }
+.series-hero-bar { flex: 1; height: 6px; border-radius: 3px; background: var(--surface-3); overflow: hidden; }
+.series-hero-bar > div { height: 100%; border-radius: 3px; background: var(--accent); }
+.series-hero-progress span { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
+
+.series-hero-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 2px; }
+.series-hero-actions > button { height: 36px; padding: 0 14px; font-weight: 600; }
+.series-hero-actions > .series-hero-monitor { width: 36px; padding: 0; justify-content: center; color: var(--text-secondary); }
+.series-hero-monitor.is-on { color: var(--accent); }
+
+.series-hero-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin: 0; font-size: 12.5px; }
+.series-hero-footer a { color: var(--text-secondary); font-weight: 600; text-decoration: none; }
+.series-hero-footer a:hover { color: var(--accent); }
+.series-hero-path {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+  padding-right: 14px;
+  border-right: 1px solid var(--border-strong);
+}
+
+/* Change poster / background and Edit titles dialogs (SeriesHeaderParts.jsx). */
+.hero-field-label { display: block; margin: 0 0 6px; font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.artwork-preview {
+  margin-top: 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+.artwork-preview.is-poster { width: 160px; height: 240px; }
+.artwork-preview.is-fanart { width: 100%; max-width: 420px; aspect-ratio: 16 / 9; }
+.artwork-preview img { width: 100%; height: 100%; object-fit: cover; }
+.artwork-choices {
+  display: grid;
+  gap: 8px;
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 2px;
+}
+.artwork-choices.is-fanart { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.artwork-choices.is-poster { grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); }
+.artwork-choice {
+  height: auto;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--surface-2);
+}
+.artwork-choices.is-fanart .artwork-choice { aspect-ratio: 16 / 9; }
+.artwork-choices.is-poster .artwork-choice { aspect-ratio: 2 / 3; }
+.artwork-choice img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.artwork-choice:hover { border-color: var(--border-strong); }
+.artwork-choice.is-selected { border-color: var(--accent); }
+.titles-alt-list { margin: 0 0 6px; padding-left: 18px; font-size: 13px; color: var(--text-secondary); line-height: 1.6; }
+
+@media (max-width: 860px) {
+  .main-series #seriesRoot { overflow: visible; padding: 0 16px 32px; }
+  .series-hero { margin: 0 -16px 20px; }
+  .series-hero-backdrop { height: 220px; }
+  .series-hero-back { left: 16px; }
+  .series-hero-menu { right: 16px; }
+  .series-hero-body { flex-direction: column; gap: 16px; margin-top: -150px; padding: 0 16px; }
+  .series-hero-poster { flex: none; width: 140px; height: 210px; }
+  .series-hero-info { padding-top: 0; }
+  .series-hero-title { font-size: 24px; }
 }

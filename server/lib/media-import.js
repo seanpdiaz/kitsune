@@ -24,6 +24,14 @@
 // "fall back to the fabricated path," the same graceful-degradation rule
 // every other real integration in this app already follows. A real import
 // is never a hard failure for a download that otherwise genuinely finished.
+//
+// Manual Import (server/routes/manual-import.js) is the one caller that can
+// ask for `opts.mode = 'move'` instead: files a user points Kitsune at by
+// hand are often not seeding anywhere (a folder copied off another machine,
+// a download client Kitsune doesn't manage), so the hardlink-keeps-seeding
+// argument above doesn't apply and leaving a second copy behind is just
+// clutter. The queue's automatic import never passes it, so its behavior is
+// unchanged.
 // ---------------------------------------------------------------------------
 const fs = require('fs');
 const path = require('path');
@@ -31,7 +39,8 @@ const { buildEpisodeFilePath } = require('./episode-paths');
 const { applyPermissions } = require('./permissions');
 const { verifyRootFolderForPath } = require('./root-folder-guard');
 
-async function importEpisodeFile(series, episode, quality, sourcePath) {
+async function importEpisodeFile(series, episode, quality, sourcePath, opts = {}) {
+  const mode = opts.mode === 'move' ? 'move' : 'copy';
   // sourcePath passed through as opts so buildEpisodeFilePath can preserve
   // the real file's actual extension (instead of always assuming .mkv) and
   // honor the Rename Episodes toggle (keep the original filename verbatim
@@ -82,6 +91,27 @@ async function importEpisodeFile(series, episode, quality, sourcePath) {
     return { ok: false, error: `Source file not found at "${sourcePath}" (${err.code || err.message})` };
   }
 
+  // The source already IS the destination — a manual import pointed at the
+  // series' own folder, with Rename Episodes off or the file already named
+  // exactly what the format produces. Nothing to move, and critically the
+  // "clear the stale target" unlink below would otherwise delete the one
+  // and only copy of the file before trying to link it onto itself.
+  if (path.resolve(sourcePath) === path.resolve(destPath)) {
+    return { ok: true, path: destPath, sizeBytes: stat.size, method: 'in-place' };
+  }
+  // Same check by inode: destPath is already a hardlink of sourcePath (an
+  // earlier import of the same file). Same unlink hazard as above, since
+  // removing destPath is harmless but the link that follows is a no-op —
+  // simpler and safer to recognize it up front. A move still drops the
+  // source-side name so the file ends up only in the Library.
+  try {
+    const destStat = await fs.promises.stat(destPath);
+    if (destStat.dev === stat.dev && destStat.ino === stat.ino) {
+      if (mode === 'move') await fs.promises.unlink(sourcePath).catch(() => {});
+      return { ok: true, path: destPath, sizeBytes: stat.size, method: 'already-linked' };
+    }
+  } catch { /* nothing at destPath yet — the normal case */ }
+
   try {
     await fs.promises.mkdir(path.dirname(destPath), { recursive: true });
   } catch (err) {
@@ -95,6 +125,8 @@ async function importEpisodeFile(series, episode, quality, sourcePath) {
   try {
     await fs.promises.unlink(destPath);
   } catch { /* didn't exist, or couldn't remove — proceed either way */ }
+
+  if (mode === 'move') return moveIntoPlace(sourcePath, destPath, stat, importDirPaths);
 
   try {
     await fs.promises.link(sourcePath, destPath);
@@ -129,6 +161,45 @@ async function importEpisodeFile(series, episode, quality, sourcePath) {
       return { ok: false, error: `Could not hardlink or copy into "${destPath}" (${copyErr.code || copyErr.message})` };
     }
   }
+}
+
+// Move mode: a plain rename when source and destination share a filesystem
+// (instant, atomic), otherwise copy → verify size → remove the source — the
+// same truncated-copy check the copy fallback above does, and the source is
+// only removed once the Library copy is confirmed whole. Failing to remove
+// the source afterwards isn't a failed import (the Library copy is good),
+// just reported back as a note so the caller can say so.
+async function moveIntoPlace(sourcePath, destPath, stat, importDirPaths) {
+  try {
+    await fs.promises.rename(sourcePath, destPath);
+    await applyPermissions({ filePath: destPath, dirPaths: importDirPaths });
+    return { ok: true, path: destPath, sizeBytes: stat.size, method: 'move' };
+  } catch (renameErr) {
+    if (renameErr.code !== 'EXDEV') {
+      return { ok: false, error: `Could not move into "${destPath}" (${renameErr.code || renameErr.message})` };
+    }
+  }
+  try {
+    await fs.promises.copyFile(sourcePath, destPath);
+    const destStat = await fs.promises.stat(destPath);
+    if (destStat.size !== stat.size) {
+      await fs.promises.unlink(destPath).catch(() => {});
+      return {
+        ok: false,
+        error: `Copied file size (${destStat.size} bytes) didn't match the source (${stat.size} bytes) at "${destPath}" — removed the incomplete copy and left the source where it was`,
+      };
+    }
+  } catch (copyErr) {
+    return { ok: false, error: `Could not copy into "${destPath}" (${copyErr.code || copyErr.message})` };
+  }
+  await applyPermissions({ filePath: destPath, dirPaths: importDirPaths });
+  let note = null;
+  try {
+    await fs.promises.unlink(sourcePath);
+  } catch (err) {
+    note = `Imported, but couldn't remove the original at "${sourcePath}" (${err.code || err.message})`;
+  }
+  return { ok: true, path: destPath, sizeBytes: stat.size, method: 'move', note };
 }
 
 module.exports = { importEpisodeFile };

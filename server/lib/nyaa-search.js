@@ -23,6 +23,7 @@
 // ---------------------------------------------------------------------------
 const { logDebug, logInfo, logWarn } = require('../logger');
 const { getQualityTiers, rankReleaseCandidates } = require('./quality');
+const { keepVerifiedPacks } = require('./torrent-files');
 
 const NYAA_BASE = 'https://nyaa.si/';
 const REQUEST_TIMEOUT_MS = 10000;
@@ -156,6 +157,14 @@ function parseSizeString(str) {
 // detail-page link just isn't clickable, same "degrade gracefully rather
 // than show something wrong" rule this file already follows for a title
 // that fails to classify into a quality tier.
+// nyaa.si's own .torrent download link for a /view/<id> page — the file
+// list inside is what torrent-files.js reads to settle whether an
+// unlabeled release is really a season pack.
+function torrentUrlFromInfoUrl(infoUrl) {
+  const m = /\/view\/(\d+)/.exec(infoUrl || '');
+  return m ? `${NYAA_BASE}download/${m[1]}.torrent` : null;
+}
+
 function isHttpUrl(str) {
   if (!str) return false;
   try {
@@ -276,6 +285,18 @@ function titleMatchesEpisode(title, episodeNum) {
 // a subtitle separator; only a colon, or a dash with whitespace on both
 // sides ("Kaguya-sama - Love is War"), plausibly is. Only those two shapes
 // split the title now.
+// An alternate title has to be specific enough to identify a show on its
+// own before it's worth a search. AniList synonyms (see anime-ids.js)
+// include fansub shorthand like "SA" or "S·A" for Special A — searched
+// bare, those come back as "every release with an S and an A in it," and
+// batch search would happily accept any of them that's pack-shaped. The
+// series' own title is always tried regardless; only extra alt titles are
+// held to this.
+function isUsableAltQuery(query) {
+  const q = String(query || '');
+  return q.replace(/\s+/g, '').length >= 4 && /[A-Za-z0-9]{3,}/.test(q);
+}
+
 function simplifyTitleForSearch(title) {
   const primary = title.split(/:|\s[-—]\s/)[0];
   return primary.replace(/[^A-Za-z0-9]+/g, ' ').trim();
@@ -356,6 +377,7 @@ async function searchNyaa(query, page = 1, { sort, category } = {}) {
       magnetUrl,
       infoHash: infoHash ? infoHash.toLowerCase() : null,
       infoUrl,
+      torrentUrl: torrentUrlFromInfoUrl(infoUrl),
       sizeBytes: parseSizeString(extractTag(block, 'nyaa:size')),
       seeders: parseInt(extractTag(block, 'nyaa:seeders') || '0', 10) || 0,
       leechers: parseInt(extractTag(block, 'nyaa:leechers') || '0', 10) || 0,
@@ -465,6 +487,7 @@ async function searchNyaaHtml(query, page = 1, { sort, category } = {}) {
       magnetUrl,
       infoHash: infoHash ? infoHash.toLowerCase() : null,
       infoUrl: torrentId ? `${NYAA_BASE}view/${torrentId}` : null,
+      torrentUrl: torrentId ? `${NYAA_BASE}download/${torrentId}.torrent` : null,
       sizeBytes,
       seeders,
       leechers,
@@ -538,7 +561,7 @@ const MAX_PAGES_PER_ATTEMPT_EXHAUSTIVE = 40;
 // MAX_PAGES_PER_ATTEMPT) before trying the next title. Throws on a genuine
 // network/HTTP failure (from searchNyaa); returns an empty array, not an
 // error, if nothing ever matched.
-async function searchWithFallback(series, matchFn, { extraQueryTerm, exhaustive = false } = {}) {
+async function searchWithFallback(series, matchFn, { extraQueryTerm, exhaustive = false, verify } = {}) {
   const attempts = [];
   if (extraQueryTerm) attempts.push(`${series.title} ${extraQueryTerm}`);
   attempts.push(series.title);
@@ -546,6 +569,7 @@ async function searchWithFallback(series, matchFn, { extraQueryTerm, exhaustive 
   try {
     altTitles = series.alt_titles ? JSON.parse(series.alt_titles) : [];
   } catch { /* malformed JSON — treat as no alt titles */ }
+  const primaryCount = attempts.length;
   attempts.push(...altTitles);
 
   logInfo(
@@ -555,8 +579,12 @@ async function searchWithFallback(series, matchFn, { extraQueryTerm, exhaustive 
 
   let matches = [];
   const seenQueries = new Set();
-  for (const attempt of attempts) {
+  for (const [attemptIndex, attempt] of attempts.entries()) {
     const query = simplifyTitleForSearch(attempt);
+    if (attemptIndex >= primaryCount && !isUsableAltQuery(query)) {
+      logDebug('IndexerService', `Skipping alt title "${attempt}" — "${query}" is too short to identify the show on its own.`);
+      continue;
+    }
     // A title that's entirely non-Latin script (a Japanese alt title like
     // "つぐもも", say) strips down to an empty string here — simplifyTitleFor
     // Search only keeps [A-Za-z0-9]. Running searchNyaa with an empty `q`
@@ -672,7 +700,15 @@ async function searchWithFallback(series, matchFn, { extraQueryTerm, exhaustive 
       }
       if (attemptMatches.length > 0 && !exhaustive) break;
     }
-    matches = attemptMatches;
+    // `verify` (batch search only — see searchBatchReleases) gets the last
+    // word on this attempt's matches before deciding whether it succeeded:
+    // matchFn has to be synchronous and title-only, so a title it can't
+    // classify either way is let through as a candidate and settled here
+    // against the torrent's real file list. Doing it per attempt (not once
+    // at the very end) matters — an attempt whose only "matches" turn out
+    // not to be packs must fall through to the next alt title, exactly as
+    // an attempt with zero title matches always has.
+    matches = verify ? await verify(attemptMatches) : attemptMatches;
     if (matches.length > 0) {
       logInfo('IndexerService', `Nyaa.si search for "${series.title}" matched on query "${query}" — ${matches.length} release(s).`);
       break;
@@ -704,6 +740,7 @@ async function toReleaseCandidates(matches, extra, profile) {
     magnetUrl: r.magnetUrl,
     infoHash: r.infoHash,
     infoUrl: r.infoUrl,
+    fileCount: r.fileCount || null,
     source: 'real',
     ...extra,
   })));
@@ -824,6 +861,36 @@ function isBatchRelease(title) {
   return false;
 }
 
+// Explicit single-episode markers, checked only outside [..]/(..)/{..}
+// tag groups (where "480p", "x265", "AC3", a CRC or a year live). A title
+// ending in a video file extension is one file by definition.
+const VIDEO_FILE_TITLE = /\.(mkv|mp4|avi|m2ts|webm|wmv|mov|m4v)\s*$/i;
+function looksLikeSingleEpisode(title) {
+  const t = String(title || '');
+  if (VIDEO_FILE_TITLE.test(t)) return true;
+  const core = t.replace(/\[[^\]]*\]|\([^)]*\)|\{[^}]*\}|【[^】]*】/g, ' ');
+  return (
+    /\s[-–—]\s*\d{1,4}(?:v\d)?(?=\s|$)/.test(core) // "Show - 05", "Show - 05v2"
+    || /\bS\d{1,2}\s*E\d{1,4}\b/i.test(core) // "S01E05"
+    || /\bE(?:p(?:isode)?)?\.?\s*\d{1,4}\b/i.test(core) // "E05", "Ep 5", "Episode 5"
+    || /#\d{1,4}\b/.test(core) // "#05"
+    || /第\s*\d+\s*[話话集]/.test(core) // "第05話"
+  );
+}
+
+// Three-way, not yes/no: 'batch' (isBatchRelease recognizes a pack shape),
+// 'single' (an explicit single-episode marker), or 'unknown' — a title
+// with neither, like "[neoHEVC] Special A Class S.A. [DVD 480p x265 HEVC
+// AC3] [Dual Audio]" (a real 24-episode pack) or "[Group] Show 05 [1080p]"
+// (a real single episode). Title text alone can't tell those two apart;
+// batch search settles 'unknown' against the torrent's real file list
+// (torrent-files.js) instead of guessing — see searchBatchReleases.
+function classifyReleaseShape(title) {
+  if (isBatchRelease(title)) return 'batch';
+  if (looksLikeSingleEpisode(title)) return 'single';
+  return 'unknown';
+}
+
 // Which season number(s) a release's own title explicitly claims to cover —
 // a bare "S01"/"S1", a spelled-out "Season 2", or a range like "Season 1-2"
 // / "S1&2" (expanded to every season in the range). Returns null when the
@@ -885,11 +952,28 @@ function releaseCoversSeason(title, seasonNumber) {
 // *specific* episodes a grabbed batch ends up covering is decided by
 // server/routes/queue.js from real Library data instead, not from anything
 // parsed here.
+async function verifyUnlabeledPacks(found, series) {
+  const labeled = found.filter((r) => classifyReleaseShape(r.title) === 'batch');
+  const unlabeled = found.filter((r) => classifyReleaseShape(r.title) === 'unknown');
+  if (unlabeled.length === 0) return labeled;
+  const verified = await keepVerifiedPacks(unlabeled, { label: `Nyaa.si batch search for "${series.title}"` });
+  logInfo('IndexerService', `Nyaa.si batch search for "${series.title}": ${labeled.length} pack-titled release(s), plus ${verified.length} of ${unlabeled.length} unlabeled release(s) confirmed as packs from their file lists.`);
+  return [...labeled, ...verified];
+}
+
 async function searchBatchReleases(series, { extraQueryTerm, profile, seasonNumber } = {}) {
   logInfo('IndexerService', `Searching Nyaa.si for "${series.title}" batch releases${extraQueryTerm ? ` (narrowed with "${extraQueryTerm}")` : ''}${seasonNumber != null ? ` (season ${seasonNumber} only)` : ''}.`);
   let matches;
   try {
-    matches = await searchWithFallback(series, (r) => isBatchRelease(r.title) && releaseCoversSeason(r.title, seasonNumber), { extraQueryTerm, exhaustive: true });
+    // Pack-shaped titles pass straight through; titles that are neither
+    // pack- nor single-episode-shaped are kept as candidates and checked
+    // against their torrent's real file list (verifyUnlabeledPacks below)
+    // before counting as a match.
+    matches = await searchWithFallback(
+      series,
+      (r) => classifyReleaseShape(r.title) !== 'single' && releaseCoversSeason(r.title, seasonNumber),
+      { extraQueryTerm, exhaustive: true, verify: (found) => verifyUnlabeledPacks(found, series) },
+    );
   } catch (err) {
     logWarn('IndexerService', `Nyaa.si batch search failed for "${series.title}": ${err.message}`);
     return { ok: false, error: err.message };
@@ -924,6 +1008,7 @@ async function testNyaaReachable() {
 
 module.exports = {
   searchNyaa, searchReleasesForEpisode, searchBatchReleases, testNyaaReachable,
-  classifyQualityFromTitle, titleMatchesEpisode, isBatchRelease, releaseCoversSeason, parseSizeString, buildMagnet, simplifyTitleForSearch,
+  classifyQualityFromTitle, titleMatchesEpisode, isBatchRelease, classifyReleaseShape, releaseCoversSeason, parseSizeString, buildMagnet, simplifyTitleForSearch,
+  torrentUrlFromInfoUrl, isUsableAltQuery,
   isHttpUrl,
 };

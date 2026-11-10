@@ -90,4 +90,66 @@ function computeInfoHash(buf) {
   throw new Error('No "info" key found in .torrent file — cannot compute info hash');
 }
 
-module.exports = { computeInfoHash };
+// Full decoder — builds real values (strings stay Buffers, since torrent
+// paths aren't guaranteed to be valid UTF-8; callers decode what they need).
+// Added for torrent-files.js, which needs a .torrent's file list to tell an
+// unlabeled season pack ("[neoHEVC] Special A Class S.A. [DVD 480p ...]" —
+// no range, no "Batch", no season tag, but 24 episodes inside) apart from a
+// single-episode release whose title happens to look the same.
+function decodeBencodeValue(buf, cursor) {
+  const b = buf[cursor.pos];
+  if (b === 0x69) { // 'i'
+    const end = buf.indexOf(0x65, cursor.pos);
+    if (end === -1) throw new Error('Malformed bencode integer');
+    const n = Number(buf.toString('ascii', cursor.pos + 1, end));
+    cursor.pos = end + 1;
+    return n;
+  }
+  if (b === 0x6c) { // 'l'
+    cursor.pos += 1;
+    const list = [];
+    while (buf[cursor.pos] !== 0x65) {
+      if (cursor.pos >= buf.length) throw new Error('Malformed bencode list (truncated)');
+      list.push(decodeBencodeValue(buf, cursor));
+    }
+    cursor.pos += 1;
+    return list;
+  }
+  if (b === 0x64) { // 'd'
+    cursor.pos += 1;
+    const dict = {};
+    while (buf[cursor.pos] !== 0x65) {
+      if (cursor.pos >= buf.length) throw new Error('Malformed bencode dict (truncated)');
+      const key = readBencodeString(buf, cursor).toString('latin1');
+      dict[key] = decodeBencodeValue(buf, cursor);
+    }
+    cursor.pos += 1;
+    return dict;
+  }
+  if (b >= 0x30 && b <= 0x39) return readBencodeString(buf, cursor);
+  throw new Error(`Malformed bencode value at offset ${cursor.pos}`);
+}
+
+// Every file a .torrent contains, as { path, length } — a single-file
+// torrent (no info.files) reports its one file under info.name. Paths are
+// decoded as UTF-8 (path.utf-8 preferred when the torrent supplies it).
+function listTorrentFiles(buf) {
+  if (!Buffer.isBuffer(buf)) throw new Error('listTorrentFiles expects a Buffer');
+  const root = decodeBencodeValue(buf, { pos: 0 });
+  const info = root && root.info;
+  if (!info || typeof info !== 'object') throw new Error('No "info" dict in .torrent file');
+  const name = Buffer.isBuffer(info['name.utf-8']) ? info['name.utf-8'] : info.name;
+  const nameStr = Buffer.isBuffer(name) ? name.toString('utf8') : '';
+  if (!Array.isArray(info.files)) {
+    return [{ path: nameStr, length: typeof info.length === 'number' ? info.length : 0 }];
+  }
+  return info.files.map((f) => {
+    const parts = Array.isArray(f['path.utf-8']) ? f['path.utf-8'] : (Array.isArray(f.path) ? f.path : []);
+    return {
+      path: [nameStr, ...parts.map((p) => (Buffer.isBuffer(p) ? p.toString('utf8') : String(p)))].filter(Boolean).join('/'),
+      length: typeof f.length === 'number' ? f.length : 0,
+    };
+  });
+}
+
+module.exports = { computeInfoHash, listTorrentFiles };

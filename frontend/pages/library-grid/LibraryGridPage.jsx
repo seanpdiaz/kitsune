@@ -103,11 +103,17 @@ function matchesFilter(s, filter) {
   }
 }
 
+// Title sort uses the series' sort title when one is set (series page "…"
+// menu > Edit titles and sort name), else its display title.
+function sortKey(s) {
+  return s.sortTitle || s.title || '';
+}
+
 function sortSeries(list, sort) {
   const sorted = list.slice();
   if (sort === 'next-airing') {
     sorted.sort((a, b) => {
-      if (a.nextAirDays == null && b.nextAirDays == null) return a.title.localeCompare(b.title);
+      if (a.nextAirDays == null && b.nextAirDays == null) return sortKey(a).localeCompare(sortKey(b));
       if (a.nextAirDays == null) return 1;
       if (b.nextAirDays == null) return -1;
       return a.nextAirDays - b.nextAirDays;
@@ -115,7 +121,7 @@ function sortSeries(list, sort) {
   } else if (sort === 'recently-added') {
     sorted.sort((a, b) => a.addedDaysAgo - b.addedDaysAgo);
   } else {
-    sorted.sort((a, b) => a.title.localeCompare(b.title));
+    sorted.sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
   }
   return sorted;
 }
@@ -261,6 +267,14 @@ export default function LibraryGridPage({ searchContainer }) {
   const [sort, setSort] = useState('title');
   const [query, setQuery] = useState('');
   const [view, setView] = useState('poster');
+  // "Show hentai in Library" — a per-user preference set on My Account
+  // (frontend/pages/account/AccountPage.jsx), stored in the same
+  // library-ui-prefs record as view/posterSize below. Defaults to shown, so
+  // nothing disappears for anyone who's never touched it. `prefsLoaded`
+  // holds the grid on "Loading…" until it's known, so a user who's turned it
+  // off never sees those posters flash in for a moment first.
+  const [showHentai, setShowHentai] = useState(true);
+  const [prefsLoaded, setPrefsLoaded] = useState(false);
   const [tags, setTags] = useState([]);
   const tagsLoadedRef = useRef(false);
   // Backs the "Downloading" stat card — a real count of active grabs, not a
@@ -338,9 +352,11 @@ export default function LibraryGridPage({ searchContainer }) {
         const res = await fetch('/api/user-prefs/library-ui-prefs');
         const saved = await res.json();
         if (VALID_VIEWS.has(saved.view)) setView(saved.view);
+        if (saved.showHentai === false) setShowHentai(false);
         const value = Number(saved.posterSize);
         if (value >= POSTER_SCALE_MIN && value <= POSTER_SCALE_MAX) posterScaleRef.current = value;
       } catch { /* defaults stand */ }
+      setPrefsLoaded(true);
       applyPosterScale(posterScaleRef.current);
     })();
   }, []);
@@ -435,8 +451,18 @@ export default function LibraryGridPage({ searchContainer }) {
   // monitored=false means Kitsune isn't trying to get those episodes in the
   // first place; it takes precedence over everything else (Ignore Specials,
   // status, filters), not just one factor among several.
-  const seriesCount = seriesData.length;
-  const missingEpisodesCount = seriesData
+  //
+  // Everything on this page — grid, Series/Missing/Downloading stat cards —
+  // works off visibleSeries, so a hidden hentai title doesn't still show up
+  // as a count with no poster to go with it. (Disk usage stays the real
+  // whole-disk figure; it isn't per-series.)
+  const visibleSeries = showHentai ? seriesData : seriesData.filter((s) => !s.isHentai);
+  const visibleSeriesIds = new Set(visibleSeries.map((s) => s.id));
+  const visibleDownloadingCount = showHentai
+    ? downloadingCount
+    : queueRows.filter((q) => q.status === 'downloading' && visibleSeriesIds.has(q.seriesId)).length;
+  const seriesCount = visibleSeries.length;
+  const missingEpisodesCount = visibleSeries
     .filter((s) => s.monitored)
     .reduce((sum, s) => sum + missingCountFor(s), 0);
 
@@ -445,11 +471,11 @@ export default function LibraryGridPage({ searchContainer }) {
 
   if (seriesLoadError) {
     gridContent = <p style={{ color: 'var(--text-muted)', gridColumn: '1 / -1' }}>Couldn't load your library. Is the server running?</p>;
-  } else if (!seriesLoaded) {
+  } else if (!seriesLoaded || !prefsLoaded) {
     gridContent = <p style={{ color: 'var(--text-muted)', gridColumn: '1 / -1' }}>Loading…</p>;
   } else {
     const q = query.trim().toLowerCase();
-    let list = seriesData.filter((s) => matchesFilter(s, filter));
+    let list = visibleSeries.filter((s) => matchesFilter(s, filter));
     if (q) list = list.filter((s) => s.title.toLowerCase().includes(q));
     list = sortSeries(list, sort);
     // Display-only override: the bar should reflect committed downloads
@@ -489,9 +515,9 @@ export default function LibraryGridPage({ searchContainer }) {
       )}
 
       <div className="stat-grid">
-        <div className="stat-card"><p className="label">Series</p><p className="value">{seriesLoaded ? seriesCount : '—'}</p></div>
-        <div className="stat-card"><p className="label">Missing episodes</p><p className="value" style={{ color: 'var(--warning)' }}>{seriesLoaded ? missingEpisodesCount : '—'}</p></div>
-        <div className="stat-card"><p className="label">Downloading</p><p className="value" style={{ color: 'var(--accent)' }}>{downloadingCount}</p></div>
+        <div className="stat-card"><p className="label">Series</p><p className="value">{seriesLoaded && prefsLoaded ? seriesCount : '—'}</p></div>
+        <div className="stat-card"><p className="label">Missing episodes</p><p className="value" style={{ color: 'var(--warning)' }}>{seriesLoaded && prefsLoaded ? missingEpisodesCount : '—'}</p></div>
+        <div className="stat-card"><p className="label">Downloading</p><p className="value" style={{ color: 'var(--accent)' }}>{visibleDownloadingCount}</p></div>
         <div className="stat-card"><p className="label">Disk usage</p><DiskUsageStat /></div>
       </div>
 

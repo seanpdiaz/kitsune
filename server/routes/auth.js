@@ -31,9 +31,30 @@ db.init(async () => {
       username TEXT NOT NULL UNIQUE,
       password_hash TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'standard',
-      created_at TEXT NOT NULL
+      created_at TEXT NOT NULL,
+      auth_source TEXT NOT NULL DEFAULT 'local',
+      oidc_subject TEXT
     )
   `);
+
+  // Single sign-on columns (see routes/oidc.js), added in place for
+  // databases created before OIDC support:
+  //   auth_source  — 'local' (username/password, the original and still
+  //                  default kind) or 'oidc' (created by a first SSO
+  //                  sign-in; has no usable password — password_hash is '',
+  //                  which verifyPassword always rejects).
+  //   oidc_subject — "<issuer>|<sub>" of the provider identity this account
+  //                  is linked to, or NULL. A local account can carry one
+  //                  too (linked by username — see routes/oidc.js), in which
+  //                  case both sign-in methods work for it.
+  const userColumns = await db.tableColumns('users');
+  if (!userColumns.includes('auth_source')) {
+    await db.exec("ALTER TABLE users ADD COLUMN auth_source TEXT NOT NULL DEFAULT 'local'");
+  }
+  if (!userColumns.includes('oidc_subject')) {
+    await db.exec('ALTER TABLE users ADD COLUMN oidc_subject TEXT');
+  }
+  await db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_oidc_subject ON users (oidc_subject)');
 
   await db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
@@ -46,7 +67,7 @@ db.init(async () => {
 
   // Own idempotent CREATE TABLE for app_settings, same convention disk-
   // usage.js/permissions.js/refresh-series-task.js already use — this file
-  // now reads Settings > General's Authentication Method out of that same
+  // now reads Settings > Security's Authentication Method out of that same
   // table (see isAuthDisabled below) and doesn't want to depend on require()
   // order against routes/app-settings.js (which owns it) to make sure the
   // table exists first.
@@ -63,8 +84,19 @@ db.init(async () => {
 // one property this project's usual generic rowToItem() (settings-items.js)
 // doesn't give us, which is exactly why Users has its own route file instead
 // of just being another settings_items section.
+//
+// authSource: 'local' | 'oidc' (see the column comment above). ssoLinked is
+// true for any account tied to a provider identity — every 'oidc' account,
+// plus local accounts that were linked by username.
 function rowToUser(row) {
-  return { id: row.id, username: row.username, role: row.role, createdAt: row.created_at };
+  return {
+    id: row.id,
+    username: row.username,
+    role: row.role,
+    createdAt: row.created_at,
+    authSource: row.auth_source === 'oidc' ? 'oidc' : 'local',
+    ssoLinked: !!row.oidc_subject,
+  };
 }
 
 async function userCount() {
@@ -75,15 +107,15 @@ async function adminCount() {
   return (await db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin'").get()).n;
 }
 
-// Settings > General's Authentication Method (frontend/pages/settings-
-// general/GeneralPage.jsx's authMethodSelect, persisted through the generic
+// Settings > Security's Authentication Method (frontend/pages/settings-
+// security/SecurityPage.jsx's authMethodSelect, persisted through the generic
 // /api/app-settings/general section — see server/routes/app-settings.js)
 // used to be purely cosmetic: it only toggled whether that settings page
 // showed its own Username/Password rows, and nothing server-side ever read
 // it — every request still hit the real login gate regardless of what was
 // picked. This is the read side of actually honoring it — falls back to
 // 'forms' (the same default the settings page itself uses — see
-// GeneralPage.jsx's DEFAULTS) for a value that's missing, unparseable, or
+// SecurityPage.jsx's DEFAULTS) for a value that's missing, unparseable, or
 // not one of the three real options, so an unrecognized value behaves like
 // the safest/strictest choice rather than silently disabling auth.
 async function getAuthMethod() {
@@ -319,6 +351,12 @@ async function handleAuthApi(req, res, urlPath) {
     let body;
     try { body = await readJsonBody(req); } catch { sendJson(res, 400, { error: 'Invalid JSON body' }); return true; }
     const row = await db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
+    // An SSO-created account has no password to confirm with, and its
+    // username comes from the provider — nothing here for it to change.
+    if (row.auth_source === 'oidc') {
+      sendJson(res, 400, { error: 'This account signs in through single sign-on — manage it with your identity provider.' });
+      return true;
+    }
     if (!(await verifyPassword(String(body.currentPassword || ''), row.password_hash))) {
       sendJson(res, 400, { error: 'Current password is incorrect.' });
       return true;
@@ -414,6 +452,10 @@ async function handleAuthApi(req, res, urlPath) {
         return true;
       }
       updates.password_hash = await hashPassword(String(body.password));
+      // An SSO-created account that's given a password becomes a regular
+      // local account that's still linked to its SSO identity — both sign-in
+      // methods work, and My Account can manage the password from then on.
+      if (existing.auth_source === 'oidc') updates.auth_source = 'local';
     }
     if (Object.keys(updates).length > 0) {
       const setClause = Object.keys(updates).map((k) => `${k} = ?`).join(', ');
@@ -450,4 +492,15 @@ async function handleAuthApi(req, res, urlPath) {
   return false;
 }
 
-module.exports = { handleAuthApi, getSessionUser, handleBasicAuthChallenge };
+module.exports = {
+  handleAuthApi,
+  getSessionUser,
+  handleBasicAuthChallenge,
+  // For routes/oidc.js, which signs people in through the same sessions.
+  SESSION_COOKIE,
+  SESSION_MAX_AGE_SECONDS,
+  createSession,
+  rowToUser,
+  requireAdmin,
+  adminCount,
+};

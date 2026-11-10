@@ -350,7 +350,14 @@ export default function AddNewPage() {
         id: match.id,
         source: match.source,
         status: match.status,
+        // Lets the server flag hentai titles at add time (series.is_hentai),
+        // which the "Show hentai in Library" preference on My Account uses.
+        genres: match.genres || [],
+        rating: match.rating || null,
         altTitles: [match.titleNative, match.altTitleJapanese, ...(match.altTitleSynonyms || [])].filter(Boolean),
+        // Cross-site IDs, present on add-by-ID/link results (see
+        // server/routes/mal-search.js); the server fills in the rest either way.
+        ids: match.ids || undefined,
         // Whatever's currently selected in the toolbar above — server-side
         // (POST /api/series' resolveRootFolder) still falls back to the
         // first configured root folder if this is empty or somehow doesn't
@@ -484,7 +491,7 @@ export default function AddNewPage() {
               <input
                 ref={searchInputRef}
                 id="addNewSearch" type="text" value={query} onChange={(e) => onSearchInput(e.target.value)}
-                placeholder="Search MyAnimeList for a series to add…" autoFocus
+                placeholder="Search by title, or paste a MyAnimeList / AniList / AniDB / TVDB link…" autoFocus
               />
             </div>
 

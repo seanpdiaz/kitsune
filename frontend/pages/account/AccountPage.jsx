@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { FormRow, ToggleField } from '../../components/SettingsFormFields.jsx';
 
 // My Account — self-service username/password change for whoever is
 // currently signed in, reachable from the sidebar's user chip (see
@@ -6,6 +7,57 @@ import { useEffect, useState } from 'react';
 // every user, not just admins, so it doesn't live under the admin-flavored
 // Settings section. Backed by PATCH /api/auth/me (see server/routes/auth.js),
 // which always requires the current password before applying any change.
+
+// Library display preferences for whoever's signed in — stored per user in
+// /api/user-prefs/library-ui-prefs (server/routes/user-prefs.js), the same
+// record the Library page already keeps its view and poster size in, and
+// read back by frontend/pages/library-grid/LibraryGridPage.jsx. Lives here
+// rather than Settings > UI because Settings > UI is server-wide admin
+// configuration; this is one person's choice about what they see. Saves on
+// toggle, no Save button — same as the Library's own view/size controls.
+function LibraryPrefsCard() {
+  const [showHentai, setShowHentai] = useState(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/user-prefs/library-ui-prefs')
+      .then((r) => r.json())
+      .then((saved) => { if (!cancelled) setShowHentai(saved.showHentai !== false); })
+      .catch(() => { if (!cancelled) setShowHentai(true); });
+    return () => { cancelled = true; };
+  }, []);
+
+  async function handleChange(next) {
+    const previous = showHentai;
+    setShowHentai(next);
+    setError('');
+    try {
+      const res = await fetch('/api/user-prefs/library-ui-prefs', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ showHentai: next }),
+      });
+      if (!res.ok) throw new Error();
+    } catch {
+      setShowHentai(previous);
+      setError('Could not save this setting.');
+    }
+  }
+
+  return (
+    <div className="settings-card" style={{ maxWidth: 480, marginTop: 16 }}>
+      <h2>Library</h2>
+      <FormRow
+        name="Show hentai"
+        desc="When off, series MyAnimeList classifies as hentai are hidden from your Library page and left out of its counts. Only affects your account."
+      >
+        {showHentai === null
+          ? <span className="settings-meta">…</span>
+          : <ToggleField id="account-show-hentai" checked={showHentai} onChange={handleChange} />}
+      </FormRow>
+      {error && <p className="form-error">{error}</p>}
+    </div>
+  );
+}
 
 export default function AccountPage() {
   const [user, setUser] = useState(null);
@@ -57,7 +109,36 @@ export default function AccountPage() {
 
   if (!user) return <p className="settings-empty">Loading…</p>;
 
+  // Accounts created by a single sign-on sign-in have no password and take
+  // their username from the identity provider (see server/routes/oidc.js),
+  // so there's nothing to edit here — PATCH /api/auth/me refuses them too.
+  if (user.authSource === 'oidc') {
+    return (
+      <>
+      <div className="settings-card" style={{ maxWidth: 480 }}>
+        <div className="form-row" style={{ borderTop: 'none', paddingTop: 0 }}>
+          <div className="field-label"><p className="name">Username</p></div>
+          <div className="field-control"><span className="settings-meta">{user.username}</span></div>
+        </div>
+        <div className="form-row">
+          <div className="field-label"><p className="name">Role</p></div>
+          <div className="field-control">
+            <span className={`status-pill ${user.role === 'admin' ? 'status-info' : 'status-pending'}`}>
+              {user.role === 'admin' ? 'Admin' : 'Standard'}
+            </span>
+          </div>
+        </div>
+        <p className="card-desc" style={{ margin: '14px 0 0' }}>
+          You sign in with single sign-on, so your username and password are managed by your identity provider.
+        </p>
+      </div>
+      <LibraryPrefsCard />
+      </>
+    );
+  }
+
   return (
+    <>
     <div className="settings-card" style={{ maxWidth: 480 }}>
       <form onSubmit={handleSubmit}>
         <div className="form-row" style={{ borderTop: 'none', paddingTop: 0 }}>
@@ -107,5 +188,7 @@ export default function AccountPage() {
         </div>
       </form>
     </div>
+    <LibraryPrefsCard />
+    </>
   );
 }

@@ -9,6 +9,7 @@
 - [Persistence and Logging](Persistence-and-Logging)
 - [Metadata Search](Metadata-Search)
 - [Root Folders and Library Import](Root-Folders-and-Library-Import)
+- [Manual Import](Manual-Import)
 
 **Library & Series**
 - [Sidebar Navigation](Sidebar-Navigation)
@@ -18,10 +19,13 @@
 
 **Accounts**
 - [User Accounts](User-Accounts)
+- [Single Sign-On (OIDC)](Single-Sign-On)
 
 **Downloading**
 - [Grab / Download Pipeline](Grab-Download-Pipeline)
 - [Real Search and Grabs](Real-Search-and-Grabs)
+- [Search: IDs, AnimeTosho, SeaDex](Search-IDs-AnimeTosho-SeaDex)
+- [Add a Release Manually](Add-Release-Manually)
 - [Quality Definitions](Quality-Definitions)
 - [Download Clients](Download-Clients)
 - [Connect Notifications](Connect-Notifications)

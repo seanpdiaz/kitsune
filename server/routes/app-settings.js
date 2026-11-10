@@ -20,10 +20,20 @@ db.init(async () => {
 // /api/app-settings/:section — field/toggle-style settings sections
 // ---------------------------------------------------------------------------
 
+const PRIVATE_SECTIONS = new Set(['oidc']);
+
 async function handleAppSettingsApi(req, res, urlPath) {
   const match = urlPath.match(/^\/api\/app-settings\/([a-z-]+)$/);
   if (!match) return false;
   const [, section] = match;
+
+  // Sections that hold secrets and have their own admin-only routes — never
+  // served or overwritten through this generic endpoint. 'oidc' is Single
+  // Sign-On's config, client secret included (see routes/oidc.js).
+  if (PRIVATE_SECTIONS.has(section)) {
+    sendJson(res, 404, { error: 'Not found' });
+    return true;
+  }
 
   // GET /api/app-settings/:section — the saved { key: value } object for this
   // page, or {} if nothing's been saved yet (fresh install / first visit).
@@ -50,6 +60,13 @@ async function handleAppSettingsApi(req, res, urlPath) {
       INSERT INTO app_settings (section, data, updated_at) VALUES (?, ?, ?)
       ON CONFLICT(section) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at
     `).run(section, JSON.stringify(merged), db.now());
+    // Log Level / Log Retention / History Retention live in 'general' —
+    // apply them now rather than waiting for the next hourly run. Required
+    // lazily: retention.js pulls in logger.js and routes/history.js, and
+    // nothing else in this file needs them.
+    if (section === 'general') {
+      await require('../lib/retention').applyRetentionSettings(merged);
+    }
     sendJson(res, 200, merged);
     return true;
   }

@@ -57,6 +57,19 @@ function cleanMalSynopsis(text) {
 // English name, if MAL has one, lives at alternative_titles.en. start_date
 // is a partial-ISO string ("2017-10-23", "2017-10", or just "2017"), so the
 // year is just its leading 4 digits.
+// Whether a title is hentai, from the two signals MAL itself gives: its
+// "Hentai" genre tag, and the "rx" content rating (MAL's label for
+// "Rx - Hentai"). Either one is enough. Ecchi is deliberately NOT counted —
+// it's a separate, much broader MAL genre (Trinity Seven, Strike Witches,
+// Kiss x Sis) that the "Show hentai" Library preference shouldn't touch.
+// Shared by the search mapping below, POST /api/series (which stores the
+// result as series.is_hentai) and the existing-series backfill in
+// server/routes/series.js.
+function isHentaiMetadata({ genres, rating } = {}) {
+  if (String(rating || '').toLowerCase() === 'rx') return true;
+  return Array.isArray(genres) && genres.some((g) => String(g).trim().toLowerCase() === 'hentai');
+}
+
 function mapMalOfficialResult(node) {
   const altEn = node.alternative_titles && node.alternative_titles.en;
   const title = (altEn && altEn.trim()) || node.title || 'Untitled';
@@ -75,6 +88,10 @@ function mapMalOfficialResult(node) {
     score: typeof node.mean === 'number' ? node.mean : null,
     genres: Array.isArray(node.genres) ? node.genres.map((g) => g.name).filter(Boolean) : [],
     mediaType: node.media_type || null,
+    // MAL's content rating code — "g", "pg", "pg_13", "r", "r+" or "rx"
+    // ("Rx - Hentai"). Only used for isHentai below, but passed through so
+    // the Add New page can hand it straight back to POST /api/series.
+    rating: node.rating || null,
     status: node.status || null,
     studios: Array.isArray(node.studios) ? node.studios.map((s) => s.name).filter(Boolean) : [],
     altTitleJapanese: (node.alternative_titles && node.alternative_titles.ja) || null,
@@ -89,6 +106,10 @@ function mapMalOfficialResult(node) {
     // resolveTvdbEpisodeSourceId in server/lib/tvdb.js, which tries this as
     // a fallback search when the English title comes back with no matches.
     titleNative: node.title || null,
+    isHentai: isHentaiMetadata({
+      genres: Array.isArray(node.genres) ? node.genres.map((g) => g.name) : [],
+      rating: node.rating,
+    }),
   };
 }
 
@@ -110,7 +131,7 @@ async function fetchMalSearchOnce(query) {
   const timeout = setTimeout(() => controller.abort(), 10000);
   let malRes;
   try {
-    const fields = 'alternative_titles,main_picture,synopsis,start_date,num_episodes,mean,genres,media_type,status,studios';
+    const fields = 'alternative_titles,main_picture,synopsis,start_date,num_episodes,mean,genres,media_type,rating,status,studios';
     // nsfw=true is required to get NSFW/ecchi-flagged titles back at all —
     // without it the API silently omits them from results instead of
     // erroring (confirmed: e.g. "Yosuga no Sora" came back as zero results
@@ -147,4 +168,63 @@ async function fetchMalSearchOnce(query) {
   return (json.data || []).map((entry) => ({ ...mapMalOfficialResult(entry.node || {}), source: 'mal' }));
 }
 
-module.exports = { fetchMalSearchOnce, MAL_MAX_ATTEMPTS, MAL_RETRY_DELAYS_MS };
+// One title's genres + content rating, by MAL id — just enough to answer
+// isHentaiMetadata for a series that was added before Kitsune stored that
+// (see backfillHentaiFlags in server/routes/series.js). Returns null on any
+// failure (no client id, timeout, non-2xx, bad JSON) rather than throwing:
+// the backfill just leaves that series unchecked and tries again on the
+// next startup.
+async function fetchMalContentFlags(malId) {
+  if (!MAL_CLIENT_ID) return null;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  try {
+    const res = await fetch(`${MAL_API_BASE}/anime/${encodeURIComponent(malId)}?nsfw=true&fields=genres,rating`, {
+      headers: { 'X-MAL-CLIENT-ID': MAL_CLIENT_ID },
+      signal: controller.signal,
+    });
+    if (!res.ok) return null;
+    const json = await res.json();
+    return {
+      genres: Array.isArray(json.genres) ? json.genres.map((g) => g.name).filter(Boolean) : [],
+      rating: json.rating || null,
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// One anime by MAL ID, in the same shape as a search result — backs add-by-
+// ID/link on the Add New page (routes/mal-search.js). Returns null for a
+// MAL ID that doesn't exist; throws (with the same `code`s as search) when
+// MAL itself can't be asked.
+async function fetchMalAnimeById(malId) {
+  if (!MAL_CLIENT_ID) {
+    const err = new Error('MAL_CLIENT_ID is not configured. Add it to .env and restart the server.');
+    err.code = 'MAL_NO_CLIENT_ID';
+    throw err;
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  try {
+    const fields = 'alternative_titles,main_picture,synopsis,start_date,num_episodes,mean,genres,media_type,rating,status,studios';
+    const res = await fetch(`${MAL_API_BASE}/anime/${encodeURIComponent(malId)}?nsfw=true&fields=${fields}`, {
+      headers: { 'X-MAL-CLIENT-ID': MAL_CLIENT_ID },
+      signal: controller.signal,
+    });
+    if (res.status === 404) return null;
+    if (res.status === 429) {
+      const err = new Error('MyAnimeList is rate-limiting us.');
+      err.code = 'MAL_RATE_LIMIT';
+      throw err;
+    }
+    if (!res.ok) throw new Error(`MyAnimeList lookup failed (status ${res.status})`);
+    return { ...mapMalOfficialResult(await res.json()), source: 'mal' };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+module.exports = { fetchMalSearchOnce, fetchMalAnimeById, fetchMalContentFlags, isHentaiMetadata, MAL_MAX_ATTEMPTS, MAL_RETRY_DELAYS_MS };
