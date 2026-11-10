@@ -1,6 +1,6 @@
 {
   "name": "kitsune-mockup",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Click-through visual mockup of Kitsune's UI (Library dashboard + Series detail). The backend (server.js) has no build step and, as of Postgres support (see .env.example's DB_CLIENT), exactly one runtime dependency: `pg`, loaded only when DB_CLIENT=postgres — the zero-config DB_CLIENT=sqlite default still runs on Node's built-in node:sqlite with nothing to install. The frontend is fully React now, migrated page by page (see the wiki's \"React Migration\" page) — `npm run build` compiles it into public/dist/, which server.js serves like any other static file, no backend changes required.",
   "main": "server.js",
   "scripts": {
