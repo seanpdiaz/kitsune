@@ -501,6 +501,7 @@ module.exports = {
   SESSION_MAX_AGE_SECONDS,
   createSession,
   rowToUser,
+  requireAuth,
   requireAdmin,
   adminCount,
 };

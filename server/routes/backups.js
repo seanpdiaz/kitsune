@@ -103,11 +103,33 @@ function dumpPostgres() {
 // there's no single file to read in that case.
 async function dumpDatabase() {
   if (db.DB_CLIENT === 'postgres') return dumpPostgres();
-  // Async for the same reason as gzipAsync above — DB_PATH is a real,
-  // ever-growing SQLite file (every series/episode/history/settings row in
-  // the app), and reading it synchronously would block the whole server for
-  // however long that read takes.
-  return fs.promises.readFile(db.DB_PATH);
+  // VACUUM INTO writes a complete, consistent copy of the live database to a
+  // new file, including anything still sitting in the -wal file. Reading
+  // kitsune.db directly (what this used to do) misses recent writes that
+  // haven't been checkpointed yet, which matters most for the pre-update
+  // backup that an automatic rollback restores. The copy is read back
+  // asynchronously — it can be large, and a sync read would block the server.
+  const tmp = path.join(BACKUPS_DIR, `.snapshot-${process.pid}-${Date.now()}.db`);
+  try {
+    await db.exec(`VACUUM INTO '${tmp.replace(/'/g, "''")}'`);
+    return await fs.promises.readFile(tmp);
+  } finally {
+    await fs.promises.rm(tmp, { force: true });
+  }
+}
+
+// Shared by "Backup Now" and the pre-update backup (server/lib/updater.js).
+// `label` becomes part of the filename, e.g. kitsune_backup_pre-update_<time>.
+async function createBackup(label) {
+  const gz = await gzipAsync(await dumpDatabase());
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const safeLabel = label ? `${String(label).replace(/[^A-Za-z0-9-]/g, '')}_` : '';
+  const filename = `kitsune_backup_${safeLabel}${stamp}.db.gz`;
+  const filePath = path.join(BACKUPS_DIR, filename);
+  await fs.promises.writeFile(filePath, gz);
+  const stat = await fs.promises.stat(filePath);
+  logInfo('Backup', `Created ${filename} (${stat.size} bytes)`);
+  return { id: filename, name: filename, filePath, sizeBytes: stat.size, createdAt: stat.mtime.toISOString() };
 }
 
 async function handleBackupsApi(req, res, urlPath) {
@@ -127,14 +149,8 @@ async function handleBackupsApi(req, res, urlPath) {
   // goes out once the backup file genuinely exists on disk.
   if (req.method === 'POST' && urlPath === '/api/backups') {
     try {
-      const gz = await gzipAsync(await dumpDatabase());
-      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const filename = `kitsune_backup_${stamp}.db.gz`;
-      const filePath = path.join(BACKUPS_DIR, filename);
-      await fs.promises.writeFile(filePath, gz);
-      const stat = await fs.promises.stat(filePath);
-      logInfo('Backup', `Created ${filename} (${stat.size} bytes)`);
-      sendJson(res, 201, { id: filename, name: filename, sizeBytes: stat.size, createdAt: stat.mtime.toISOString() });
+      const { filePath, ...backup } = await createBackup();
+      sendJson(res, 201, backup);
     } catch (err) {
       logWarn('Backup', `Backup failed: ${err.message}`);
       sendJson(res, 500, { error: `Could not create backup: ${err.message}` });
@@ -189,4 +205,4 @@ async function handleBackupsApi(req, res, urlPath) {
   return false;
 }
 
-module.exports = { handleBackupsApi };
+module.exports = { handleBackupsApi, createBackup };

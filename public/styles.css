@@ -3936,3 +3936,38 @@ a.release-title:hover { text-decoration: underline; }
   .series-hero-info { padding-top: 0; }
   .series-hero-title { font-size: 24px; }
 }
+/* ---------- System > Updates: Install a Version (InstallVersion.jsx) ---------- */
+.install-picker { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+.install-picker .field-select { flex: 1; min-width: 0; }
+.install-kind { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; flex-shrink: 0; }
+.install-kind button { border: none; border-radius: 0; height: 32px; padding: 0 14px; background: transparent; color: var(--text-secondary); }
+.install-kind button + button { border-left: 1px solid var(--border); }
+.install-kind button.is-active { background: var(--accent-bg); color: var(--accent); }
+.install-preview { padding: 10px 0 2px; border-top: 1px solid var(--border); }
+.install-preview-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.install-commits { margin-top: 6px; }
+.install-commits summary, .install-log summary { cursor: pointer; font-size: 12.5px; color: var(--text-secondary); padding: 4px 0; }
+.install-commits[open] { max-height: 260px; overflow-y: auto; }
+.install-result { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-radius: var(--radius-sm); margin-bottom: 12px; background: var(--surface-2); }
+.install-result .status-pill { flex-shrink: 0; }
+.install-note { font-size: 12px; color: var(--text-muted); margin: 0 0 12px; }
+.install-note code, .install-docker code { font-family: var(--font-mono); font-size: 11.5px; }
+.install-warning { border: 1px solid var(--warning); background: var(--warning-bg); border-radius: var(--radius-sm); padding: 10px 12px; font-size: 12.5px; color: var(--text-primary); }
+.install-warning p { margin: 0 0 8px; }
+.install-ack { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; cursor: pointer; }
+.install-steps { list-style: none; margin: 4px 0 0; padding: 0; }
+.install-steps li { display: flex; align-items: center; gap: 10px; font-size: 13px; padding: 5px 0; color: var(--text-muted); }
+.install-step-mark { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid var(--border-strong); display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.install-step-mark svg { width: 10px; height: 10px; }
+.install-steps li.is-done { color: var(--text-secondary); }
+.install-steps li.is-done .install-step-mark { background: var(--success-bg); border-color: var(--success); color: var(--success); }
+.install-steps li.is-current { color: var(--text-primary); font-weight: 600; }
+.install-steps li.is-current .install-step-mark { border-color: var(--accent); border-top-color: transparent; animation: install-spin 0.9s linear infinite; }
+.install-steps li.is-failed { color: var(--danger); font-weight: 600; }
+.install-steps li.is-failed .install-step-mark { background: var(--danger-bg); border-color: var(--danger); color: var(--danger); }
+@keyframes install-spin { to { transform: rotate(360deg); } }
+.install-log { margin-top: 10px; }
+.install-log pre, .install-docker pre { font-family: var(--font-mono); font-size: 11.5px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px; max-height: 280px; overflow: auto; white-space: pre-wrap; word-break: break-all; margin: 6px 0; color: var(--text-secondary); }
+.install-docker-tags { border-collapse: collapse; margin: 6px 0 10px; font-size: 12.5px; }
+.install-docker-tags td { padding: 4px 16px 4px 0; color: var(--text-secondary); }
+.btn-accent:disabled, .btn-accent:disabled:hover { opacity: 0.45; cursor: default; background: var(--accent); border-color: var(--accent); }

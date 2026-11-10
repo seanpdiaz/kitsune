@@ -60,7 +60,8 @@ const { handleIndexersApi } = require('./server/routes/indexers');
 const { startDiskUsageScheduler } = require('./server/lib/disk-usage');
 const { startPermissionsScheduler } = require('./server/lib/permissions');
 const { startRefreshSeriesScheduler } = require('./server/lib/refresh-series-task');
-const { startUpdateCheckScheduler } = require('./server/lib/update-check');
+const { startUpdateCheckScheduler, runNow: runUpdateCheckNow } = require('./server/lib/update-check');
+const updater = require('./server/lib/updater');
 const { startRetentionScheduler } = require('./server/lib/retention');
 const { startProbeBackfillScheduler } = require('./server/lib/media-probe-backfill');
 
@@ -245,9 +246,31 @@ const server = http.createServer(async (req, res) => {
   // few hours.
   startProbeBackfillScheduler();
 
+  // An in-app update (see server/lib/updater.js) stops this process with
+  // exit code 75 so launcher.js can swap in the new version. Close the HTTP
+  // server and the database first so nothing is mid-write when it does.
+  updater.setShutdownHook(async () => {
+    await new Promise((resolve) => {
+      server.close(() => resolve());
+      if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
+      setTimeout(resolve, 3000).unref();
+    });
+    try {
+      await db.close();
+    } catch {
+      // already closed or never opened; nothing to do
+    }
+  });
+
   server.listen(PORT, () => {
     logInfo('Server', `Kitsune mockup running at http://localhost:${PORT}`);
     logInfo('Server', `Using ${db.DB_CLIENT} — data persisted to ${db.describe()}`);
+    // Started by launcher.js right after an update: tell it this version is
+    // up (it rolls back otherwise). Done first, before the schedulers below,
+    // so none of them can delay or block it.
+    updater.reportStartup().catch((err) => {
+      logError('Server', `Could not report a healthy start after the update: ${err && err.stack ? err.stack : err}`);
+    });
     // Not awaited — the server starts accepting requests right away; see
     // startDiskUsageScheduler's own header comment.
     startDiskUsageScheduler(DISK_USAGE_REFRESH_HOURS).catch((err) => {
@@ -270,7 +293,12 @@ const server = http.createServer(async (req, res) => {
     // comment in update-check.js; a GitHub API check is cheap and read-only,
     // same "fine to run once at startup" reasoning Disk Usage and Refresh
     // Series already follow.
-    startUpdateCheckScheduler(UPDATE_CHECK_INTERVAL_HOURS).catch((err) => {
+    // Right after an update, check again straight away rather than showing
+    // the old build's cached "update available" until the next scheduled run.
+    startUpdateCheckScheduler(UPDATE_CHECK_INTERVAL_HOURS).then(() => {
+      if (updater.isPostUpdateStart()) return runUpdateCheckNow();
+      return null;
+    }).catch((err) => {
       logError('Server', `Application Update Check scheduler failed to start: ${err && err.stack ? err.stack : err}`);
     });
   });

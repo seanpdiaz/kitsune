@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { icons } from '../../lib/icons.jsx';
+import InstallVersion from './InstallVersion.jsx';
 
 // ---------------------------------------------------------------------------
 // System > Updates — Phase 1 of the real Updates feature (see Settings >
@@ -11,12 +12,9 @@ import { icons } from '../../lib/icons.jsx';
 // already established (see that file's own header comment) rather than the
 // Tasks pilot's "poke at scattered pre-existing ids" shape.
 //
-// Read-only, same as the API backing it: there is no "Install Update"
-// button here. What action would even be safe depends on how this instance
-// is deployed (see server/lib/deployment-mode.js) and, for a standalone
-// install, on a real process-supervisor decision this app hasn't made yet —
-// see the wiki's Updates planning page for the full phased plan. This page
-// only ever answers "is there something newer, and what changed."
+// Installing a version (Phase 2) lives in InstallVersion.jsx, rendered at
+// the bottom of this page; see server/lib/updater.js and launcher.js for how
+// an install is staged, applied and rolled back.
 // ---------------------------------------------------------------------------
 
 function relativeTime(iso) {
@@ -179,7 +177,7 @@ export default function UpdatesInfo() {
               {build.commit ? <CommitLink commit={{ htmlUrl: data.repo ? `https://github.com/${data.repo.owner}/${data.repo.repo}/commit/${build.commit}` : null }}>{build.commit.slice(0, 7)}</CommitLink> : 'unknown'}
             </p>
           </div>
-          <div className="stat-card"><p className="label">Branch</p><p className="value" style={{ fontSize: '15px' }}>{data.branch || build.branch || '—'}</p></div>
+          <div className="stat-card"><p className="label">{build.tag ? 'Release' : 'Branch'}</p><p className="value" style={{ fontSize: '15px' }}>{build.tag || build.branch || data.branch || '—'}</p></div>
           <div className="stat-card"><p className="label">Deployment</p><p className="value" style={{ fontSize: '15px', textTransform: 'capitalize' }}>{data.deploymentMode || '—'}</p></div>
         </div>
         <p className="settings-meta">Built {build.builtAt ? formatDateTime(build.builtAt) : 'unknown — no build-info.json was generated for this install'}.</p>
@@ -238,6 +236,8 @@ export default function UpdatesInfo() {
           ))}
         </div>
       )}
+
+      {data.install && <InstallVersion data={data} onData={setData} />}
     </>
   );
 }
