@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kitsune — System — Statistics</title>
+<script src="js/theme-boot.js"></script>
+<script src="js/sidebar-boot.js"></script>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div class="layout">
+
+  <aside class="sidebar" id="sidebar"></aside>
+
+  <main class="main">
+    <div class="top-row">
+      <div>
+        <h1 class="settings-heading">System</h1>
+      </div>
+    </div>
+
+    <div class="page-tabs"></div>
+
+    <!-- React (frontend/pages/system-statistics/) mounts the whole page here;
+         data comes from GET /api/system/statistics. -->
+    <div id="statisticsRoot"></div>
+
+  </main>
+</div>
+
+<script type="module" src="app.js"></script>
+<script type="module" src="dist/system-statistics.js"></script>
+</body>
+</html>

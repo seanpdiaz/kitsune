@@ -77,7 +77,7 @@ const NAV_SECTIONS = [
   {
     label: 'System',
     toggle: true,
-    // Admin-only, the whole section — Status/Tasks/Backup/Updates/Events/Logs
+    // Admin-only, the whole section — Status/Tasks/Backup/Updates/Events/Logs/Statistics
     // are server-operator concerns (who's allowed to back up or restart the
     // instance, read its logs, etc.), not something a standard user needs to
     // see at all. Unlike Settings > Users (one adminOnly sub-link inside an
@@ -92,6 +92,7 @@ const NAV_SECTIONS = [
       { href: 'system-updates.html', label: 'Updates' },
       { href: 'system-events.html', label: 'Events' },
       { href: 'system-logs.html', label: 'Logs' },
+      { href: 'system-statistics.html', label: 'Statistics' },
     ],
   },
 ];

@@ -46,6 +46,7 @@ export default defineConfig({
         'system-backup': resolve(process.cwd(), 'frontend/pages/system-backup/main.jsx'),
         'system-events': resolve(process.cwd(), 'frontend/pages/system-events/main.jsx'),
         'system-logs': resolve(process.cwd(), 'frontend/pages/system-logs/main.jsx'),
+        'system-statistics': resolve(process.cwd(), 'frontend/pages/system-statistics/main.jsx'),
         'activity-queue': resolve(process.cwd(), 'frontend/pages/activity-queue/main.jsx'),
         'activity-history': resolve(process.cwd(), 'frontend/pages/activity-history/main.jsx'),
         'activity-blocklist': resolve(process.cwd(), 'frontend/pages/activity-blocklist/main.jsx'),

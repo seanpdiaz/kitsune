@@ -33,6 +33,7 @@
 
 **System**
 - [In-App Updates](In-App-Updates)
+- [System Statistics](System-Statistics)
 
 **Dashboard**
 - [Disk Usage](Disk-Usage)
