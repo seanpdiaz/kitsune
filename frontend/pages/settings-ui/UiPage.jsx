@@ -1,13 +1,20 @@
 import { useSettingsForm } from '../../lib/useSettingsForm.js';
 import { SettingsCard, FormRow, ToggleField, SelectField } from '../../components/SettingsFormFields.jsx';
+import ThemePicker from './ThemePicker.jsx';
 
 // React port of settings-ui.html's page logic — see README's "React
-// migration" section, Batch 8. The Theme card's radio pair is carried over
-// as-is: Light was already `disabled` in the original static markup (dark
-// is the only real option — "Kitsune ships dark-only for now"), so Dark's
-// radio has nothing to actually toggle between and isn't wired to
-// setField the way every other control here is; it's rendered checked and
-// inert, matching what the original already behaved like in practice.
+// migration" section, Batch 8.
+//
+// Theme and accent are saved here like every other UI setting
+// (`ui-theme` / `ui-accent`), and applied to the page immediately through
+// window.KitsuneTheme (public/js/theme-boot.js), which also caches them in
+// localStorage so the next page load can apply them before first paint.
+// Their defaults come from that cache rather than hardcoded values, so the
+// picker's first render (before GET /api/app-settings/ui returns) matches
+// what's already on screen instead of briefly snapping back to Dark.
+const KT = typeof window !== 'undefined' ? window.KitsuneTheme : null;
+const STORED = KT ? KT.stored() : { theme: 'dark', accent: '' };
+
 const DEFAULTS = {
   'ui-0': 'Monday',
   'ui-1': true,
@@ -17,6 +24,8 @@ const DEFAULTS = {
   'ui-5': true,
   'ui-6': 'MMM D YYYY',
   'ui-7': '24 hour',
+  'ui-theme': STORED.theme,
+  'ui-accent': STORED.accent,
 };
 
 export default function UiPage() {
@@ -60,12 +69,12 @@ export default function UiPage() {
       </SettingsCard>
 
       <SettingsCard title="Theme">
-        <FormRow name="Appearance" desc="Kitsune ships dark-only for now.">
-          <div className="radio-group">
-            <label className="radio-option"><input type="radio" name="theme" checked readOnly /> Dark</label>
-            <label className="radio-option" style={{ opacity: 0.4 }}><input type="radio" name="theme" disabled /> Light (coming soon)</label>
-          </div>
-        </FormRow>
+        <ThemePicker
+          theme={v['ui-theme']}
+          accent={v['ui-accent']}
+          onThemeChange={(id) => setField('ui-theme', id)}
+          onAccentChange={(hex) => setField('ui-accent', hex)}
+        />
       </SettingsCard>
     </>
   );

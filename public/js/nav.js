@@ -707,5 +707,28 @@ function loadSettingsSearch() {
 }
 loadSettingsSearch();
 
+// ---------- Theme sync ----------
+// js/theme-boot.js already applied this browser's cached theme/accent
+// before first paint. The saved choice lives server-side (Settings > UI),
+// so if it was changed from another browser, catch up here — the page
+// re-themes once, and theme-boot.js's cache is refreshed for next time.
+// Settings > UI applies its own values live, so it's skipped.
+async function syncThemeFromServer() {
+  const kt = window.KitsuneTheme;
+  if (!kt || currentFile() === 'settings-ui.html') return;
+  try {
+    const res = await fetch('/api/app-settings/ui');
+    if (!res.ok) return;
+    const saved = await res.json();
+    if (!('ui-theme' in saved) && !('ui-accent' in saved)) return; // never set: keep the cache
+    const local = kt.stored();
+    const theme = saved['ui-theme'] || 'dark';
+    const accent = saved['ui-accent'] || '';
+    if (theme !== local.theme || accent !== local.accent) kt.apply(theme, accent);
+  } catch {
+    // Offline / signed out: the cached theme is a fine fallback.
+  }
+}
+syncThemeFromServer();
 checkAuthAndInit();
 setInterval(refreshActivityBadge, ACTIVITY_BADGE_POLL_MS);

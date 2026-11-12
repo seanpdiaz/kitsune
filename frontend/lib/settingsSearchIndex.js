@@ -455,7 +455,8 @@ const PAGES = [
       {
         title: 'Theme',
         fields: [
-          ['Appearance', 'Kitsune ships dark-only for now.', 'theme dark light mode color'],
+          ['Theme', 'Dark, Light, OLED Black, Dusk, Paper or High Contrast.', 'appearance dark light mode oled black amoled dusk paper sepia high contrast accessibility color scheme'],
+          ['Accent Color', 'Buttons, links and highlights — a preset or any custom color.', 'accent highlight color primary brand custom'],
         ],
       },
     ],
