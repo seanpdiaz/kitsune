@@ -1,13 +1,17 @@
 import { useSettingsForm } from '../../lib/useSettingsForm.js';
 import { SettingsCard, FormRow, ToggleField, SelectField } from '../../components/SettingsFormFields.jsx';
+import ThemePicker from './ThemePicker.jsx';
 
 // React port of settings-ui.html's page logic — see README's "React
-// migration" section, Batch 8. The Theme card's radio pair is carried over
-// as-is: Light was already `disabled` in the original static markup (dark
-// is the only real option — "Kitsune ships dark-only for now"), so Dark's
-// radio has nothing to actually toggle between and isn't wired to
-// setField the way every other control here is; it's rendered checked and
-// inert, matching what the original already behaved like in practice.
+// migration" section, Batch 8.
+//
+// Theme and accent here (`ui-theme` / `ui-accent`) are the SERVER DEFAULT:
+// what any account that hasn't picked its own theme sees. Each user's own
+// choice lives in /api/user-prefs/appearance (frontend/lib/userAppearance.js),
+// set from the first-login picker or My Account > Appearance. So the picker
+// here is not live: changing the default doesn't repaint the admin's own
+// page (if they follow the default too, nav.js picks it up on the next load).
+
 const DEFAULTS = {
   'ui-0': 'Monday',
   'ui-1': true,
@@ -17,6 +21,8 @@ const DEFAULTS = {
   'ui-5': true,
   'ui-6': 'MMM D YYYY',
   'ui-7': '24 hour',
+  'ui-theme': 'dark',
+  'ui-accent': '',
 };
 
 export default function UiPage() {
@@ -59,13 +65,15 @@ export default function UiPage() {
         </FormRow>
       </SettingsCard>
 
-      <SettingsCard title="Theme">
-        <FormRow name="Appearance" desc="Kitsune ships dark-only for now.">
-          <div className="radio-group">
-            <label className="radio-option"><input type="radio" name="theme" checked readOnly /> Dark</label>
-            <label className="radio-option" style={{ opacity: 0.4 }}><input type="radio" name="theme" disabled /> Light (coming soon)</label>
-          </div>
-        </FormRow>
+      <SettingsCard title="Default Theme">
+        <ThemePicker
+          live={false}
+          themeDesc="For accounts that haven't picked their own theme. Each person can choose theirs in My Account."
+          theme={v['ui-theme']}
+          accent={v['ui-accent']}
+          onThemeChange={(id) => setField('ui-theme', id)}
+          onAccentChange={(hex) => setField('ui-accent', hex)}
+        />
       </SettingsCard>
     </>
   );

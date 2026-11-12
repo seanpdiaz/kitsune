@@ -10,7 +10,9 @@ function hexToRgbParts(hex) {
 
 function tagChipStyle(hex) {
   const { r, g, b } = hexToRgbParts(hex);
-  return `background: rgba(${r},${g},${b},0.16); color: ${hex}; border-color: rgba(${r},${g},${b},0.45);`;
+  // Text is mixed toward black by the theme's --tag-ink-mix so it stays
+  // readable on light themes — see frontend/lib/tagChipStyleObj.js.
+  return `background: rgba(${r},${g},${b},0.16); color: color-mix(in srgb, ${hex} var(--tag-ink-mix, 100%), #000); border-color: rgba(${r},${g},${b},0.45);`;
 }
 
 export { hexToRgbParts, tagChipStyle };

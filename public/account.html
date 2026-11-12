@@ -4,6 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Kitsune — My Account</title>
+<script src="js/theme-boot.js"></script>
 <script src="js/sidebar-boot.js"></script>
 <link rel="stylesheet" href="styles.css" />
 </head>
@@ -13,15 +14,10 @@
   <aside class="sidebar" id="sidebar"></aside>
 
   <main class="main">
-    <div class="top-row">
-      <div>
-        <h1 class="settings-heading">My Account</h1>
-      </div>
-    </div>
-
     <!-- Not part of the Settings tab group (reachable from the sidebar's own
          user chip instead — see public/js/nav.js) so no .page-tabs strip
-         here, same as Calendar's page. -->
+         here, same as Calendar's page. The page header is rendered by
+         AccountPage.jsx so it can show the signed-in account's role. -->
     <div id="accountRoot"></div>
 
   </main>

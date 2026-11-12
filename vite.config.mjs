@@ -79,6 +79,12 @@ export default defineConfig({
         'login': resolve(process.cwd(), 'frontend/pages/login/main.jsx'),
         'settings-users': resolve(process.cwd(), 'frontend/pages/settings-users/main.jsx'),
         'account': resolve(process.cwd(), 'frontend/pages/account/main.jsx'),
+        // Not a page of its own: the search box nav.js loads into every
+        // Settings page's top row (see loadSettingsSearch in public/js/nav.js).
+        'settings-search': resolve(process.cwd(), 'frontend/pages/settings-search/main.jsx'),
+        // Not a page either: the first-login theme picker nav.js loads on
+        // demand (see syncTheme in public/js/nav.js).
+        'theme-welcome': resolve(process.cwd(), 'frontend/pages/theme-welcome/main.jsx'),
       },
       output: {
         // Vite's default output filenames include a content hash

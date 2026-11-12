@@ -7,5 +7,8 @@ import { hexToRgbParts } from '../../public/js/lib/colors.js';
 // conversion rather than each re-deriving it from hexToRgbParts() on its own.
 export function tagChipStyleObj(hex) {
   const { r, g, b } = hexToRgbParts(hex);
-  return { background: `rgba(${r},${g},${b},0.16)`, color: hex, borderColor: `rgba(${r},${g},${b},0.45)` };
+  // Text is the tag color mixed toward black by the theme's --tag-ink-mix
+  // (100% = unchanged on dark themes), so yellow/teal tags stay readable
+  // on light ones. Fill and border stay translucent tag color everywhere.
+  return { background: `rgba(${r},${g},${b},0.16)`, color: `color-mix(in srgb, ${hex} var(--tag-ink-mix, 100%), #000)`, borderColor: `rgba(${r},${g},${b},0.45)` };
 }

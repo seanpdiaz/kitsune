@@ -689,5 +689,69 @@ async function checkAuthAndInit() {
   refreshActivityBadge(); // ditto
 }
 
+// ---------- Settings search ----------
+// Every Settings page gets the same "search all settings" box in its top
+// row (frontend/pages/settings-search/). Loaded from here rather than by a
+// <script> tag in each of the fourteen settings-*.html files, for the same
+// single-source-of-truth reason as the sidebar and page tabs above: a new
+// Settings page picks it up automatically just by being named settings-*.
+// The import path is relative to this file (public/js/), so it keeps
+// working under a URL Base like /kitsune.
+function loadSettingsSearch() {
+  if (!/^settings-.+\.html$/.test(currentFile())) return;
+  if (!document.querySelector('.main .top-row')) return;
+  import('../dist/settings-search.js').catch(() => {
+    // Not built yet (npm run build), or a network blip — Settings still
+    // works without it.
+  });
+}
+loadSettingsSearch();
+
+// ---------- Theme sync + first-login picker ----------
+// js/theme-boot.js already applied this browser's cached theme/accent
+// before first paint. Each account has its own theme
+// (/api/user-prefs/appearance — see frontend/lib/userAppearance.js); an
+// account that hasn't picked one follows the server default (Settings > UI,
+// /api/app-settings/ui). Resolve which applies and catch up if the cache is
+// stale (changed from another browser, or a different user signed in here)
+// — the page re-themes once, and theme-boot.js's cache is refreshed.
+//
+// If the account has never answered the first-login picker (`welcomed`
+// unset), load it (frontend/pages/theme-welcome/) on top of the page.
+// Not on My Account, which already shows the same picker inline.
+async function syncTheme() {
+  const kt = window.KitsuneTheme;
+  if (!kt) return;
+  try {
+    const [mineRes, serverRes] = await Promise.all([
+      fetch('/api/user-prefs/appearance'),
+      fetch('/api/app-settings/ui'),
+    ]);
+    if (!mineRes.ok) return; // signed out: checkAuthAndInit() redirects to login
+    const mine = await mineRes.json();
+    const server = serverRes.ok ? await serverRes.json() : {};
+
+    let theme, accent;
+    if (mine.theme) {
+      theme = mine.theme;
+      accent = mine.accent || '';
+    } else {
+      theme = server['ui-theme'] || 'dark';
+      accent = server['ui-accent'] || '';
+    }
+    const local = kt.stored();
+    if (theme !== local.theme || accent !== local.accent) kt.apply(theme, accent);
+
+    if (!mine.welcomed && currentFile() !== 'account.html') {
+      import('../dist/theme-welcome.js').catch(() => {
+        // Not built yet (npm run build), or a network blip — it'll be
+        // offered again on the next page load.
+      });
+    }
+  } catch {
+    // Offline: the cached theme is a fine fallback.
+  }
+}
+syncTheme();
 checkAuthAndInit();
 setInterval(refreshActivityBadge, ACTIVITY_BADGE_POLL_MS);

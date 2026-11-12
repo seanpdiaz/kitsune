@@ -13,6 +13,7 @@
 
 **Library & Series**
 - [Sidebar Navigation](Sidebar-Navigation)
+- [Settings Search](Settings-Search)
 - [Calendar](Calendar)
 - [Edit Series Modal](Edit-Series-Modal)
 - [Series Detail Page Features](Series-Detail-Features)

@@ -94,6 +94,8 @@ missing, cutoff unmet) are all backed by SQLite — see
 **Library & series pages**
 - [Sidebar Navigation](Sidebar-Navigation) — why Library/Calendar/Activity/Wanted became
   real links instead of accordion sections
+- [Settings Search](Settings-Search) — one search box on every Settings page that
+  finds and jumps to any setting on any page
 - [Calendar](Calendar) — the real month-grid calendar
 - [Edit Series Modal](Edit-Series-Modal)
 - [Series Detail Page Features](Series-Detail-Features) — real airing status, the episode
