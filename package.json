@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node launcher.js",
     "start:server": "node server.js",
-    "build": "node scripts/write-build-info.js && vite build",
+    "build": "node scripts/write-build-info.js && node scripts/check-settings-search-index.js && vite build",
     "dev:frontend": "vite build --watch",
     "deploy": "bash scripts/deploy.sh"
   },

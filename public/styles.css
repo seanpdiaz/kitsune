@@ -3971,3 +3971,59 @@ a.release-title:hover { text-decoration: underline; }
 .install-docker-tags { border-collapse: collapse; margin: 6px 0 10px; font-size: 12.5px; }
 .install-docker-tags td { padding: 4px 16px 4px 0; color: var(--text-secondary); }
 .btn-accent:disabled, .btn-accent:disabled:hover { opacity: 0.45; cursor: default; background: var(--accent); border-color: var(--accent); }
+
+/* ---------- Settings search (frontend/pages/settings-search/) ---------- */
+/* Mounted into every Settings page's .top-row between the heading and the
+   page's own Add button. margin-left: auto pushes it (and the button after
+   it) to the right; .top-row's own gap spaces it from that button. */
+#settingsSearchRoot { margin-left: auto; }
+.settings-search { position: relative; }
+.settings-search .search-box { width: 300px; }
+.settings-search .search-box input { padding-right: 32px; }
+.settings-search-kbd {
+  position: absolute; right: 9px; top: 50%; transform: translateY(-50%);
+  min-width: 18px; height: 18px; padding: 0 5px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);
+  border: 1px solid var(--border-strong); border-radius: 4px; pointer-events: none;
+}
+.settings-search-panel {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 60;
+  width: 420px; max-width: calc(100vw - 32px); max-height: min(440px, 70vh); overflow-y: auto;
+  padding: 6px; background: var(--surface-2);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45);
+}
+.settings-search-result {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 8px 10px; border-radius: var(--radius-sm);
+  color: var(--text-primary); text-decoration: none;
+}
+.settings-search-result.is-active { background: var(--surface-3); }
+.settings-search-name { font-size: 13px; font-weight: 600; }
+.settings-search-name mark { background: none; color: var(--accent); }
+.settings-search-path { font-size: 11px; color: var(--text-secondary); }
+.settings-search-desc {
+  font-size: 11.5px; color: var(--text-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.settings-search-empty { margin: 0; padding: 12px 10px; font-size: 12.5px; color: var(--text-muted); }
+
+/* The row a search result jumped to: a padded accent ring that fades out.
+   box-shadow rather than padding/outline so the row's own layout never
+   shifts while it's highlighted. */
+.settings-search-flash {
+  border-radius: var(--radius-sm);
+  animation: settings-search-flash 2.4s ease-out;
+}
+@keyframes settings-search-flash {
+  0%, 35% { background: var(--accent-bg); box-shadow: 0 0 0 8px var(--accent-bg), 0 0 0 9px var(--accent-border); }
+  100% { background: transparent; box-shadow: 0 0 0 8px transparent, 0 0 0 9px transparent; }
+}
+
+@media (max-width: 860px) {
+  #settingsSearchRoot { order: 3; flex: 1 1 100%; margin-left: 0; }
+  .settings-search .search-box { width: 100%; }
+  .settings-search-panel { left: 0; right: 0; width: auto; max-width: none; }
+  .settings-search-kbd { display: none; }
+}

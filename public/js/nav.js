@@ -689,5 +689,23 @@ async function checkAuthAndInit() {
   refreshActivityBadge(); // ditto
 }
 
+// ---------- Settings search ----------
+// Every Settings page gets the same "search all settings" box in its top
+// row (frontend/pages/settings-search/). Loaded from here rather than by a
+// <script> tag in each of the fourteen settings-*.html files, for the same
+// single-source-of-truth reason as the sidebar and page tabs above: a new
+// Settings page picks it up automatically just by being named settings-*.
+// The import path is relative to this file (public/js/), so it keeps
+// working under a URL Base like /kitsune.
+function loadSettingsSearch() {
+  if (!/^settings-.+\.html$/.test(currentFile())) return;
+  if (!document.querySelector('.main .top-row')) return;
+  import('../dist/settings-search.js').catch(() => {
+    // Not built yet (npm run build), or a network blip — Settings still
+    // works without it.
+  });
+}
+loadSettingsSearch();
+
 checkAuthAndInit();
 setInterval(refreshActivityBadge, ACTIVITY_BADGE_POLL_MS);
