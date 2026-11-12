@@ -1,6 +1,10 @@
 # Settings Search
 
-Every Settings page has a **Search all settings** box in its top row. It finds any
+The sidebar's **Settings** link opens the Settings home page (`settings.html`): a
+large centered **Search all settings** box above a grid of tiles, one per Settings
+page (Security and Users tiles show for admins only). Every individual Settings page
+also has the same search box in its top row, and its "‹ Settings" heading links back
+to the home page. It finds any
 setting on any Settings page, and picking a result opens that page, scrolls to the
 setting, highlights it and puts the cursor in its field.
 
@@ -39,3 +43,14 @@ When you add or rename a setting, add it to `settingsSearchIndex.js` too. `npm r
 build` runs `scripts/check-settings-search-index.js`, which lists every literal
 `FormRow` / `SettingsCard` / `FieldRow` / `fieldRow` label on a Settings page that the
 index doesn't contain. It only warns; run it with `--strict` to fail instead.
+
+## Settings home page
+
+- `public/settings.html` + `frontend/pages/settings-hub/`. The search box is the same
+  `SettingsSearch` component in its `variant="hero"` form (focused on load on desktop).
+- The tiles are built from `SETTINGS_PAGES`, exported by
+  `frontend/lib/settingsSearchIndex.js`, so a page added to the index gets a tile too.
+  Add its icon to `PAGE_ICONS` in `SettingsHub.jsx` (it gets a generic one until then).
+- The sidebar no longer lists the Settings sub-pages: the Settings entry in
+  `NAV_SECTIONS` (`public/js/nav.js`) is `hub: true`, which renders it as a plain link.
+  Its `subs` still drive the page-tabs strip on each Settings page.
