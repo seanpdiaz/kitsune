@@ -453,9 +453,9 @@ const PAGES = [
         ],
       },
       {
-        title: 'Theme',
+        title: 'Default Theme',
         fields: [
-          ['Theme', 'Dark, Light, OLED Black, Dusk, Paper or High Contrast.', 'appearance dark light mode oled black amoled dusk paper sepia high contrast accessibility color scheme'],
+          ['Theme', "Server default for accounts that haven't picked their own (each person sets theirs in My Account).", 'appearance dark light mode oled black amoled dusk paper sepia high contrast accessibility color scheme'],
           ['Accent Color', 'Buttons, links and highlights — a preset or any custom color.', 'accent highlight color primary brand custom'],
         ],
       },

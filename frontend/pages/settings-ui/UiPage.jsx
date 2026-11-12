@@ -5,15 +5,12 @@ import ThemePicker from './ThemePicker.jsx';
 // React port of settings-ui.html's page logic — see README's "React
 // migration" section, Batch 8.
 //
-// Theme and accent are saved here like every other UI setting
-// (`ui-theme` / `ui-accent`), and applied to the page immediately through
-// window.KitsuneTheme (public/js/theme-boot.js), which also caches them in
-// localStorage so the next page load can apply them before first paint.
-// Their defaults come from that cache rather than hardcoded values, so the
-// picker's first render (before GET /api/app-settings/ui returns) matches
-// what's already on screen instead of briefly snapping back to Dark.
-const KT = typeof window !== 'undefined' ? window.KitsuneTheme : null;
-const STORED = KT ? KT.stored() : { theme: 'dark', accent: '' };
+// Theme and accent here (`ui-theme` / `ui-accent`) are the SERVER DEFAULT:
+// what any account that hasn't picked its own theme sees. Each user's own
+// choice lives in /api/user-prefs/appearance (frontend/lib/userAppearance.js),
+// set from the first-login picker or My Account > Appearance. So the picker
+// here is not live: changing the default doesn't repaint the admin's own
+// page (if they follow the default too, nav.js picks it up on the next load).
 
 const DEFAULTS = {
   'ui-0': 'Monday',
@@ -24,8 +21,8 @@ const DEFAULTS = {
   'ui-5': true,
   'ui-6': 'MMM D YYYY',
   'ui-7': '24 hour',
-  'ui-theme': STORED.theme,
-  'ui-accent': STORED.accent,
+  'ui-theme': 'dark',
+  'ui-accent': '',
 };
 
 export default function UiPage() {
@@ -68,8 +65,10 @@ export default function UiPage() {
         </FormRow>
       </SettingsCard>
 
-      <SettingsCard title="Theme">
+      <SettingsCard title="Default Theme">
         <ThemePicker
+          live={false}
+          themeDesc="For accounts that haven't picked their own theme. Each person can choose theirs in My Account."
           theme={v['ui-theme']}
           accent={v['ui-accent']}
           onThemeChange={(id) => setField('ui-theme', id)}
