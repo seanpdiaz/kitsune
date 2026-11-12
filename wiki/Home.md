@@ -114,6 +114,8 @@ missing, cutoff unmet) are all backed by SQLite — see
 **Dashboard**
 - [In-App Updates](In-App-Updates) — install a branch or release from System > Updates,
   with a pre-update backup and automatic rollback through `launcher.js`
+- [System Statistics](System-Statistics) — System > Statistics: library numbers, charts
+  and download activity, from `GET /api/system/statistics`
 - [Disk Usage](Disk-Usage) — real recursive disk usage, the System > Tasks recompute job,
   and persistence across restarts
 - [Three Small Settings/Nav Fixes](Three-Small-Fixes)
