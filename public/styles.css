@@ -4231,6 +4231,86 @@ a.release-title:hover { text-decoration: underline; }
   .settings-search-kbd { display: none; }
 }
 
+/* ---------- Settings home (settings.html, frontend/pages/settings-hub/) ---------- */
+/* The sidebar's single Settings link lands here: a big centered search box
+   (the same SettingsSearch component as every Settings page's top row, in its
+   "hero" variant) above one tile per Settings page. */
+.settings-hub-search {
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  margin: 18px auto 34px; max-width: 640px;
+}
+.settings-search-hero { width: 100%; }
+.settings-search-hero .search-box { width: 100%; }
+.settings-search-hero .search-box svg { left: 15px; width: 18px; height: 18px; }
+.settings-search-hero .search-box input {
+  height: 48px; padding: 0 44px 0 44px; font-size: 15px;
+  background: var(--surface-1); border-color: var(--border-strong);
+  border-radius: var(--radius-md);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.settings-search-hero .search-box input:focus {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 4px var(--accent-bg);
+}
+.settings-search-hero .settings-search-kbd { right: 14px; }
+.settings-search-hero .settings-search-panel { left: 0; right: 0; width: auto; max-width: none; }
+.settings-hub-hint { margin: 0; font-size: 12px; color: var(--text-muted); }
+.settings-hub-hint kbd {
+  display: inline-block; min-width: 18px; padding: 0 5px; line-height: 17px; text-align: center;
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--text-secondary);
+  border: 1px solid var(--border-strong); border-radius: 4px;
+}
+
+.settings-tile-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 18px;
+  max-width: 1480px; margin: 0 auto;
+}
+.settings-tile {
+  display: flex; align-items: flex-start; gap: 18px;
+  padding: 24px 24px; min-height: 140px;
+  background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius-md);
+  color: var(--text-primary); text-decoration: none;
+  transition: border-color 0.15s, background 0.15s, transform 0.15s;
+}
+.settings-tile:hover { border-color: var(--accent-border); background: var(--surface-2); transform: translateY(-1px); }
+.settings-tile:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); }
+.settings-tile-icon {
+  flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
+  width: 56px; height: 56px; border-radius: var(--radius-md);
+  background: var(--accent-bg); color: var(--accent);
+}
+.settings-tile-icon svg { width: 28px; height: 28px; }
+.settings-tile-text { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding-top: 2px; }
+.settings-tile-title { display: flex; align-items: center; gap: 8px; font-size: 16.5px; font-weight: 700; }
+.settings-tile-badge {
+  font-size: 10px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase;
+  padding: 1px 6px; border-radius: 999px;
+  color: var(--text-secondary); border: 1px solid var(--border-strong);
+}
+.settings-tile-desc {
+  font-size: 13.5px; line-height: 1.5; color: var(--text-secondary);
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+
+/* Each Settings page's "Settings" heading links back here (nav.js,
+   linkSettingsHeading). */
+.settings-heading-link {
+  display: inline-flex; align-items: center; gap: 4px; margin-left: -4px;
+  color: inherit; text-decoration: none; border-radius: var(--radius-sm);
+}
+.settings-heading-link svg { color: var(--text-muted); transition: color 0.15s, transform 0.15s; }
+.settings-heading-link:hover svg { color: var(--accent); transform: translateX(-2px); }
+
+@media (max-width: 860px) {
+  .settings-hub-search { margin: 4px auto 22px; }
+  .settings-hub-hint { display: none; }
+  .settings-tile-grid { grid-template-columns: 1fr; gap: 10px; }
+  .settings-tile { min-height: 0; padding: 16px; gap: 14px; }
+  .settings-tile-icon { width: 46px; height: 46px; }
+  .settings-tile-icon svg { width: 24px; height: 24px; }
+  .settings-tile-title { font-size: 15px; }
+}
+
 /* ---------- Theme picker (Settings > UI > Theme) ---------- */
 /* A form row whose control needs the card's full width (the theme grid,
    the accent swatches) instead of the usual 280px right-hand column. */

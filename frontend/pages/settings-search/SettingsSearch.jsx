@@ -196,21 +196,14 @@ export function revealFromHash() {
   if (entry && entry.file === currentFile()) revealWhenReady(entry);
 }
 
-// ---------- The search box ----------
+// ---------- Admin check ----------
 
-export default function SettingsSearch() {
-  const [query, setQuery] = useState('');
-  const [open, setOpen] = useState(false);
-  const [active, setActive] = useState(0);
+// The cached role (nav.js's sessionStorage copy) is right almost every time;
+// confirm it once so a role change since then is respected. Only affects
+// whether Security/Users show (as results here, as tiles on the Settings home
+// page) — those pages enforce admin server-side either way.
+export function useIsAdmin() {
   const [isAdmin, setIsAdmin] = useState(() => readCachedRole() === 'admin');
-  const inputRef = useRef(null);
-  const wrapRef = useRef(null);
-  const listRef = useRef(null);
-
-  // The cached role (nav.js's sessionStorage copy) is right almost every
-  // time; confirm it once so a role change since then is respected. Only
-  // affects whether Security/Users results show — those pages enforce
-  // admin server-side either way.
   useEffect(() => {
     let cancelled = false;
     fetch('/api/auth/state')
@@ -219,6 +212,28 @@ export default function SettingsSearch() {
       .catch(() => {});
     return () => { cancelled = true; };
   }, []);
+  return isAdmin;
+}
+
+// ---------- The search box ----------
+
+// `variant="hero"` is the big centered box on the Settings home page
+// (frontend/pages/settings-hub/); the default is the compact one in every
+// Settings page's top row. Same search, same keyboard shortcuts either way.
+export default function SettingsSearch({ variant = 'compact', autoFocus = false }) {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
+  const isAdmin = useIsAdmin();
+  const inputRef = useRef(null);
+  const wrapRef = useRef(null);
+  const listRef = useRef(null);
+
+  // Hero box: focus on load so you can just start typing — but not on a
+  // phone-sized screen, where it would pop the keyboard over the grid.
+  useEffect(() => {
+    if (autoFocus && !window.matchMedia('(max-width: 860px)').matches) inputRef.current?.focus();
+  }, [autoFocus]);
 
   const results = useMemo(() => search(query, isAdmin), [query, isAdmin]);
   const terms = useMemo(() => norm(query).split(' ').filter(Boolean), [query]);
@@ -295,13 +310,13 @@ export default function SettingsSearch() {
   const showPanel = open && norm(query).length > 0;
 
   return (
-    <div className="settings-search" ref={wrapRef}>
+    <div className={`settings-search${variant === 'hero' ? ' settings-search-hero' : ''}`} ref={wrapRef}>
       <div className="search-box">
         {icons.search}
         <input
           ref={inputRef}
           type="text"
-          placeholder="Search all settings"
+          placeholder={variant === 'hero' ? 'Search all settings — try “sso”, “proxy” or “naming”' : 'Search all settings'}
           aria-label="Search all settings"
           role="combobox"
           aria-expanded={showPanel}

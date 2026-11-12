@@ -50,7 +50,14 @@ const NAV_SECTIONS = [
   { divider: true },
   {
     label: 'Settings',
-    toggle: true,
+    // A plain link to the Settings home page (settings.html: a centered
+    // search box above a grid of tiles, one per Settings page) instead of an
+    // accordion listing all fourteen pages. `hub` keeps renderSidebar() from
+    // drawing the sub-menu; the subs below are still what the page-tabs strip
+    // on each Settings page renders, and what keeps the Settings item
+    // highlighted while you're on one of them (see sectionMatches()).
+    href: 'settings.html',
+    hub: true,
     icon: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.2a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.2a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.2a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.2a1.7 1.7 0 0 0-1.5 1z"/>',
     subs: [
       { href: 'settings-media-management.html', label: 'Media Management' },
@@ -298,7 +305,7 @@ function renderSidebar() {
       ${badge}
     </a>`;
 
-    if (section.subs.length === 0) return item;
+    if (section.subs.length === 0 || section.hub) return item;
 
     const subLinks = section.subs
       .map((s) => `<a${s.href === file ? ' class="active"' : ''} href="${s.href}">${s.label}</a>`)
@@ -707,6 +714,22 @@ function loadSettingsSearch() {
   });
 }
 loadSettingsSearch();
+
+// ---------- Settings pages: heading links back to the Settings home ----------
+// The sidebar no longer lists the individual Settings pages (see the Settings
+// entry in NAV_SECTIONS), so each one's "Settings" heading becomes the way
+// back to the tile grid on settings.html. Done here rather than in fourteen
+// .html files, same as the search box above.
+function linkSettingsHeading() {
+  if (!/^settings-.+\.html$/.test(currentFile())) return;
+  const h1 = document.querySelector('.main .top-row h1.settings-heading');
+  if (!h1 || h1.querySelector('a')) return;
+  h1.innerHTML = `<a class="settings-heading-link" href="settings.html" data-tooltip="All settings" data-tooltip-pos="bottom">
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+    <span>Settings</span>
+  </a>`;
+}
+linkSettingsHeading();
 
 // ---------- Theme sync + first-login picker ----------
 // js/theme-boot.js already applied this browser's cached theme/accent

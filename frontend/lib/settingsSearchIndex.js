@@ -526,3 +526,13 @@ function buildEntries() {
 }
 
 export const SETTINGS_SEARCH_ENTRIES = buildEntries();
+
+// The Settings home page's tile grid (frontend/pages/settings-hub/) is built
+// from this same list, so a page added to PAGES shows up as a tile and as a
+// search result at once. Same order as the old sidebar sub-menu.
+export const SETTINGS_PAGES = PAGES.map((page) => ({
+  file: page.file,
+  label: page.label,
+  desc: page.desc || '',
+  admin: !!page.admin,
+}));
